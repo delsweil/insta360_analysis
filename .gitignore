@@ -1,0 +1,21 @@
+# Virtual environments
+.venv*/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Large raw and output videos
+*.mp4
+*.mov
+*.insv
+
+# YOLO runs and artifacts
+runs/
+*.pt
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
