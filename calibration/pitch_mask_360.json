@@ -1,0 +1,28 @@
+{
+  "video": "/Users/davidelsweiler/Desktop/test_run.mp4",
+  "frame_index": 0,
+  "w": 3840,
+  "h": 1920,
+  "polygon_points": [
+    [
+      1519,
+      941
+    ],
+    [
+      1011,
+      1030
+    ],
+    [
+      2838,
+      1059
+    ],
+    [
+      2302,
+      958
+    ],
+    [
+      1521,
+      942
+    ]
+  ]
+}

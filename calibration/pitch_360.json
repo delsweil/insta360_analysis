@@ -1,0 +1,38 @@
+{
+  "video": "/Users/davidelsweiler/Desktop/test_run.mp4",
+  "frame_index": 0,
+  "equirect_size": [
+    3840,
+    1920
+  ],
+  "pitch_polygon_equirect": [
+    [
+      1014,
+      1033
+    ],
+    [
+      2837,
+      1063
+    ],
+    [
+      2345,
+      964
+    ],
+    [
+      1495,
+      937
+    ],
+    [
+      1019,
+      1037
+    ],
+    [
+      1019,
+      1037
+    ],
+    [
+      1019,
+      1037
+    ]
+  ]
+}

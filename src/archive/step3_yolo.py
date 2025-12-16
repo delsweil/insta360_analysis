@@ -1,5 +1,4 @@
 
-
 import cv2
 import time
 from ultralytics import YOLO
@@ -25,6 +24,8 @@ CONF_THRESH = 0.15    # lower for better ball detection
 
 
 # ---------------- LOAD YOLO -----------------
+
+
 
 model = YOLO("yolo11n.pt")   # fast + decent accuracy
 print("Loaded YOLO model.")
