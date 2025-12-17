@@ -26,6 +26,10 @@ class TeamClusterConfig:
     # Pixel quality gates
     min_non_grass_frac: float = 0.18
     min_roi_px: int = 20 * 20
+    # Make small/far players usable: normalize ROI size before feature extraction.
+    roi_resize: int = 48  # 0 disables resizing
+    # When ROIs get tiny, hard pixel-count gates become too strict. Keep this low.
+    min_kept_px: int = 20
 
     # Grass mask in HSV
     grass_h_lo: int = 35
@@ -43,8 +47,8 @@ def _clamp_int(v: int, lo: int, hi: int) -> int:
     return int(max(lo, min(hi, v)))
 
 
-def _torso_crop(img_bgr: np.ndarray, b, cfg: TeamClusterConfig) -> Optional[np.ndarray]:
-    h, w = img_bgr.shape[:2]
+def _torso_crop(img: np.ndarray, b, cfg: TeamClusterConfig) -> Optional[np.ndarray]:
+    h, w = img.shape[:2]
     x1, y1, x2, y2 = int(b.x1), int(b.y1), int(b.x2), int(b.y2)
 
     x1 = _clamp_int(x1, 0, w - 1)
@@ -68,12 +72,12 @@ def _torso_crop(img_bgr: np.ndarray, b, cfg: TeamClusterConfig) -> Optional[np.n
 
     if rx2 <= rx1 or ry2 <= ry1:
         return None
-    return img_bgr[ry1:ry2, rx1:rx2]
+    return img[ry1:ry2, rx1:rx2]
 
 
-def _mask_grass(roi_bgr: np.ndarray, cfg: TeamClusterConfig) -> np.ndarray:
-    hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
-    H, S, V = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+def _mask_grass_hsv(roi_hsv: np.ndarray, cfg: TeamClusterConfig) -> np.ndarray:
+    """Return mask of *non-grass* pixels given an HSV ROI."""
+    H, S, V = roi_hsv[:, :, 0], roi_hsv[:, :, 1], roi_hsv[:, :, 2]
     grass = (
         (H >= cfg.grass_h_lo) & (H <= cfg.grass_h_hi) &
         (S >= cfg.grass_s_min) &
@@ -82,25 +86,37 @@ def _mask_grass(roi_bgr: np.ndarray, cfg: TeamClusterConfig) -> np.ndarray:
     return ~grass  # keep non-grass
 
 
-def _feature_from_roi(roi_bgr: np.ndarray, keep_mask: np.ndarray, cfg: TeamClusterConfig) -> Optional[np.ndarray]:
-    if roi_bgr.size < 3 * cfg.min_roi_px:
+def _maybe_resize(roi: np.ndarray, cfg: TeamClusterConfig) -> np.ndarray:
+    if cfg.roi_resize and cfg.roi_resize > 0:
+        return cv2.resize(roi, (cfg.roi_resize, cfg.roi_resize), interpolation=cv2.INTER_LINEAR)
+    return roi
+
+
+def _feature_from_rois(
+    roi_lab: np.ndarray,
+    roi_hsv: np.ndarray,
+    cfg: TeamClusterConfig,
+) -> Optional[np.ndarray]:
+    """Extract a normalized kit feature vector from LAB+HSV torso ROIs."""
+
+    if roi_hsv.size < 3 * cfg.min_roi_px:
         return None
+
+    keep_mask = _mask_grass_hsv(roi_hsv, cfg)
 
     keep_frac = float(keep_mask.mean())
     if keep_frac < cfg.min_non_grass_frac:
         return None
 
-    lab = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2LAB)
-    lab_kept = lab[keep_mask]
-    if lab_kept.shape[0] < 50:
+    lab_kept = roi_lab[keep_mask]
+    if lab_kept.shape[0] < cfg.min_kept_px:
         return None
 
     lab_mean = lab_kept.mean(axis=0)
     lab_std = lab_kept.std(axis=0)
 
-    hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
-    hsv_kept = hsv[keep_mask]
-    if hsv_kept.shape[0] < 50:
+    hsv_kept = roi_hsv[keep_mask]
+    if hsv_kept.shape[0] < cfg.min_kept_px:
         return None
 
     h = hsv_kept[:, 0].astype(np.float32)
@@ -116,12 +132,36 @@ def _feature_from_roi(roi_bgr: np.ndarray, keep_mask: np.ndarray, cfg: TeamClust
     return feat
 
 
-def extract_kit_feature(img_bgr: np.ndarray, b, cfg: TeamClusterConfig) -> Optional[np.ndarray]:
-    roi = _torso_crop(img_bgr, b, cfg)
-    if roi is None:
+def extract_kit_feature(
+    frame_bgr: np.ndarray,
+    b,
+    cfg: TeamClusterConfig,
+    frame_lab: Optional[np.ndarray] = None,
+    frame_hsv: Optional[np.ndarray] = None,
+) -> Optional[np.ndarray]:
+    """Extract a kit feature for one box.
+
+    Speed wins:
+      - pass precomputed frame_lab/frame_hsv (computed once per frame)
+      - avoid per-box cvtColor calls
+
+    Robustness wins:
+      - resize torso ROI to a fixed size for far/small players
+    """
+
+    if frame_lab is None:
+        frame_lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
+    if frame_hsv is None:
+        frame_hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+
+    roi_lab = _torso_crop(frame_lab, b, cfg)
+    roi_hsv = _torso_crop(frame_hsv, b, cfg)
+    if roi_lab is None or roi_hsv is None:
         return None
-    keep = _mask_grass(roi, cfg)
-    return _feature_from_roi(roi, keep, cfg)
+
+    roi_lab = _maybe_resize(roi_lab, cfg)
+    roi_hsv = _maybe_resize(roi_hsv, cfg)
+    return _feature_from_rois(roi_lab, roi_hsv, cfg)
 
 
 def _kmeans_pp_init(X: np.ndarray, k: int, rng: np.random.Generator) -> np.ndarray:
@@ -196,9 +236,13 @@ class TeamClusterer:
 
         self._boot_frames += 1
 
+        # Precompute color spaces once per frame (big speed win)
+        frame_lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
+        frame_hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+
         feats = []
         for b in boxes:
-            f = extract_kit_feature(frame_bgr, b, self.cfg)
+            f = extract_kit_feature(frame_bgr, b, self.cfg, frame_lab=frame_lab, frame_hsv=frame_hsv)
             if f is not None:
                 feats.append(f)
         if feats:
@@ -225,7 +269,9 @@ class TeamClusterer:
         if not self.ready or self.centers is None:
             return None, None, None, None
 
-        f = extract_kit_feature(frame_bgr, b, self.cfg)
+        frame_lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
+        frame_hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+        f = extract_kit_feature(frame_bgr, b, self.cfg, frame_lab=frame_lab, frame_hsv=frame_hsv)
         if f is None:
             return None, None, None, None
 
@@ -251,4 +297,38 @@ class TeamClusterer:
         return self._label_from_cluster(j0), margin, best, second
 
     def classify_boxes_with_margins(self, frame_bgr: np.ndarray, boxes: List):
-        return [self.classify_box_with_margin(frame_bgr, b) for b in boxes]
+        if not boxes:
+            return []
+        # One conversion per frame instead of per box
+        frame_lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
+        frame_hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+
+        out = []
+        for b in boxes:
+            if not self.ready or self.centers is None:
+                out.append((None, None, None, None))
+                continue
+            f = extract_kit_feature(frame_bgr, b, self.cfg, frame_lab=frame_lab, frame_hsv=frame_hsv)
+            if f is None:
+                out.append((None, None, None, None))
+                continue
+
+            d2 = ((self.centers - f[None, :]) ** 2).sum(axis=1)
+            order = np.argsort(d2)
+            j0 = int(order[0])
+            j1 = int(order[1]) if len(order) > 1 else j0
+
+            best = float(np.sqrt(d2[j0]))
+            second = float(np.sqrt(d2[j1]))
+            margin = float(second - best)
+
+            self.counts[j0] += 1
+
+            if best < self.cfg.update_dist_thresh:
+                beta = self.cfg.ema_beta
+                self.centers[j0] = (1.0 - beta) * self.centers[j0] + beta * f
+                self.centers[j0] = self.centers[j0] / (np.linalg.norm(self.centers[j0]) + 1e-8)
+
+            out.append((self._label_from_cluster(j0), margin, best, second))
+
+        return out

@@ -220,6 +220,29 @@ class Detector:
     def _infer(self, model: YOLO, img_bgr: np.ndarray, imgsz: int, conf: float):
         return model(img_bgr, imgsz=imgsz, conf=conf, verbose=False)[0]
 
+    def _infer_batch(
+        self,
+        model: YOLO,
+        imgs_bgr: List[np.ndarray],
+        imgsz: int,
+        conf: float,
+        batch: int = 8,
+    ) -> List:
+        """Run a single (or chunked) batched inference call.
+
+        Ultralytics YOLO accepts a list of images and returns a list of Results.
+        Chunking avoids GPU/MPS OOM on large tile counts.
+        """
+        if not imgs_bgr:
+            return []
+        outs: List = []
+        if batch is None or batch <= 0:
+            batch = len(imgs_bgr)
+        for i in range(0, len(imgs_bgr), batch):
+            chunk = imgs_bgr[i : i + batch]
+            outs.extend(model(chunk, imgsz=imgsz, conf=conf, verbose=False))
+        return outs
+
     # ------------------------
     # Base (single-pass) detections
     # ------------------------
@@ -266,6 +289,7 @@ class Detector:
         tile_w: int = 960,
         tile_h: int = 540,
         overlap: float = 0.20,
+        tile_batch: int = 8,
         # when to trigger pass2
         trigger_min_players: int = 10,
         trigger_median_area_frac: float = 0.0025,
@@ -333,11 +357,13 @@ class Detector:
         tiles = _tile_grid(w, p2_ymax, tile_w, tile_h, overlap)
         p2: List[DetBox] = []
 
+        # Collect tiles and run YOLO once (or in chunks). This is a major speed win.
+        tile_imgs: List[np.ndarray] = []
+        tile_rects: List[Tuple[int, int, int, int]] = []
         for (x1, y1, x2, y2) in tiles:
             # if pitch mask is given, skip tiles with tiny pitch coverage
             if mask_bin is not None:
                 mh, mw = mask_bin.shape[:2]
-                # mask_bin should match img size; if not, just ignore
                 if (mw == w) and (mh == h):
                     cov = float(mask_bin[y1:y2, x1:x2].mean())
                     if cov < tile_pitch_min_coverage:
@@ -346,18 +372,35 @@ class Detector:
             tile = img_bgr[y1:y2, x1:x2]
             if tile.size == 0:
                 continue
+            tile_imgs.append(tile)
+            tile_rects.append((x1, y1, x2, y2))
 
-            dets = self.detect_players(tile, imgsz=imgsz_hi, conf=p2_conf)
-            # map back to full-frame coordinates
-            for b in dets:
+        # Batched inference over tiles
+        tile_results = self._infer_batch(
+            self.player_model,
+            tile_imgs,
+            imgsz=imgsz_hi,
+            conf=p2_conf,
+            batch=tile_batch,
+        )
+
+        # Parse results and map back to full-frame coordinates
+        for res, (tx1, ty1, tx2, ty2) in zip(tile_results, tile_rects):
+            for b in res.boxes:
+                cls_id = int(b.cls[0])
+                cls_name = self.player_names.get(cls_id, str(cls_id))
+                if cls_name != "person":
+                    continue
+                x1, y1, x2, y2 = map(float, b.xyxy[0].tolist())
+                cf = float(b.conf[0])
                 p2.append(
                     DetBox(
-                        x1=b.x1 + x1,
-                        y1=b.y1 + y1,
-                        x2=b.x2 + x1,
-                        y2=b.y2 + y1,
-                        conf=b.conf,
-                        cls_id=b.cls_id,
+                        x1=x1 + tx1,
+                        y1=y1 + ty1,
+                        x2=x2 + tx1,
+                        y2=y2 + ty1,
+                        conf=cf,
+                        cls_id=cls_id,
                     )
                 )
 
