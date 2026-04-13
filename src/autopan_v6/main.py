@@ -53,31 +53,15 @@ def cmd_calibrate(args):
 
 
 def cmd_detect(args):
-    from pipeline.probe import probe_game, find_insv_files
-    from pipeline.detect import DetectionConfig, run_detection
+    from pipeline.probe import probe_game, probe_file
+    from pipeline.detect import DetectionConfig, DetectionRunner
     from pipeline.calibrate import load_calibration
+    import os
 
-    # Gather files
     target = args.target
-    if os.path.isdir(target):
-        files = find_insv_files(target)
-        if not files:
-            files = [str(f) for f in sorted(Path(target).glob("*.mp4"))]
-    else:
-        files = [target]
-
-    if not files:
-        print(f"No video files found at: {target}")
-        sys.exit(1)
-
-    game = probe_game(files, model_hint=args.model)
-    print(game.summary())
-
-    # Load calibration if available
     calib = load_calibration(args.calibration)
     pitch_yaw_left  = calib["pitch_yaw_left_deg"]  if calib else None
     pitch_yaw_right = calib["pitch_yaw_right_deg"] if calib else None
-    yaw_centre      = calib["pitch_yaw_centre_deg"] if calib else 0.0
 
     cfg = DetectionConfig(
         sample_every_n=args.sample_every,
@@ -88,8 +72,15 @@ def cmd_detect(args):
         pitch_yaw_right=pitch_yaw_right,
     )
 
-    output_csv = args.output or "data/yaw_schedule.csv"
-    run_detection(game, cfg, output_csv)
+    info = probe_file(target, role='lrv')
+    runner = DetectionRunner(cfg)
+    os.makedirs("data", exist_ok=True)
+    entries = runner.run_segment(info, frame_offset=0)
+
+    from pipeline.detect import _write_schedule_csv
+    output = args.output or "data/yaw_schedule.csv"
+    _write_schedule_csv(entries, output)
+    print(f"Saved: {output}")
 
 
 def cmd_smooth(args):
@@ -125,7 +116,7 @@ def cmd_smooth(args):
 
 
 def cmd_render(args):
-    from pipeline.probe import probe_game, find_insv_files
+    from pipeline.probe import probe_game
     from pipeline.smooth import load_dense_curve
     from pipeline.render import RenderConfig, render_game, render_segments_concat
 

@@ -39,7 +39,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from .probe import VideoInfo, GameInfo
+from .probe import VideoMeta as VideoInfo, GameInfo
 from .lens_models import LensModel
 
 

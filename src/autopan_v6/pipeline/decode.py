@@ -23,7 +23,7 @@ from typing import Generator, Iterator, Optional, Tuple
 
 import numpy as np
 
-from .probe import VideoInfo
+from .probe import VideoMeta as VideoInfo
 from .lens_models import LensModel
 
 
@@ -211,7 +211,7 @@ def make_detection_reader(
     """
     w, h = info.width, info.height
 
-    if info.is_insv and info.model is not None:
+    if False:  # use equirect path for all inputs
         m = info.model
         # For fisheye, we work on the full frame (both lenses)
         # Pitch band crop: top/bottom fractions of the frame height

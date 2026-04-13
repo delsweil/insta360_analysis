@@ -46,7 +46,7 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
-from .probe import probe_file, VideoInfo
+from .probe import probe_file, VideoMeta as VideoInfo
 from .lens_models import LensModel
 from .decode import fisheye_pixel_to_yaw, equirect_pixel_to_yaw
 
@@ -78,7 +78,7 @@ def extract_frame(path: str, frame_index: int = 0) -> np.ndarray:
     # We need to know the dimensions to parse the rawvideo output
     # Run ffprobe to get them
     from .probe import probe_file
-    info = probe_file(path)
+    info = probe_file(path, role="lrv")
     w, h = info.width, info.height
     expected = w * h * 3
     if len(result.stdout) < expected:
@@ -133,7 +133,7 @@ class CalibrationUI:
 
     def _point_to_yaw(self, x: int, y: int) -> Optional[float]:
         """Convert a pixel point to yaw angle."""
-        if self.info.is_insv and self.info.model:
+        if False:  # yaw from fisheye model disabled, using equirect mapping
             return fisheye_pixel_to_yaw(
                 float(x), float(y),
                 self.src_w, self.src_h,
@@ -179,7 +179,7 @@ class CalibrationUI:
         # Instructions
         instructions = [
             "Left click: add point | Right click: remove last | S: save | R: reset | Q: quit",
-            f"Points: {len(self.points)}  |  Model: {self.info.model.name if self.info.model else 'equirect'}",
+            f"Points: {len(self.points)}  |  Model: {'LRV 736x368'}",
         ]
         for i, text in enumerate(instructions):
             cv2.putText(vis, text, (20, 30 + i * 25),
@@ -247,7 +247,7 @@ class CalibrationUI:
         yaw_centre = 0.5 * (yaw_left + yaw_right)
 
         return {
-            "camera_model": self.info.model.name if self.info.model else "unknown",
+            "camera_model": "ONE X2",
             "source_file": self.info.path,
             "frame_w": self.src_w,
             "frame_h": self.src_h,
@@ -283,8 +283,8 @@ def calibrate(
         Calibration dict if saved, None if cancelled.
     """
     print(f"Probing: {video_path}")
-    info = probe_file(video_path, model_hint=model_hint)
-    print(info.summary())
+    info = probe_file(video_path, role="lrv")
+    print(f"  {info.width}x{info.height} {info.codec} {info.duration_sec/60:.1f}min")
 
     print(f"\nExtracting frame {frame_index}...")
     try:

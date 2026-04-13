@@ -1,0 +1,55 @@
+{
+  "camera_model": "ONE X2",
+  "source_file": "/Volumes/Untitled/DCIM/Camera01/LRV_20250701_174151_11_002.insv",
+  "frame_w": 736,
+  "frame_h": 368,
+  "boundary_points_px": [
+    [
+      534,
+      345
+    ],
+    [
+      551,
+      247
+    ],
+    [
+      550,
+      87
+    ],
+    [
+      537,
+      6
+    ],
+    [
+      506,
+      21
+    ],
+    [
+      474,
+      54
+    ],
+    [
+      445,
+      106
+    ],
+    [
+      436,
+      170
+    ],
+    [
+      455,
+      260
+    ],
+    [
+      494,
+      314
+    ],
+    [
+      535,
+      345
+    ]
+  ],
+  "pitch_yaw_left_deg": 33.26,
+  "pitch_yaw_right_deg": 89.51,
+  "pitch_yaw_centre_deg": 61.39
+}

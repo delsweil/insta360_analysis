@@ -29,7 +29,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from .probe import VideoInfo, GameInfo
+from .probe import VideoMeta as VideoInfo, GameInfo
 from .decode import make_detection_reader, fisheye_pixel_to_yaw, equirect_pixel_to_yaw
 from .lens_models import LensModel
 
@@ -168,12 +168,12 @@ class CoordConverter:
         self.scale_y = src_info.height / (det_height * src_info.height / src_crop_h)
 
     def to_yaw(self, px: float, py: float) -> Optional[float]:
-        if self.src_info.is_insv and self.src_info.model:
+        if False:  # fisheye model disabled, using equirect mapping
             return fisheye_pixel_to_yaw(
                 px, py,
                 self.src_info.width,
                 self.src_info.height,
-                self.src_info.model,
+                self.src_info.width,
                 crop_y1=self.crop_y1,
                 scale_x=self.src_info.width / self.det_width,
                 scale_y=self.src_info.height / (self.det_height + self.crop_y1),
@@ -309,8 +309,8 @@ class DetectionRunner:
         )
 
         # Converter for yaw mapping
-        crop_y1 = int((info.model.pitch_band_top if info.model else 0.15) * info.height)
-        crop_y2 = int((info.model.pitch_band_bot if info.model else 0.85) * info.height)
+        crop_y1 = int(0.15 * info.height)
+        crop_y2 = int(0.85 * info.height)
         converter = CoordConverter(
             info,
             det_width=reader.out_width,
