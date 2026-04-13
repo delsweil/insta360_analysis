@@ -1,0 +1,17 @@
+# autopan v6 requirements
+# Install with: pip install -r requirements.txt
+
+# Core
+numpy>=1.24
+scipy>=1.10          # Savitzky-Golay filter
+opencv-python>=4.8   # frame reading, calibration UI
+
+# Detection
+ultralytics>=8.0     # YOLOv8/v11
+
+# Note: py360convert is NOT required in v6.
+# All projection is handled by FFmpeg's v360 filter.
+
+# FFmpeg must be installed separately:
+#   Mac:   brew install ffmpeg
+#   Linux: sudo apt install ffmpeg
