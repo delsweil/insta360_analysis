@@ -36,28 +36,10 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 def cmd_probe(args):
-    from pipeline.probe import probe_game, find_insv_files, estimate_processing_time
-
-    target = args.target
-    if os.path.isdir(target):
-        files = find_insv_files(target)
-        if not files:
-            # Also look for .mp4
-            files = sorted(Path(target).glob("*.mp4")) + sorted(Path(target).glob("*.MP4"))
-            files = [str(f) for f in files]
-        if not files:
-            print(f"No .insv or .mp4 files found in {target}")
-            sys.exit(1)
-    else:
-        files = [target]
-
-    game = probe_game(files, model_hint=args.model)
+    from pipeline.probe import probe_game, estimate_processing_time
+    game = probe_game(args.target)
     print(game.summary())
-    print(estimate_processing_time(
-        game,
-        sample_every_n=args.sample_every,
-        cpu_only=True,
-    ))
+    print(estimate_processing_time(game, sample_every_n=args.sample_every))
 
 
 def cmd_calibrate(args):
@@ -179,7 +161,7 @@ def cmd_render(args):
 
 def cmd_run(args):
     """Full pipeline in one command."""
-    from pipeline.probe import probe_game, find_insv_files, estimate_processing_time
+    from pipeline.probe import probe_game, estimate_processing_time
     from pipeline.detect import DetectionConfig, run_detection
     from pipeline.smooth import (
         SmoothConfig, smooth_schedule, compute_pitch_curve, save_dense_curve
