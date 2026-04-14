@@ -111,11 +111,10 @@ def main():
 
     # ---- tracker ----
     tracker = TrackManager(
-        #iou_thresh=0.30,
+        iou_thresh=0.30,
         max_missed=10,
         vote_window=15,
-        vote_ratio=0.65
-        min_votes=4
+        vote_ratio=0.7
     )
 
     # ---- sanity ----

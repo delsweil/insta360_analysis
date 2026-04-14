@@ -51,13 +51,11 @@ class TrackManager:
         max_missed: int = 10,
         vote_window: int = 15,
         vote_ratio: float = 0.7,
-            min_votes: int = 4,
     ):
         self.iou_thresh = iou_thresh
         self.max_missed = max_missed
         self.vote_window = vote_window
         self.vote_ratio = vote_ratio
-        self.min_votes = min_votes
 
         self._next_id = itertools.count(1)
         self.tracks: Dict[int, Track] = {}
@@ -122,6 +120,6 @@ class TrackManager:
             counts[v] = counts.get(v, 0) + 1
 
         label, n = max(counts.items(), key=lambda x: x[1])
-        if n >= self.min_votes and (n / len(tr.team_votes) >= self.vote_ratio):
+        if n / len(tr.team_votes) >= self.vote_ratio:
             return label
         return None
