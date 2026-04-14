@@ -70,7 +70,7 @@ export default function HomePage() {
           Pfeil Phönix · Spielanalyse
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>
+          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.85)', fontWeight: 500 }}>
             {user?.email}
           </span>
           <button
@@ -91,7 +91,7 @@ export default function HomePage() {
         </div>
       </div>
 
-      <div style={{ padding: '20px 20px', maxWidth: 900, margin: '0 auto' }}>
+      <div style={{ padding: '20px', maxWidth: 900, margin: '0 auto' }}>
         {/* Header */}
         <div style={{
           display: 'flex',
@@ -113,6 +113,22 @@ export default function HomePage() {
               {games.length} {games.length === 1 ? 'Spiel' : 'Spiele'} verfügbar
             </div>
           </div>
+          <button
+            onClick={() => router.push('/add-game')}
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              padding: '7px 16px',
+              borderRadius: 8,
+              border: 'none',
+              background: '#0f2972',
+              color: '#fff',
+              cursor: 'pointer',
+              fontFamily: 'DM Sans, sans-serif',
+            }}
+          >
+            + Spiel hinzufügen
+          </button>
         </div>
 
         {/* Games list */}
@@ -143,10 +159,13 @@ export default function HomePage() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  transition: 'box-shadow 0.15s',
                 }}
-                onMouseEnter={e => (e.currentTarget.style.boxShadow = '0 4px 20px rgba(15,41,114,0.1)')}
-                onMouseLeave={e => (e.currentTarget.style.boxShadow = 'none')}
+                onMouseEnter={e => {
+                  e.currentTarget.style.boxShadow = '0 4px 20px rgba(15,41,114,0.1)'
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.boxShadow = 'none'
+                }}
               >
                 <div>
                   <div style={{
