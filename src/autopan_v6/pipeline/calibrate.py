@@ -1,68 +1,102 @@
 # pipeline/calibrate.py
 """
-Interactive pitch boundary calibration tool.
+Interactive per-segment calibration tool.
 
-Replaces calibrate_pitch_360.py and calibrate_pitch_mask360.py with a
-single tool that:
-  1. Works directly on .insv fisheye frames (no stitching required)
-  2. Lets you draw the pitch boundary on the raw fisheye frame
-  3. Converts boundary points to yaw angles for use in the pipeline
-  4. Saves a JSON config that probe.py and detect.py consume
+Works on the VID _10_ (pitch-facing) file.
+Extracts the same crop used by detection (rotate 90° CCW, bottom 2/3)
+and lets you draw the pitch boundary polygon on it.
 
-Usage:
-    python -m pipeline.calibrate path/to/game_segment.insv
+Two-step process:
+  Step 1: Draw pitch boundary polygon (click around the pitch perimeter)
+  Step 2: Confirm yaw boundaries (leftmost and rightmost polygon points
+          define the yaw range automatically)
 
 Controls:
-    Left click  : add boundary point
-    Right click : remove last point
-    S           : save calibration
-    R           : reset points
-    Q / Esc     : quit
+  Left click  : add polygon point
+  Right click : remove last point
+  S           : save calibration
+  R           : reset all points
+  Q / Esc     : quit without saving
 
-Output JSON:
-    {
-      "camera_model": "ONE X2",
-      "source_file": "...",
-      "frame_index": 0,
-      "frame_w": 5760,
-      "frame_h": 2880,
-      "boundary_points_px": [[x, y], ...],
-      "pitch_yaw_left_deg": -38.5,
-      "pitch_yaw_right_deg": 41.2,
-      "pitch_yaw_centre_deg": 1.35,
-      "notes": "..."
-    }
+Output JSON saved to calibration/<segment_key>.json
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
-import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
 
-from .probe import probe_file, VideoMeta as VideoInfo
-from .lens_models import LensModel
-from .decode import fisheye_pixel_to_yaw, equirect_pixel_to_yaw
+from .decode import extract_pitch_crop, fisheye_cx_to_yaw
+from .probe import probe_file
 
 
 # ---------------------------------------------------------------------------
-# Frame extraction (single frame, no YOLO needed)
+# Helpers
 # ---------------------------------------------------------------------------
 
-def extract_frame(path: str, frame_index: int = 0) -> np.ndarray:
+def segment_key_from_path(path: str) -> str:
+    name = Path(path).name
+    m = re.match(
+        r'^(?:VID|LRV)_(\d{8})_(\d{6})_\d{2}_(\d{3})\.insv$',
+        name, re.IGNORECASE
+    )
+    if m:
+        return f"{m.group(1)}_{m.group(2)}_{m.group(3)}"
+    # For .mp4 test clips, use stem
+    return Path(path).stem
+
+
+def calib_path_for_segment(segment_key: str, calib_dir: str = "calibration") -> str:
+    return os.path.join(calib_dir, f"{segment_key}.json")
+
+
+def load_calibration(path: str) -> Optional[dict]:
+    if not path or not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def load_calibration_for_segment(
+    segment_key: str,
+    calib_dir: str = "calibration",
+) -> Optional[dict]:
+    return load_calibration(calib_path_for_segment(segment_key, calib_dir))
+
+
+def find_best_calibration(
+    segment_key: str,
+    calib_dir: str = "calibration",
+) -> Optional[dict]:
+    """Try exact segment match first, then generic pitch.json."""
+    calib = load_calibration_for_segment(segment_key, calib_dir)
+    if calib:
+        return calib
+    return load_calibration(os.path.join(calib_dir, "pitch.json"))
+
+
+# ---------------------------------------------------------------------------
+# Frame extraction
+# ---------------------------------------------------------------------------
+
+def extract_calibration_frame(path: str, frame_index: int) -> np.ndarray:
     """
-    Extract a single frame from a video file using FFmpeg.
-    Works on .insv and .mp4.
+    Extract a single frame and apply the same crop as detection.
+    Works on VID _10_ files (2880x2880) or LRV files (736x368).
     """
+    info = probe_file(path, role='lrv')
+    w, h = info.width, info.height
+    expected = w * h * 3
+
     cmd = [
         "ffmpeg",
-        "-hwaccel", "videotoolbox",
         "-i", path,
         "-vf", f"select=eq(n\\,{frame_index})",
         "-vsync", "0",
@@ -71,189 +105,181 @@ def extract_frame(path: str, frame_index: int = 0) -> np.ndarray:
         "-pix_fmt", "bgr24",
         "pipe:1",
     ]
-    result = subprocess.run(cmd, capture_output=True, timeout=30)
-    if result.returncode != 0 or len(result.stdout) == 0:
-        raise RuntimeError(f"Could not extract frame {frame_index} from {path}")
-
-    # We need to know the dimensions to parse the rawvideo output
-    # Run ffprobe to get them
-    from .probe import probe_file
-    info = probe_file(path, role="lrv")
-    w, h = info.width, info.height
-    expected = w * h * 3
+    result = subprocess.run(cmd, capture_output=True, timeout=60)
     if len(result.stdout) < expected:
         raise RuntimeError(
-            f"Frame extraction incomplete: got {len(result.stdout)} bytes, "
-            f"expected {expected} ({w}x{h})"
+            f"Could not extract frame {frame_index} from {os.path.basename(path)}.\n"
+            f"Got {len(result.stdout)} bytes, expected {expected}.\n"
+            f"Try a different --frame value."
         )
-    frame = np.frombuffer(result.stdout[:expected], dtype=np.uint8).reshape((h, w, 3))
-    return frame.copy()
+    raw = np.frombuffer(result.stdout[:expected], dtype=np.uint8).reshape((h, w, 3)).copy()
+
+    # Apply the same crop as detection
+    if w == h:
+        # Square frame = VID file (2880x2880) — use VID crop
+        return extract_pitch_crop(raw)
+    else:
+        # Non-square = LRV or MP4 — just return as-is for now
+        return raw
 
 
 # ---------------------------------------------------------------------------
-# Calibration UI state
+# Calibration UI
 # ---------------------------------------------------------------------------
 
 class CalibrationUI:
+
     def __init__(
         self,
-        frame: np.ndarray,
-        info: VideoInfo,
-        display_width: int = 1600,
+        crop: np.ndarray,
+        segment_key: str,
+        source_file: str,
+        frame_index: int,
+        display_w: int = 1200,
     ):
-        self.orig_frame = frame
-        self.info = info
-        self.display_width = display_width
+        self.crop = crop           # the pitch crop (same view YOLO sees)
+        self.segment_key = segment_key
+        self.source_file = source_file
+        self.frame_index = frame_index
 
-        h, w = frame.shape[:2]
-        self.src_w = w
-        self.src_h = h
+        self.crop_h, self.crop_w = crop.shape[:2]
 
         # Scale for display
-        if w > display_width:
-            self.scale = display_width / float(w)
-        else:
-            self.scale = 1.0
+        self.scale = display_w / self.crop_w
+        self.disp_w = display_w
+        self.disp_h = int(self.crop_h * self.scale)
 
-        dw = int(w * self.scale)
-        dh = int(h * self.scale)
-        self.display_frame = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_AREA)
-        self.display_w = dw
-        self.display_h = dh
+        self.points: List[Tuple[int, int]] = []  # in crop pixel coords
 
-        # Points in original pixel coordinates
-        self.points: List[Tuple[int, int]] = []
-        self.window_name = "Calibrate pitch boundary | S=save  R=reset  Q=quit"
+        self.window = (
+            f"Calibrate {segment_key}  |  "
+            f"Left click: add point  |  Right click: remove  |  "
+            f"S: save  |  R: reset  |  Q: quit"
+        )
 
-    def _orig_to_display(self, x: int, y: int) -> Tuple[int, int]:
-        return int(x * self.scale), int(y * self.scale)
+    def _crop_to_disp(self, cx: int, cy: int) -> Tuple[int, int]:
+        return int(cx * self.scale), int(cy * self.scale)
 
-    def _display_to_orig(self, x: int, y: int) -> Tuple[int, int]:
-        return int(x / self.scale), int(y / self.scale)
-
-    def _point_to_yaw(self, x: int, y: int) -> Optional[float]:
-        """Convert a pixel point to yaw angle."""
-        if False:  # yaw from fisheye model disabled, using equirect mapping
-            return fisheye_pixel_to_yaw(
-                float(x), float(y),
-                self.src_w, self.src_h,
-                self.info.model,
-            )
-        else:
-            return equirect_pixel_to_yaw(float(x), self.src_w)
+    def _disp_to_crop(self, dx: int, dy: int) -> Tuple[int, int]:
+        return int(dx / self.scale), int(dy / self.scale)
 
     def _draw(self) -> np.ndarray:
-        vis = self.display_frame.copy()
-        pts_disp = [self._orig_to_display(x, y) for x, y in self.points]
+        vis = cv2.resize(self.crop, (self.disp_w, self.disp_h))
 
-        # Draw points
-        for i, (px, py) in enumerate(pts_disp):
-            cv2.circle(vis, (px, py), 6, (0, 255, 255), -1)
-            cv2.circle(vis, (px, py), 7, (0, 0, 0), 1)
-
-            # Show yaw angle next to point
-            ox, oy = self.points[i]
-            yaw = self._point_to_yaw(ox, oy)
-            if yaw is not None:
-                label = f"{yaw:.1f}°"
-                cv2.putText(vis, label, (px + 10, py - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
-
-        # Draw polygon outline
-        if len(pts_disp) >= 2:
-            cv2.polylines(vis, [np.array(pts_disp, dtype=np.int32)],
-                          isClosed=False, color=(0, 255, 255), thickness=2)
-
-        # Show computed yaw range
         if len(self.points) >= 2:
-            yaws = [self._point_to_yaw(x, y) for x, y in self.points]
-            yaws = [y for y in yaws if y is not None]
-            if yaws:
-                yaw_min = min(yaws)
-                yaw_max = max(yaws)
-                cv2.putText(vis,
-                    f"Pitch: {yaw_min:.1f}° to {yaw_max:.1f}°  (range: {yaw_max-yaw_min:.1f}°)",
-                    (20, self.display_h - 15),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+            pts_disp = np.array(
+                [self._crop_to_disp(x, y) for x, y in self.points],
+                dtype=np.int32
+            )
+            cv2.polylines(vis, [pts_disp], isClosed=True,
+                          color=(0, 255, 255), thickness=2)
 
-        # Instructions
+        for (cx, cy) in self.points:
+            dx, dy = self._crop_to_disp(cx, cy)
+            cv2.circle(vis, (dx, dy), 5, (0, 255, 255), -1)
+            cv2.circle(vis, (dx, dy), 6, (0, 0, 0), 1)
+
+        # Show computed yaw range if we have points
+        if len(self.points) >= 2:
+            xs = [p[0] for p in self.points]
+            # Approximate yaw mapping: left edge=yaw_left, right edge=yaw_right
+            # We use a placeholder ±45° here — actual yaw saved uses calibrated values
+            x_min, x_max = min(xs), max(xs)
+            txt = (f"Points: {len(self.points)}  |  "
+                   f"Left x={x_min}  Right x={x_max}  "
+                   f"Width={x_max - x_min}px")
+            cv2.putText(vis, txt, (10, self.disp_h - 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                        (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(vis, txt, (10, self.disp_h - 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                        (0, 0, 0), 1, cv2.LINE_AA)
+
         instructions = [
-            "Left click: add point | Right click: remove last | S: save | R: reset | Q: quit",
-            f"Points: {len(self.points)}  |  Model: {'LRV 736x368'}",
+            f"Draw pitch boundary polygon | Points: {len(self.points)} | S=save  R=reset  Q=quit",
         ]
-        for i, text in enumerate(instructions):
-            cv2.putText(vis, text, (20, 30 + i * 25),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.putText(vis, text, (20, 30 + i * 25),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1, cv2.LINE_AA)
+        for i, txt in enumerate(instructions):
+            cv2.putText(vis, txt, (10, 28 + i * 24),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                        (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(vis, txt, (10, 28 + i * 24),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                        (0, 0, 0), 1, cv2.LINE_AA)
 
         return vis
 
     def on_mouse(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
-            ox, oy = self._display_to_orig(x, y)
-            self.points.append((ox, oy))
-            yaw = self._point_to_yaw(ox, oy)
-            print(f"  Added ({ox}, {oy})  yaw={yaw:.1f}°" if yaw else f"  Added ({ox}, {oy})  [outside fisheye]")
+            cx, cy = self._disp_to_crop(x, y)
+            self.points.append((cx, cy))
+            print(f"  Added ({cx}, {cy})  [{len(self.points)} points]")
             self._refresh()
         elif event == cv2.EVENT_RBUTTONDOWN:
             if self.points:
                 removed = self.points.pop()
-                print(f"  Removed {removed}")
+                print(f"  Removed {removed}  [{len(self.points)} points]")
                 self._refresh()
 
     def _refresh(self):
-        cv2.imshow(self.window_name, self._draw())
+        cv2.imshow(self.window, self._draw())
 
     def run(self) -> Optional[dict]:
-        """
-        Run the calibration UI.
-        Returns calibration dict if saved, None if quit.
-        """
-        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(self.window_name, self.display_w, self.display_h)
-        cv2.setMouseCallback(self.window_name, self.on_mouse)
+        cv2.namedWindow(self.window, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(self.window, self.disp_w, self.disp_h)
+        cv2.setMouseCallback(self.window, self.on_mouse)
         self._refresh()
 
         print("\nCalibration tool open.")
-        print("  Click the left and right boundaries of the pitch (and any other key points).")
-        print("  At minimum, click the leftmost and rightmost points you want to include.")
+        print("  Click around the pitch boundary (touchlines + goal lines).")
+        print("  Include the far touchline, both goal lines, and near touchline.")
+        print("  The leftmost and rightmost points define the yaw range.")
+        print("  Press S to save when done.\n")
 
         while True:
             key = cv2.waitKey(20) & 0xFF
             if key in (ord('q'), ord('Q'), 27):
-                print("Quit without saving.")
                 cv2.destroyAllWindows()
+                print("Quit without saving.")
                 return None
             elif key in (ord('r'), ord('R')):
                 self.points = []
                 print("Reset.")
                 self._refresh()
             elif key in (ord('s'), ord('S')):
-                if len(self.points) < 2:
-                    print("[WARN] Need at least 2 points to define left/right boundaries.")
+                if len(self.points) < 3:
+                    print("  Need at least 3 points to define the pitch boundary.")
                     continue
                 result = self._build_result()
                 cv2.destroyAllWindows()
                 return result
 
     def _build_result(self) -> dict:
-        """Build the calibration result dict."""
-        yaws = [self._point_to_yaw(x, y) for x, y in self.points]
-        yaws = [y for y in yaws if y is not None]
+        xs = [p[0] for p in self.points]
+        x_left  = min(xs)
+        x_right = max(xs)
+        x_centre = (x_left + x_right) / 2.0
 
-        yaw_left  = min(yaws) if yaws else -45.0
-        yaw_right = max(yaws) if yaws else  45.0
-        yaw_centre = 0.5 * (yaw_left + yaw_right)
+        # Yaw mapping: linear from pixel x to yaw degrees
+        # The full crop width maps to the full fisheye horizontal extent
+        # We use ±90° as the fisheye half-angle (200° total FOV / 2 = 100°,
+        # but effective horizontal range after crop is ~180°)
+        # These are stored as pixel fractions — detect.py uses
+        # fisheye_cx_to_yaw() with the calibrated yaw_left/right to convert.
+        # We store pixel coords here and let the user set yaw via probe output.
+        half_fov = 90.0
+        yaw_left   = ((x_left   / self.crop_w) - 0.5) * 2 * half_fov
+        yaw_right  = ((x_right  / self.crop_w) - 0.5) * 2 * half_fov
+        yaw_centre = ((x_centre / self.crop_w) - 0.5) * 2 * half_fov
 
         return {
-            "camera_model": "ONE X2",
-            "source_file": self.info.path,
-            "frame_w": self.src_w,
-            "frame_h": self.src_h,
-            "boundary_points_px": list(self.points),
-            "pitch_yaw_left_deg": round(yaw_left, 2),
-            "pitch_yaw_right_deg": round(yaw_right, 2),
+            "segment_key": self.segment_key,
+            "source_file": os.path.basename(self.source_file),
+            "frame_index": self.frame_index,
+            "crop_w": self.crop_w,
+            "crop_h": self.crop_h,
+            "pitch_polygon": [[x, y] for x, y in self.points],
+            "pitch_yaw_left_deg":   round(yaw_left,   2),
+            "pitch_yaw_right_deg":  round(yaw_right,  2),
             "pitch_yaw_centre_deg": round(yaw_centre, 2),
         }
 
@@ -264,82 +290,52 @@ class CalibrationUI:
 
 def calibrate(
     video_path: str,
-    output_json: str = "calibration/pitch.json",
-    frame_index: int = 30,    # use frame 30 (avoid black first frame)
-    model_hint: Optional[str] = None,
-    display_width: int = 1600,
+    output_dir: str = "calibration",
+    frame_index: int = 3600,
+    display_w: int = 1200,
 ) -> Optional[dict]:
     """
-    Run interactive calibration on a video file.
+    Run interactive calibration on a VID _10_ file.
 
     Args:
-        video_path  : path to .insv or .mp4
-        output_json : where to save the calibration JSON
-        frame_index : which frame to use for calibration
-        model_hint  : camera model name override
-        display_width: max display width in pixels
-
-    Returns:
-        Calibration dict if saved, None if cancelled.
+        video_path : path to VID _10_ .insv file
+        output_dir : directory to save calibration JSON
+        frame_index: frame to use (default 3600 = 2min at 30fps)
+        display_w  : UI window width in pixels
     """
-    print(f"Probing: {video_path}")
-    info = probe_file(video_path, role="lrv")
-    print(f"  {info.width}x{info.height} {info.codec} {info.duration_sec/60:.1f}min")
+    key = segment_key_from_path(video_path)
+    print(f"Calibrating: {key}")
+    print(f"Extracting frame {frame_index} from {os.path.basename(video_path)}...")
 
-    print(f"\nExtracting frame {frame_index}...")
     try:
-        frame = extract_frame(video_path, frame_index)
+        crop = extract_calibration_frame(video_path, frame_index)
     except Exception as e:
         print(f"[ERROR] {e}")
-        print("Try a different frame_index (e.g. --frame 0)")
         return None
 
-    ui = CalibrationUI(frame, info, display_width=display_width)
-    result = ui.run()
+    print(f"Crop size: {crop.shape[1]}x{crop.shape[0]}")
 
+    ui = CalibrationUI(
+        crop=crop,
+        segment_key=key,
+        source_file=video_path,
+        frame_index=frame_index,
+        display_w=display_w,
+    )
+
+    result = ui.run()
     if result is None:
         return None
 
-    # Save
-    os.makedirs(os.path.dirname(output_json) or ".", exist_ok=True)
-    with open(output_json, "w") as f:
+    os.makedirs(output_dir, exist_ok=True)
+    out_path = os.path.join(output_dir, f"{key}.json")
+    with open(out_path, "w") as f:
         json.dump(result, f, indent=2)
 
-    print(f"\nCalibration saved: {output_json}")
-    print(f"  Pitch yaw range : {result['pitch_yaw_left_deg']}° to {result['pitch_yaw_right_deg']}°")
-    print(f"  Pitch centre    : {result['pitch_yaw_centre_deg']}°")
+    print(f"\nCalibration saved: {out_path}")
+    print(f"  Polygon points : {len(result['pitch_polygon'])}")
+    print(f"  Yaw range      : {result['pitch_yaw_left_deg']}° to "
+          f"{result['pitch_yaw_right_deg']}°")
+    print(f"  Yaw centre     : {result['pitch_yaw_centre_deg']}°")
 
     return result
-
-
-def load_calibration(path: str) -> Optional[dict]:
-    """Load a saved calibration JSON."""
-    if not os.path.exists(path):
-        return None
-    with open(path) as f:
-        return json.load(f)
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Calibrate pitch boundary")
-    parser.add_argument("video", help="Path to .insv or .mp4 file")
-    parser.add_argument("--output", default="calibration/pitch.json",
-                        help="Output JSON path")
-    parser.add_argument("--frame", type=int, default=30,
-                        help="Frame index to use for calibration")
-    parser.add_argument("--model", default=None,
-                        help="Camera model (e.g. 'ONE X2')")
-    args = parser.parse_args()
-
-    calibrate(
-        video_path=args.video,
-        output_json=args.output,
-        frame_index=args.frame,
-        model_hint=args.model,
-    )

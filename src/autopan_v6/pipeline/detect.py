@@ -1,21 +1,16 @@
 # pipeline/detect.py
 """
-Detection phase: runs YOLO on sampled frames and produces a yaw schedule.
+Detection phase using Insta360 X2 VID _10_ (pitch-facing) files.
 
-This is the CPU-heavy phase. Key optimisations vs v5:
-  1. Works entirely in equirect/fisheye pixel space - no py360convert per frame
-  2. Only processes every Nth frame (configurable)
-  3. Detects on half-res frames (1920px wide instead of 3840)
-  4. Ball and player detection on same frame in one pass where possible
-  5. Pitch mask applied as a simple pixel crop, not a projected polygon
-  6. Outputs a sparse CSV of (frame_index, target_yaw_deg) pairs
-     which smooth.py then interpolates to a dense per-frame curve
+Pipeline per sampled frame:
+  1. Read raw 2880x2880 frame from VID _10_ file
+  2. extract_pitch_crop() -> ~2880x1920 fisheye showing full pitch
+  3. YOLO detects persons and ball
+  4. Pitch polygon mask filters out coaches/spectators/cars
+  5. Surviving detections mapped to yaw angles via calibrated boundaries
+  6. Target yaw selected: ball > last_ball > player centroid > pitch centre
 
-Output CSV format:
-  frame_idx, target_yaw, mode, n_players, ball_conf
-  0, 12.3, ball, 8, 0.87
-  5, 11.1, ball, 9, 0.91
-  ...
+Output: sparse CSV of (frame_idx, target_yaw, mode, n_players, ball_conf)
 """
 
 from __future__ import annotations
@@ -23,15 +18,17 @@ from __future__ import annotations
 import csv
 import os
 import time
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import numpy as np
+import cv2
 
-from .probe import VideoMeta as VideoInfo, GameInfo
-from .decode import make_detection_reader, fisheye_pixel_to_yaw, equirect_pixel_to_yaw
-from .lens_models import LensModel
+from .decode import (
+    FrameReader, extract_pitch_crop,
+    fisheye_cx_to_yaw, build_pitch_mask, point_in_mask,
+)
+from .probe import VideoMeta
 
 
 # ---------------------------------------------------------------------------
@@ -42,39 +39,31 @@ from .lens_models import LensModel
 class DetectionConfig:
     # Frame sampling
     sample_every_n: int = 8
-    # Detection input width (height scales proportionally)
-    detection_width: int = 1280
 
-    # YOLO model paths
+    # YOLO models
     player_model_path: str = "models/yolo11n.pt"
     ball_model_path: str = "models/ball.pt"
 
-    # YOLO inference sizes
-    player_imgsz: int = 960
-    ball_imgsz: int = 640
-
-    # Confidence thresholds
-    player_conf: float = 0.35
-    ball_conf: float = 0.20
+    # YOLO inference
+    player_imgsz: int = 1280
+    ball_imgsz: int = 1280
+    player_conf: float = 0.15
+    ball_conf: float = 0.10
 
     # Ball gating
-    ball_confirm_frames: int = 3     # must see ball N times before trusting
-    ball_miss_short: int = 10        # frames before falling back from last_ball
-    ball_miss_long: int = 90         # frames before falling back to players
+    ball_confirm_frames: int = 3
+    ball_miss_short: int = 10
+    ball_miss_long: int = 90
 
-    # Target selection weights (for player centroid)
-    # If True, weight players by confidence (prefer high-conf detections)
-    weight_by_conf: bool = True
+    # Calibrated pitch bounds (from calibration JSON)
+    pitch_yaw_left: float = -30.0
+    pitch_yaw_right: float = 30.0
+    pitch_yaw_centre: float = 0.0
 
-    # Pan limits (degrees from centre)
-    max_yaw_deg: float = 50.0
+    # Pitch polygon mask (list of [x,y] in crop pixel coords)
+    pitch_polygon: Optional[list] = None
 
-    # Pitch boundary (yaw angles defining left/right edges of pitch)
-    # Set from calibration; None = no limit
-    pitch_yaw_left: Optional[float] = None
-    pitch_yaw_right: Optional[float] = None
-
-    # Progress reporting interval (frames)
+    # Progress reporting
     report_every: int = 50
 
 
@@ -100,21 +89,23 @@ class Detection:
 
     @property
     def foot_y(self) -> float:
-        return self.y2
+        return float(self.y2)
 
     @property
     def area(self) -> float:
         return max(0.0, (self.x2 - self.x1) * (self.y2 - self.y1))
 
 
-def _parse_yolo_results(results, cls_filter: Optional[str] = None, names: dict = None) -> List[Detection]:
-    """Parse Ultralytics YOLO result into Detection list."""
+def _parse_detections(
+    results,
+    cls_filter: Optional[str],
+    names: dict,
+) -> List[Detection]:
     dets = []
     for b in results.boxes:
         cls_id = int(b.cls[0])
-        if cls_filter and names:
-            if names.get(cls_id, "") != cls_filter:
-                continue
+        if cls_filter and names.get(cls_id, "") != cls_filter:
+            continue
         x1, y1, x2, y2 = map(float, b.xyxy[0].tolist())
         cf = float(b.conf[0])
         dets.append(Detection(x1, y1, x2, y2, cf))
@@ -133,65 +124,16 @@ class BallState:
 class ScheduleEntry:
     frame_idx: int
     target_yaw: float
-    mode: str               # 'ball' | 'last_ball' | 'players' | 'centre'
+    mode: str
     n_players: int = 0
     ball_conf: float = 0.0
 
 
 # ---------------------------------------------------------------------------
-# Coordinate converter
-# ---------------------------------------------------------------------------
-
-class CoordConverter:
-    """
-    Converts detection pixel coordinates in the (scaled, cropped) detection
-    frame back to yaw angles.
-    """
-
-    def __init__(
-        self,
-        src_info: VideoInfo,
-        det_width: int,
-        det_height: int,
-        crop_y1: int,
-        crop_y2: int,
-    ):
-        self.src_info = src_info
-        self.det_width = det_width
-        self.det_height = det_height
-        self.crop_y1 = crop_y1
-        self.crop_y2 = crop_y2
-
-        # Scale factors: det_px -> original_px
-        src_crop_h = crop_y2 - crop_y1
-        self.scale_x = src_info.width / det_width
-        self.scale_y = src_info.height / (det_height * src_info.height / src_crop_h)
-
-    def to_yaw(self, px: float, py: float) -> Optional[float]:
-        if False:  # fisheye model disabled, using equirect mapping
-            return fisheye_pixel_to_yaw(
-                px, py,
-                self.src_info.width,
-                self.src_info.height,
-                self.src_info.width,
-                crop_y1=self.crop_y1,
-                scale_x=self.src_info.width / self.det_width,
-                scale_y=self.src_info.height / (self.det_height + self.crop_y1),
-            )
-        else:
-            # Equirect: linear mapping based on x position in full-width frame
-            orig_x = px * (self.src_info.width / self.det_width)
-            return equirect_pixel_to_yaw(orig_x, self.src_info.width)
-
-
-# ---------------------------------------------------------------------------
-# Main detection runner
+# Detection runner
 # ---------------------------------------------------------------------------
 
 class DetectionRunner:
-    """
-    Runs detection on a single video segment and produces yaw schedule entries.
-    """
 
     def __init__(self, cfg: DetectionConfig):
         self.cfg = cfg
@@ -201,22 +143,13 @@ class DetectionRunner:
         self._ball_names = {}
 
     def _load_models(self) -> None:
-        """Lazy-load YOLO models (expensive, done once)."""
         if self._player_model is not None:
             return
-
         from ultralytics import YOLO
 
-        if not os.path.exists(self.cfg.player_model_path):
-            raise FileNotFoundError(
-                f"Player model not found: {self.cfg.player_model_path}\n"
-                f"Download with: pip install ultralytics && "
-                f"python -c \"from ultralytics import YOLO; YOLO('yolov8n.pt')\""
-            )
-        if not os.path.exists(self.cfg.ball_model_path):
-            raise FileNotFoundError(
-                f"Ball model not found: {self.cfg.ball_model_path}"
-            )
+        for p in [self.cfg.player_model_path, self.cfg.ball_model_path]:
+            if not os.path.exists(p):
+                raise FileNotFoundError(f"Model not found: {p}")
 
         print(f"Loading player model: {self.cfg.player_model_path}")
         self._player_model = YOLO(self.cfg.player_model_path)
@@ -227,138 +160,165 @@ class DetectionRunner:
         self._ball_names = getattr(self._ball_model, "names", {})
         print("Models loaded.")
 
-    def _detect_frame(
+    def _detect(
         self,
         frame_bgr: np.ndarray,
     ) -> Tuple[List[Detection], List[Detection]]:
-        """Run player + ball detection on one frame. Returns (players, balls)."""
-
-        # Players
-        p_results = self._player_model(
+        p_res = self._player_model(
             frame_bgr,
             imgsz=self.cfg.player_imgsz,
             conf=self.cfg.player_conf,
             verbose=False,
         )[0]
-        players = _parse_yolo_results(p_results, cls_filter="person", names=self._player_names)
+        players = _parse_detections(
+            p_res, cls_filter="person", names=self._player_names
+        )
 
-        # Ball
-        b_results = self._ball_model(
+        b_res = self._ball_model(
             frame_bgr,
             imgsz=self.cfg.ball_imgsz,
             conf=self.cfg.ball_conf,
             verbose=False,
         )[0]
-        balls = _parse_yolo_results(b_results)
+        balls = _parse_detections(b_res, cls_filter=None, names=self._ball_names)
 
         return players, balls
 
-    def _pick_ball(self, balls: List[Detection], frame_w: int, frame_h: int) -> Optional[Detection]:
-        """Pick best ball detection. Filter out implausibly large blobs."""
-        max_area = frame_w * frame_h * 0.015
+    def _filter_by_mask(
+        self,
+        detections: List[Detection],
+        mask: Optional[np.ndarray],
+    ) -> List[Detection]:
+        """Keep only detections whose foot point is inside the pitch mask."""
+        if mask is None:
+            return detections
+        return [
+            d for d in detections
+            if point_in_mask(mask, d.cx, d.foot_y)
+        ]
+
+    def _pick_ball(
+        self,
+        balls: List[Detection],
+        crop_w: int,
+        crop_h: int,
+    ) -> Optional[Detection]:
+        max_area = crop_w * crop_h * 0.015
         candidates = [b for b in balls if b.area <= max_area]
         if not candidates:
             return None
         return max(candidates, key=lambda b: (b.conf, -b.area))
 
-    def _players_to_yaw(
+    def _detections_to_yaw(
         self,
-        players: List[Detection],
-        converter: CoordConverter,
+        detections: List[Detection],
+        crop_w: int,
     ) -> Optional[float]:
-        """Compute centroid yaw from player detections."""
-        yaws = []
-        weights = []
-        for p in players:
-            yaw = converter.to_yaw(p.cx, p.foot_y)
-            if yaw is not None:
-                yaws.append(yaw)
-                weights.append(p.conf if self.cfg.weight_by_conf else 1.0)
-
-        if not yaws:
+        """Weighted centroid yaw from detections."""
+        if not detections:
             return None
-
-        # Weighted mean (handle wrap-around via sin/cos)
+        yaws = [
+            fisheye_cx_to_yaw(
+                d.cx, crop_w,
+                self.cfg.pitch_yaw_left,
+                self.cfg.pitch_yaw_right,
+            )
+            for d in detections
+        ]
+        weights = np.array([d.conf for d in detections])
         yaw_rad = np.radians(yaws)
-        w = np.array(weights)
-        mean_sin = np.average(np.sin(yaw_rad), weights=w)
-        mean_cos = np.average(np.cos(yaw_rad), weights=w)
+        mean_sin = np.average(np.sin(yaw_rad), weights=weights)
+        mean_cos = np.average(np.cos(yaw_rad), weights=weights)
         return float(np.degrees(np.arctan2(mean_sin, mean_cos)))
 
     def run_segment(
         self,
-        info: VideoInfo,
-        frame_offset: int = 0,   # frame index of this segment's start in the full game
+        info: VideoMeta,
+        frame_offset: int = 0,
     ) -> List[ScheduleEntry]:
         """
-        Run detection on one video segment.
+        Run detection on one VID _10_ file.
 
         Args:
-            info         : VideoInfo for this segment
-            frame_offset : cumulative frame index offset (for multi-segment games)
-
-        Returns:
-            List of ScheduleEntry, one per sampled frame
+            info        : VideoMeta from probe_file() for the VID _10_ file
+            frame_offset: cumulative frame offset for multi-segment games
         """
         self._load_models()
 
-        reader = make_detection_reader(
-            info,
+        reader = FrameReader(
+            path=info.path,
+            width=info.width,
+            height=info.height,
             sample_every_n=self.cfg.sample_every_n,
-            target_width=self.cfg.detection_width,
+            use_hwaccel=True,
         )
 
-        # Converter for yaw mapping
-        crop_y1 = int(0.15 * info.height)
-        crop_y2 = int(0.85 * info.height)
-        converter = CoordConverter(
-            info,
-            det_width=reader.out_width,
-            det_height=reader.out_height,
-            crop_y1=crop_y1,
-            crop_y2=crop_y2,
-        )
+        # Build pitch mask if polygon provided
+        # We don't know crop dims until first frame, build lazily
+        mask = None
+        crop_w = crop_h = None
 
         ball_state = BallState()
         schedule: List[ScheduleEntry] = []
-
         t0 = time.time()
         n_processed = 0
 
         print(f"\nDetecting: {os.path.basename(info.path)}")
-        print(f"  Detection frame size: {reader.out_width}x{reader.out_height}")
         print(f"  Sampling 1 in {self.cfg.sample_every_n} frames "
-              f"({info.n_frames // self.cfg.sample_every_n} inference calls)")
+              f"(~{info.n_frames // self.cfg.sample_every_n} inference calls)")
+        print(f"  Yaw range: {self.cfg.pitch_yaw_left:.1f}° to "
+              f"{self.cfg.pitch_yaw_right:.1f}°  "
+              f"centre={self.cfg.pitch_yaw_centre:.1f}°")
 
         with reader:
-            for local_idx, frame_bgr in reader.frames():
+            for local_idx, raw_frame in reader.frames():
                 global_idx = frame_offset + local_idx
 
-                players, balls = self._detect_frame(frame_bgr)
+                # Extract pitch crop
+                crop = extract_pitch_crop(raw_frame)
+                crop = cv2.resize(crop, (1440, 960))
+                ch, cw = crop.shape[:2]
 
-                # --- Ball ---
-                best_ball = self._pick_ball(balls, reader.out_width, reader.out_height)
-                ball_yaw = None
+                # Build mask on first frame
+                if mask is None and self.cfg.pitch_polygon:
+                    mask = build_pitch_mask(
+                        self.cfg.pitch_polygon, ch, cw
+                    )
+                    crop_w, crop_h = cw, ch
+                    print(f"  Pitch mask: {cw}x{ch}  "
+                          f"{len(self.cfg.pitch_polygon)} polygon points")
+                elif crop_w is None:
+                    crop_w, crop_h = cw, ch
+
+                # Detect
+                players_raw, balls_raw = self._detect(crop)
+
+                # Filter by pitch polygon
+                players = self._filter_by_mask(players_raw, mask)
+                balls   = self._filter_by_mask(balls_raw, mask)
+
+                # Ball selection
+                best_ball = self._pick_ball(balls, cw, ch)
+                ball_yaw  = None
                 ball_conf = 0.0
 
                 if best_ball is not None:
-                    yaw = converter.to_yaw(best_ball.cx, best_ball.cy)
-                    if yaw is not None:
-                        ball_yaw = yaw
-                        ball_conf = best_ball.conf
-                        ball_state.confirm_count += 1
-                        if ball_state.confirm_count >= self.cfg.ball_confirm_frames:
-                            ball_state.trusted = True
-                        ball_state.last_yaw = ball_yaw
-                        ball_state.frames_since_seen = 0
+                    ball_yaw = fisheye_cx_to_yaw(
+                        best_ball.cx, cw,
+                        self.cfg.pitch_yaw_left,
+                        self.cfg.pitch_yaw_right,
+                    )
+                    ball_conf = best_ball.conf
+                    ball_state.confirm_count += 1
+                    if ball_state.confirm_count >= self.cfg.ball_confirm_frames:
+                        ball_state.trusted = True
+                    ball_state.last_yaw = ball_yaw
+                    ball_state.frames_since_seen = 0
                 else:
                     ball_state.frames_since_seen += self.cfg.sample_every_n
                     ball_state.confirm_count = 0
 
-                # --- Target selection ---
-                target_yaw: float
-                mode: str
-
+                # Target selection
                 if ball_yaw is not None and ball_state.trusted:
                     target_yaw = ball_yaw
                     mode = "ball"
@@ -367,22 +327,20 @@ class DetectionRunner:
                     target_yaw = ball_state.last_yaw
                     mode = "last_ball"
                 else:
-                    player_yaw = self._players_to_yaw(players, converter)
-                    if player_yaw is not None and ball_state.frames_since_seen < self.cfg.ball_miss_long:
+                    player_yaw = self._detections_to_yaw(players, cw)
+                    if (player_yaw is not None and
+                            ball_state.frames_since_seen < self.cfg.ball_miss_long):
                         target_yaw = player_yaw
                         mode = "players"
                     else:
-                        target_yaw = 0.0
+                        target_yaw = self.cfg.pitch_yaw_centre
                         mode = "centre"
 
-                # Clamp to pitch bounds if calibrated
-                if self.cfg.pitch_yaw_left is not None and self.cfg.pitch_yaw_right is not None:
-                    target_yaw = max(self.cfg.pitch_yaw_left,
-                                     min(self.cfg.pitch_yaw_right, target_yaw))
-
-                # Clamp to max deviation
-                target_yaw = max(-self.cfg.max_yaw_deg,
-                                 min(self.cfg.max_yaw_deg, target_yaw))
+                # Clamp to pitch bounds
+                target_yaw = max(
+                    self.cfg.pitch_yaw_left,
+                    min(self.cfg.pitch_yaw_right, target_yaw)
+                )
 
                 schedule.append(ScheduleEntry(
                     frame_idx=global_idx,
@@ -395,57 +353,25 @@ class DetectionRunner:
                 n_processed += 1
                 if n_processed % self.cfg.report_every == 0:
                     elapsed = time.time() - t0
-                    fps_det = n_processed / elapsed
                     pct = 100 * local_idx / max(1, info.n_frames)
                     print(f"  [{pct:5.1f}%] frame {global_idx:6d}  "
-                          f"det_fps={fps_det:5.1f}  mode={mode:<10}  "
-                          f"players={len(players):2d}  ball_conf={ball_conf:.2f}")
+                          f"det_fps={n_processed/elapsed:5.1f}  "
+                          f"mode={mode:<10}  "
+                          f"players={len(players):2d}  "
+                          f"ball={ball_conf:.2f}")
 
         elapsed = time.time() - t0
         print(f"  Done: {n_processed} frames in {elapsed:.1f}s "
               f"({n_processed/elapsed:.1f} det_fps)")
-
         return schedule
 
 
 # ---------------------------------------------------------------------------
-# Multi-segment runner
+# CSV helpers
 # ---------------------------------------------------------------------------
 
-def run_detection(
-    game: GameInfo,
-    cfg: DetectionConfig,
-    output_csv: str,
-) -> List[ScheduleEntry]:
-    """
-    Run detection across all segments of a game.
-
-    Args:
-        game       : GameInfo from probe_game()
-        cfg        : DetectionConfig
-        output_csv : path to write the yaw schedule CSV
-
-    Returns:
-        Full list of ScheduleEntry for the game
-    """
-    runner = DetectionRunner(cfg)
-    all_entries: List[ScheduleEntry] = []
-    frame_offset = 0
-
-    for seg in game.segments:
-        entries = runner.run_segment(seg, frame_offset=frame_offset)
-        all_entries.extend(entries)
-        frame_offset += seg.n_frames
-
-    # Write CSV
-    os.makedirs(os.path.dirname(output_csv) or ".", exist_ok=True)
-    _write_schedule_csv(all_entries, output_csv)
-    print(f"\nYaw schedule saved: {output_csv}  ({len(all_entries)} entries)")
-
-    return all_entries
-
-
 def _write_schedule_csv(entries: List[ScheduleEntry], path: str) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["frame_idx", "target_yaw", "mode", "n_players", "ball_conf"])
@@ -460,7 +386,6 @@ def _write_schedule_csv(entries: List[ScheduleEntry], path: str) -> None:
 
 
 def load_schedule_csv(path: str) -> List[ScheduleEntry]:
-    """Load a previously saved yaw schedule CSV."""
     entries = []
     with open(path, newline="") as f:
         reader = csv.DictReader(f)

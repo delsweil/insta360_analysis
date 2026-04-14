@@ -46,42 +46,46 @@ def cmd_calibrate(args):
     from pipeline.calibrate import calibrate
     calibrate(
         video_path=args.video,
-        output_json=args.output,
+        output_dir="calibration",
         frame_index=args.frame,
-        model_hint=args.model,
     )
 
 
 def cmd_detect(args):
-    from pipeline.probe import probe_game, probe_file
-    from pipeline.detect import DetectionConfig, DetectionRunner
-    from pipeline.calibrate import load_calibration
+    from pipeline.probe import probe_file
+    from pipeline.detect import DetectionConfig, DetectionRunner, _write_schedule_csv
+    from pipeline.calibrate import find_best_calibration, segment_key_from_path
     import os
 
-    target = args.target
-    calib = load_calibration(args.calibration)
-    pitch_yaw_left  = calib["pitch_yaw_left_deg"]  if calib else None
-    pitch_yaw_right = calib["pitch_yaw_right_deg"] if calib else None
+    seg_key = segment_key_from_path(args.target)
+    calib = find_best_calibration(seg_key, calib_dir="calibration")
 
-    cfg = DetectionConfig(
-        sample_every_n=args.sample_every,
-        detection_width=args.detection_width,
-        player_model_path=args.player_model,
-        ball_model_path=args.ball_model,
-        pitch_yaw_left=pitch_yaw_left,
-        pitch_yaw_right=pitch_yaw_right,
-    )
+    if calib:
+        print(f"Calibration: {seg_key}")
+        cfg = DetectionConfig(
+            sample_every_n=args.sample_every,
+            player_model_path=args.player_model,
+            ball_model_path=args.ball_model,
+            pitch_yaw_left=calib["pitch_yaw_left_deg"],
+            pitch_yaw_right=calib["pitch_yaw_right_deg"],
+            pitch_yaw_centre=calib["pitch_yaw_centre_deg"],
+            pitch_polygon=calib.get("pitch_polygon"),
+        )
+    else:
+        print("[WARN] No calibration — using defaults")
+        cfg = DetectionConfig(
+            sample_every_n=args.sample_every,
+            player_model_path=args.player_model,
+            ball_model_path=args.ball_model,
+        )
 
-    info = probe_file(target, role='lrv')
+    info = probe_file(args.target, role='front')
     runner = DetectionRunner(cfg)
     os.makedirs("data", exist_ok=True)
     entries = runner.run_segment(info, frame_offset=0)
-
-    from pipeline.detect import _write_schedule_csv
     output = args.output or "data/yaw_schedule.csv"
     _write_schedule_csv(entries, output)
     print(f"Saved: {output}")
-
 
 def cmd_smooth(args):
     from pipeline.detect import load_schedule_csv
