@@ -60,11 +60,13 @@ export default function HomePage() {
   )
 
   return (
-    <Topbar
-  role={canDelete ? 'coach' : 'player'}
-  email={user?.email}
-  onSignOut={handleSignOut}
-/>
+    <div style={{ minHeight: '100vh', background: '#F8F8F6', fontFamily: 'DM Sans, sans-serif' }}>
+      <Topbar
+        role={canDelete ? 'coach' : 'player'}
+        email={user?.email}
+        onSignOut={handleSignOut}
+      />
+      <div style={{ padding: '20px', maxWidth: 900, margin: '0 auto' }}>
       <div style={{ padding: '20px', maxWidth: 900, margin: '0 auto' }}>
         {/* Header */}
         <div style={{
