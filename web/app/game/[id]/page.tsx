@@ -58,11 +58,10 @@ export default function GamePage({ params }: Props) {
       const { data: { user } } = await supabase.auth.getUser()
 
       // Check if coach (you can extend this with a roles table later)
-     // Replace the isCoach logic in the load() function with:
     const { data: roleData } = await supabase
       .from('user_roles')
       .select('role')
-      .eq('user_id', user.id)
+      .eq('user_id', user?.id ?? '')
       .single()
 
     const role = roleData?.role ?? 'player'
