@@ -53,12 +53,6 @@ export default function HomePage() {
     setGames(prev => prev.filter(g => g.id !== gameId))
     setConfirmDelete(null)
   }
-  
-  const handleDeleteGame = async (gameId: string) => {
-    await supabase.from('games').delete().eq('id', gameId)
-    setGames(prev => prev.filter(g => g.id !== gameId))
-    setConfirmDelete(null)
-  }
 
   if (loading) return (
     <div style={{
