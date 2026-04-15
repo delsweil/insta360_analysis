@@ -568,7 +568,30 @@ export default function GamePage({ params }: Props) {
               </span>
             </div>
           </div>
+          {isCoach && (
+            <button
+              onClick={() => setShowShare(true)}
+              style={{
+                fontSize: 12, fontWeight: 600,
+                padding: '7px 16px', borderRadius: 8,
+                border: 'none', background: '#E8780A',
+                color: '#fff', cursor: 'pointer',
+                fontFamily: 'DM Sans, sans-serif',
+                flexShrink: 0,
+              }}
+            >
+              Share highlights
+            </button>
+          )}
         </div>
+
+        {showShare && (
+          <ShareModal
+            gameId={id}
+            annotations={annotations}
+            onClose={() => setShowShare(false)}
+          />
+        )}
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 10 }}>
           {/* Left */}
