@@ -67,7 +67,6 @@ export default function HomePage() {
         onSignOut={handleSignOut}
       />
       <div style={{ padding: '20px', maxWidth: 900, margin: '0 auto' }}>
-      <div style={{ padding: '20px', maxWidth: 900, margin: '0 auto' }}>
         {/* Header */}
         <div style={{
           display: 'flex', alignItems: 'center',
