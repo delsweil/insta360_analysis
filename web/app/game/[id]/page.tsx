@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic'
 
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { supabase, type Game, type Annotation } from '@/lib/supabase'
+import Topbar from '@/components/Topbar'
 
 const LABELS = [
   { key: 'goal',     label: 'Goal',     color: '#ef4444' },
@@ -224,34 +225,7 @@ export default function GamePage({ params }: Props) {
         fontFamily: 'DM Sans, sans-serif', color: '#111318',
         display: 'flex', flexDirection: 'column',
       }}>
-        {/* Topbar */}
-        <div style={{
-          background: '#0f2972',
-          display: 'flex', alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '10px 16px',
-          flexShrink: 0,
-        }}>
-          <div style={{
-            fontFamily: 'Bebas Neue, sans-serif',
-            fontSize: 18, color: '#fff', letterSpacing: '0.05em',
-          }}>
-            ASN Pfeil Phönix
-          </div>
-          <button
-            onClick={() => setShowAnnotations(!showAnnotations)}
-            style={{
-              fontSize: 11, fontWeight: 600,
-              padding: '5px 12px', borderRadius: 99,
-              border: '1px solid rgba(255,255,255,0.3)',
-              background: showAnnotations ? '#fff' : 'transparent',
-              color: showAnnotations ? '#0f2972' : '#fff',
-              cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
-            }}
-          >
-            {showAnnotations ? 'Video' : `Annotations (${annotations.length})`}
-          </button>
-        </div>
+        <Topbar role={isCoach ? 'coach' : 'player'} />
 
         {/* Game title */}
         <div style={{ padding: '10px 14px 0' }}>

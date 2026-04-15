@@ -5,6 +5,7 @@ export const dynamic = 'force-dynamic'
 import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import Topbar from '@/components/Topbar'
 
 function extractYouTubeId(url: string): string | null {
   const patterns = [
@@ -71,23 +72,7 @@ export default function AddGamePage() {
   return (
     <div style={{ minHeight: '100vh', background: '#F8F8F6', fontFamily: 'DM Sans, sans-serif' }}>
       {/* Topbar */}
-      <div style={{
-        background: '#0f2972',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '8px 20px',
-      }}>
-        <div style={{
-          fontFamily: 'Bebas Neue, sans-serif',
-          fontSize: 20,
-          color: '#fff',
-          letterSpacing: '0.05em',
-          cursor: 'pointer',
-        }} onClick={() => router.push('/')}>
-          ASN Pfeil Phönix · Spielanalyse
-        </div>
-      </div>
+      <Topbar backHref="/" />
 
       <div style={{ padding: '24px 20px', maxWidth: 560, margin: '0 auto' }}>
         <div style={{
