@@ -30,7 +30,10 @@ export default function AdminUsersPage() {
     async function load() {
       // Verify current user is admin
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.push('/login'); return }
+      if (!user) {
+        setLoading(false)
+        return
+      }      
 
       const { data: roleData } = await supabase
         .from('user_roles')
