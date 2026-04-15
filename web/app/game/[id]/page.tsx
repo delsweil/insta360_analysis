@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic'
 
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { supabase, type Game, type Annotation } from '@/lib/supabase'
+import ShareModal from '@/components/ShareModal'
 import Topbar from '@/components/Topbar'
 
 const LABELS = [
@@ -44,6 +45,7 @@ export default function GamePage({ params }: Props) {
   const [saved, setSaved] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [showAnnotations, setShowAnnotations] = useState(false)
+  const [showShare, setShowShare] = useState(false)
 
   // Detect mobile
   useEffect(() => {
