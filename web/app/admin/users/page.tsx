@@ -57,7 +57,6 @@ export default function AdminUsersPage() {
       const { data: profiles } = await supabase
         .from('profiles')
         .select('id, email')
-        .catch(() => ({ data: null }))
 
       // Build combined list
       const roleMap: Record<string, string> = {}
