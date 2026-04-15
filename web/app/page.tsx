@@ -129,6 +129,17 @@ export default function HomePage() {
           >
             + Spiel hinzufügen
           </button>
+          <button
+            onClick={() => router.push('/admin/users')}
+            style={{
+              fontSize: 11, padding: '4px 12px', borderRadius: 99,
+              border: '1px solid rgba(255,255,255,0.3)',
+              background: 'transparent', color: '#fff',
+              cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
+            }}
+          >
+            Admin
+          </button>
         </div>
 
         {/* Games list */}
