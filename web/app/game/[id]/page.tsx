@@ -428,33 +428,83 @@ export default function GamePage({ params }: Props) {
               </div>
             )}
 
-            {/* Big mark button */}
-            <div style={{ padding: '0 14px 20px', flexShrink: 0 }}>
-              <button
-                onClick={handleQuickSave}
-                disabled={saving}
-                style={{
-                  width: '100%',
-                  padding: '16px',
-                  fontSize: 16,
-                  fontWeight: 700,
-                  fontFamily: 'DM Sans, sans-serif',
-                  borderRadius: 12,
-                  border: 'none',
-                  background: saved ? '#22c55e' : saving ? '#E4E6EE' : '#0f2972',
-                  color: saving ? '#8A8F9E' : '#fff',
-                  cursor: saving ? 'default' : 'pointer',
-                  transition: 'background 0.2s',
-                  letterSpacing: '0.02em',
-                }}
-              >
-                {saved
-                  ? `✓ Saved at ${formatTime(currentTime)}`
-                  : saving
-                  ? 'Saving...'
-                  : `Mark ${LABELS.find(l => l.key === selectedLabel)?.label} at ${formatTime(currentTime)}`
-                }
-              </button>
+            {/* Mark in / Mark out / Save */}
+            <div style={{ padding: '0 14px 20px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {markIn === null ? (
+                // Step 1: Mark in
+                <button
+                  onClick={() => setMarkIn(currentTime)}
+                  style={{
+                    width: '100%', padding: '16px',
+                    fontSize: 16, fontWeight: 700,
+                    fontFamily: 'DM Sans, sans-serif',
+                    borderRadius: 12, border: 'none',
+                    background: '#0f2972', color: '#fff',
+                    cursor: 'pointer', letterSpacing: '0.02em',
+                  }}
+                >
+                  {`Mark in — ${formatTime(currentTime)}`}
+                </button>
+              ) : (
+                // Step 2: Mark out or save now
+                <>
+                  <div style={{
+                    display: 'flex', alignItems: 'center',
+                    justifyContent: 'space-between',
+                    background: '#FEF0E0', borderRadius: 10,
+                    padding: '10px 14px',
+                  }}>
+                    <span style={{ fontSize: 13, color: '#E8780A', fontWeight: 600 }}>
+                      In: {formatTime(markIn)}
+                    </span>
+                    <button
+                      onClick={() => setMarkIn(null)}
+                      style={{
+                        fontSize: 11, color: '#E8780A',
+                        background: 'none', border: 'none',
+                        cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
+                      }}
+                    >
+                      Reset
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      onClick={handleRangeSave}
+                      disabled={saving}
+                      style={{
+                        flex: 1, padding: '14px',
+                        fontSize: 14, fontWeight: 700,
+                        fontFamily: 'DM Sans, sans-serif',
+                        borderRadius: 12, border: 'none',
+                        background: saved ? '#22c55e' : saving ? '#E4E6EE' : '#E8780A',
+                        color: saving ? '#8A8F9E' : '#fff',
+                        cursor: saving ? 'default' : 'pointer',
+                      }}
+                    >
+                      {saved ? '✓ Saved' : saving ? 'Saving...' : `Save now`}
+                    </button>
+                    <button
+                      onClick={() => {
+                        // Mark out = save with current time as end
+                        handleRangeSave()
+                      }}
+                      disabled={saving || currentTime <= markIn}
+                      style={{
+                        flex: 1, padding: '14px',
+                        fontSize: 14, fontWeight: 700,
+                        fontFamily: 'DM Sans, sans-serif',
+                        borderRadius: 12, border: 'none',
+                        background: currentTime > markIn ? '#0f2972' : '#E4E6EE',
+                        color: currentTime > markIn ? '#fff' : '#8A8F9E',
+                        cursor: currentTime > markIn ? 'pointer' : 'default',
+                      }}
+                    >
+                      {`Mark out — ${formatTime(currentTime)}`}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </>
         )}
