@@ -38,7 +38,7 @@ export default function AdminUsersPage() {
       const { data: roleData } = await supabase
         .from('user_roles')
         .select('role')
-        .eq('user_id', user.id)
+        .eq('user_id', user?.id ?? '')
         .single()
 
       if (roleData?.role !== 'admin') {
