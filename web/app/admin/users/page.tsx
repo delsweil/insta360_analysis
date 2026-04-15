@@ -29,17 +29,13 @@ export default function AdminUsersPage() {
 
   useEffect(() => {
     async function load() {
-      // Verify current user is admin
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) {
-        setLoading(false)
-        return
-      }      
+      if (!user) { router.push('/login'); return }
 
       const { data: roleData } = await supabase
         .from('user_roles')
         .select('role')
-        .eq('user_id', user?.id ?? '')
+        .eq('user_id', user.id)
         .single()
 
       if (roleData?.role !== 'admin') {
@@ -48,21 +44,14 @@ export default function AdminUsersPage() {
         return
       }
 
-      // Fetch all users + their roles via a join
-      // We use the admin API via a server action ideally, but for simplicity
-      // we fetch roles and combine with what we know
       const { data: roles } = await supabase
         .from('user_roles')
         .select('user_id, role')
 
-      // Fetch user emails via auth.users — requires service role normally
-      // Workaround: store emails in a public profiles table on signup
-      // For now, fetch from profiles if it exists, otherwise show user_id
       const { data: profiles } = await supabase
         .from('profiles')
         .select('id, email')
 
-      // Build combined list
       const roleMap: Record<string, string> = {}
       roles?.forEach(r => { roleMap[r.user_id] = r.role })
 
@@ -75,10 +64,9 @@ export default function AdminUsersPage() {
         }))
         setUsers(combined)
       } else {
-        // Fallback: just show users from roles table with IDs
         const combined: UserWithRole[] = (roles ?? []).map(r => ({
           id: r.user_id,
-          email: r.user_id, // will be replaced once profiles table exists
+          email: r.user_id,
           created_at: '',
           role: r.role as any,
         }))
@@ -92,23 +80,15 @@ export default function AdminUsersPage() {
 
   const handleRoleChange = async (userId: string, newRole: 'admin' | 'coach' | 'player' | null) => {
     setSaving(userId)
-
     if (newRole === null) {
-      // Remove role
-      await supabase
-        .from('user_roles')
-        .delete()
-        .eq('user_id', userId)
+      await supabase.from('user_roles').delete().eq('user_id', userId)
     } else {
-      // Upsert role
-      await supabase
-        .from('user_roles')
-        .upsert({ user_id: userId, role: newRole }, { onConflict: 'user_id' })
+      await supabase.from('user_roles').upsert(
+        { user_id: userId, role: newRole },
+        { onConflict: 'user_id' }
+      )
     }
-
-    setUsers(prev => prev.map(u =>
-      u.id === userId ? { ...u, role: newRole } : u
-    ))
+    setUsers(prev => prev.map(u => u.id === userId ? { ...u, role: newRole } : u))
     setSaving(null)
   }
 
@@ -139,10 +119,10 @@ export default function AdminUsersPage() {
   )
 
   return (
-    <Topbar role="admin" />
+    <div style={{ minHeight: '100vh', background: '#F8F8F6', fontFamily: 'DM Sans, sans-serif' }}>
+      <Topbar role="admin" />
 
       <div style={{ padding: '24px 20px', maxWidth: 700, margin: '0 auto' }}>
-        {/* Header */}
         <div style={{ marginBottom: 20 }}>
           <div style={{
             fontFamily: 'Bebas Neue, sans-serif',
@@ -157,9 +137,7 @@ export default function AdminUsersPage() {
         </div>
 
         {/* Role legend */}
-        <div style={{
-          display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap',
-        }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
           {Object.entries(ROLE_LABELS).map(([key, val]) => (
             <div key={key} style={{
               fontSize: 11, fontWeight: 600,
@@ -200,13 +178,12 @@ export default function AdminUsersPage() {
             }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{
-                  fontSize: 14, fontWeight: 500,
-                  color: '#111318', overflow: 'hidden',
-                  textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  fontSize: 14, fontWeight: 500, color: '#111318',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>
                   {user.email}
                 </div>
-                {user.role && (
+                {user.role ? (
                   <div style={{
                     fontSize: 11, marginTop: 2,
                     color: ROLE_LABELS[user.role]?.color ?? '#8A8F9E',
@@ -214,15 +191,13 @@ export default function AdminUsersPage() {
                   }}>
                     {ROLE_LABELS[user.role]?.label}
                   </div>
-                )}
-                {!user.role && (
+                ) : (
                   <div style={{ fontSize: 11, marginTop: 2, color: '#8A8F9E' }}>
                     No role assigned
                   </div>
                 )}
               </div>
 
-              {/* Role selector */}
               <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
                 {(['admin', 'coach', 'player'] as const).map(role => (
                   <button
@@ -236,16 +211,9 @@ export default function AdminUsersPage() {
                       fontSize: 11, fontWeight: 600,
                       padding: '5px 12px', borderRadius: 99,
                       cursor: saving === user.id ? 'default' : 'pointer',
-                      border: `1.5px solid ${user.role === role
-                        ? ROLE_LABELS[role].color
-                        : '#E4E6EE'}`,
-                      background: user.role === role
-                        ? ROLE_LABELS[role].bg
-                        : '#fff',
-                      color: user.role === role
-                        ? ROLE_LABELS[role].color
-                        : '#8A8F9E',
-                      transition: 'all 0.15s',
+                      border: `1.5px solid ${user.role === role ? ROLE_LABELS[role].color : '#E4E6EE'}`,
+                      background: user.role === role ? ROLE_LABELS[role].bg : '#fff',
+                      color: user.role === role ? ROLE_LABELS[role].color : '#8A8F9E',
                       opacity: saving === user.id ? 0.6 : 1,
                     }}
                   >
@@ -257,7 +225,6 @@ export default function AdminUsersPage() {
           ))}
         </div>
 
-        {/* Note about inviting users */}
         <div style={{
           marginTop: 16, padding: '12px 16px',
           background: '#e8edf8', borderRadius: 10,
