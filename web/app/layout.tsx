@@ -16,7 +16,7 @@ const dmSans = DM_Sans({
 
 export const metadata: Metadata = {
   title: "ASN Pfeil Phönix — Spielanalyse",
-  description: "Videoannotation und Spielanalyse für ASN Pfeil Phönix München",
+  description: "Videoannotation und Spielanalyse für ASN Pfeil Phönix Nürnberg",
 };
 
 export default function RootLayout({

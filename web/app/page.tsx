@@ -5,6 +5,7 @@ export const dynamic = 'force-dynamic'
 import { useEffect, useState } from 'react'
 import { supabase, type Game, getCurrentUserRole, isCoachOrAdmin } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import Topbar from '@/components/Topbar'
 
 export default function HomePage() {
   const [games, setGames] = useState<Game[]>([])
@@ -59,51 +60,11 @@ export default function HomePage() {
   )
 
   return (
-    <div style={{ minHeight: '100vh', background: '#F8F8F6', fontFamily: 'DM Sans, sans-serif' }}>
-      {/* Topbar */}
-      <div style={{
-        background: '#0f2972',
-        display: 'flex', alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '8px 20px',
-      }}>
-        <div style={{
-          fontFamily: 'Bebas Neue, sans-serif',
-          fontSize: 20, color: '#fff', letterSpacing: '0.05em',
-        }}>
-          Pfeil Phönix · Spielanalyse
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.85)', fontWeight: 500 }}>
-            {user?.email}
-          </span>
-          {canDelete && (
-            <button
-              onClick={() => router.push('/admin/users')}
-              style={{
-                fontSize: 11, padding: '4px 12px', borderRadius: 99,
-                border: '1px solid rgba(255,255,255,0.3)',
-                background: 'transparent', color: '#fff',
-                cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
-              }}
-            >
-              Admin
-            </button>
-          )}
-          <button
-            onClick={handleSignOut}
-            style={{
-              fontSize: 11, padding: '4px 12px', borderRadius: 99,
-              border: '1px solid rgba(255,255,255,0.3)',
-              background: 'transparent', color: '#fff',
-              cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
-            }}
-          >
-            Sign out
-          </button>
-        </div>
-      </div>
-
+    <Topbar
+  role={canDelete ? 'coach' : 'player'}
+  email={user?.email}
+  onSignOut={handleSignOut}
+/>
       <div style={{ padding: '20px', maxWidth: 900, margin: '0 auto' }}>
         {/* Header */}
         <div style={{

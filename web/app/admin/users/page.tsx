@@ -154,7 +154,7 @@ export default function AdminUsersPage() {
           }}
           onClick={() => router.push('/')}
         >
-          Pfeil Phönix · Spielanalyse
+          ASN Pfeil Phönix · Spielanalyse
         </div>
         <div style={{
           background: '#ef4444', color: '#fff',

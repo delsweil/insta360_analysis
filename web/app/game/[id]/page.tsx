@@ -236,7 +236,7 @@ export default function GamePage({ params }: Props) {
             fontFamily: 'Bebas Neue, sans-serif',
             fontSize: 18, color: '#fff', letterSpacing: '0.05em',
           }}>
-            Pfeil Phönix
+            ASN Pfeil Phönix
           </div>
           <button
             onClick={() => setShowAnnotations(!showAnnotations)}
@@ -506,7 +506,7 @@ export default function GamePage({ params }: Props) {
           fontSize: 20, color: '#fff', letterSpacing: '0.05em',
           cursor: 'pointer',
         }} onClick={() => window.location.href = '/'}>
-          Pfeil Phönix · Spielanalyse
+          ASN Pfeil Phönix · Spielanalyse
         </div>
         {isCoach && (
           <div style={{

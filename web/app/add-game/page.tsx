@@ -85,7 +85,7 @@ export default function AddGamePage() {
           letterSpacing: '0.05em',
           cursor: 'pointer',
         }} onClick={() => router.push('/')}>
-          Pfeil Phönix · Spielanalyse
+          ASN Pfeil Phönix · Spielanalyse
         </div>
       </div>
 

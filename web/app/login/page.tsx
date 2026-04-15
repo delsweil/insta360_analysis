@@ -49,7 +49,7 @@ export default function LoginPage() {
           letterSpacing: '0.04em',
           marginBottom: 4,
         }}>
-          Pfeil Phönix
+          ASN Pfeil Phönix
         </div>
         <div style={{ fontSize: 13, color: '#8A8F9E', marginBottom: 28 }}>
           Spielanalyse · Anmelden
