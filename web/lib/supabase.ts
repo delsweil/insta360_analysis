@@ -26,3 +26,24 @@ export type Annotation = {
   is_public: boolean
   created_at: string
 }
+
+export type UserRole = 'admin' | 'coach' | 'player'
+
+export async function getCurrentUserRole(): Promise<UserRole | null> {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+  const { data } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', user.id)
+    .single()
+  return (data?.role ?? null) as UserRole | null
+}
+
+export function isCoachOrAdmin(role: UserRole | null): boolean {
+  return role === 'coach' || role === 'admin'
+}
+
+export function isAdmin(role: UserRole | null): boolean {
+  return role === 'admin'
+}
