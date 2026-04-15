@@ -44,6 +44,17 @@ export default function HomePage() {
   }
 
   const handleDeleteGame = async (gameId: string) => {
+    const { error } = await supabase.from('games').delete().eq('id', gameId)
+    if (error) {
+      console.error('Delete failed:', error.message)
+      alert(`Delete failed: ${error.message}`)
+      return
+    }
+    setGames(prev => prev.filter(g => g.id !== gameId))
+    setConfirmDelete(null)
+  }
+  
+  const handleDeleteGame = async (gameId: string) => {
     await supabase.from('games').delete().eq('id', gameId)
     setGames(prev => prev.filter(g => g.id !== gameId))
     setConfirmDelete(null)
