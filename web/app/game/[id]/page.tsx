@@ -40,6 +40,7 @@ export default function GamePage({ params }: Props) {
   const [selectedLabel, setSelectedLabel] = useState('goal')
   const [note, setNote] = useState('')
   const [isCoach, setIsCoach] = useState(false)
+  const [userRole, setUserRole] = useState<'admin' | 'coach' | 'player'>( 'player')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -69,6 +70,7 @@ export default function GamePage({ params }: Props) {
 
     const role = roleData?.role ?? 'player'
     setIsCoach(role === 'coach' || role === 'admin')
+    setUserRole(role as 'admin' | 'coach' | 'player')
 
       const { data: gameData } = await supabase
         .from('games')
@@ -263,7 +265,7 @@ export default function GamePage({ params }: Props) {
         fontFamily: 'DM Sans, sans-serif', color: '#111318',
         display: 'flex', flexDirection: 'column',
       }}>
-        <Topbar role={isCoach ? 'coach' : 'player'} />
+        <Topbar role={userRole} />
 
         {/* Game title */}
         <div style={{ padding: '10px 14px 0' }}>
