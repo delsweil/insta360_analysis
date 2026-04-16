@@ -604,6 +604,10 @@ export default function GamePage({ params }: Props) {
               <span style={{ color: '#E8780A', fontWeight: 600 }}>
                 {annotations.length} annotations
               </span>
+              &nbsp;·&nbsp;
+              <span style={{ color: '#22c55e', fontWeight: 600 }}>
+                ● live
+              </span>
             </div>
           </div>
           {isCoach && (
