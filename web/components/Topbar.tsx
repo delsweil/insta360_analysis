@@ -20,7 +20,6 @@ export default function Topbar({
 }: TopbarProps) {
   const router = useRouter()
 
-  console.log('Topbar role:', role)
   const rolePill = role === 'admin'
     ? { label: 'Admin', bg: '#ef4444' }
     : role === 'coach'
@@ -86,36 +85,24 @@ export default function Topbar({
           </span>
         )}
         {rolePill && (
-          <div style={{
-            background: rolePill.bg,
-            color: '#fff',
-            fontSize: 10,
-            fontWeight: 700,
-            letterSpacing: '0.1em',
-            textTransform: 'uppercase',
-            padding: '3px 10px',
-            borderRadius: 99,
-          }}>
+          <div
+            onClick={() => role === 'admin' ? router.push('/admin/users') : undefined}
+            style={{
+              background: rolePill.bg,
+              color: '#fff',
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: '0.1em',
+              textTransform: 'uppercase',
+              padding: '3px 10px',
+              borderRadius: 99,
+              cursor: role === 'admin' ? 'pointer' : 'default',
+            }}
+          >
             {rolePill.label}
           </div>
         )}
-        {role === 'admin' || role === 'coach' ? (
-          <button
-            onClick={() => router.push('/admin/users')}
-            style={{
-              fontSize: 11,
-              padding: '4px 12px',
-              borderRadius: 99,
-              border: '1px solid rgba(255,255,255,0.3)',
-              background: 'transparent',
-              color: '#fff',
-              cursor: 'pointer',
-              fontFamily: 'DM Sans, sans-serif',
-            }}
-          >
-            Admin
-          </button>
-        ) : null}
+
         {onSignOut && (
           <button
             onClick={onSignOut}
