@@ -559,31 +559,7 @@ export default function GamePage({ params }: Props) {
       minHeight: '100vh', background: '#F8F8F6',
       fontFamily: 'DM Sans, sans-serif', color: '#111318',
     }}>
-      {/* Top bar */}
-      <div style={{
-        background: '#0f2972',
-        display: 'flex', alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '8px 20px',
-      }}>
-        <div style={{
-          fontFamily: 'Bebas Neue, sans-serif',
-          fontSize: 20, color: '#fff', letterSpacing: '0.05em',
-          cursor: 'pointer',
-        }} onClick={() => window.location.href = '/'}>
-          ASN Pfeil Phönix · Spielanalyse
-        </div>
-        {isCoach && (
-          <div style={{
-            background: '#E8780A', color: '#fff',
-            fontSize: 10, fontWeight: 700,
-            letterSpacing: '0.1em', textTransform: 'uppercase',
-            padding: '3px 10px', borderRadius: 99,
-          }}>
-            Coach
-          </div>
-        )}
-      </div>
+      <Topbar role={userRole} backHref="/" />
 
       <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         {/* Game title */}
