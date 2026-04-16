@@ -54,12 +54,13 @@ export default function GamePage({ params }: Props) {
     tactical: annotations.filter(a => a.label === 'tactical').length,
   }
 
-  // Detect mobile
+  // Detect mobile once on mount — don't switch on rotation
+  // to prevent YouTube iframe from reloading
   useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 768)
-    check()
-    window.addEventListener('resize', check)
-    return () => window.removeEventListener('resize', check)
+    // Use screen width (physical device width) not window width
+    // This doesn't change when rotating
+    const w = screen.width < screen.height ? screen.width : screen.height
+    setIsMobile(w < 768)
   }, [])
 
   // Load game + user + annotations
