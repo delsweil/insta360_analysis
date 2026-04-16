@@ -7,6 +7,7 @@ import { supabase, type Game, type Annotation, LABEL_DEFS, labelColor, labelDisp
 import Topbar from '@/components/Topbar'
 import AnnotationShape from '@/components/AnnotationShape'
 import ShareModal from '@/components/ShareModal'
+import AnnotationFilter, { type FilterState, ALL_FILTERS, passesFilter } from '@/components/AnnotationFilter'
 
 function formatTime(sec: number) {
   const m = Math.floor(sec / 60)
@@ -38,6 +39,18 @@ export default function GamePage({ params }: Props) {
   const [showAnnotations, setShowAnnotations] = useState(false)
   const [showShare, setShowShare] = useState(false)
   const [markIn, setMarkIn] = useState<number | null>(null)
+  const [filter, setFilter] = useState<FilterState>(ALL_FILTERS)
+
+  // Filtered annotations
+  const filteredAnnotations = annotations.filter(a => passesFilter(a.label, filter))
+
+  // Count per type for filter bar
+  const filterCounts = {
+    goal: annotations.filter(a => a.label.startsWith('goal')).length,
+    shot: annotations.filter(a => a.label.startsWith('shot')).length,
+    setpiece: annotations.filter(a => a.label.startsWith('setpiece')).length,
+    tactical: annotations.filter(a => a.label === 'tactical').length,
+  }
 
   // Detect mobile
   useEffect(() => {
@@ -293,23 +306,28 @@ export default function GamePage({ params }: Props) {
         }} />
       )}
       {/* Annotation shapes */}
-      {annotations.map(ann => (
-        <div
-          key={ann.id}
-          onClick={(e) => { e.stopPropagation(); seekTo(ann.timestamp_sec) }}
-          style={{
-            position: 'absolute', top: '50%',
-            transform: 'translate(-50%, -50%)',
-            left: duration > 0 ? `${(ann.timestamp_sec / duration) * 100}%` : '0%',
-            cursor: 'pointer', zIndex: 2,
-          }}
-        >
-          <AnnotationShape
-            labelKey={ann.label}
-            size={mobileSize ? 14 : 11}
-          />
-        </div>
-      ))}
+      {annotations.map(ann => {
+        const visible = passesFilter(ann.label, filter)
+        return (
+          <div
+            key={ann.id}
+            onClick={(e) => { e.stopPropagation(); seekTo(ann.timestamp_sec) }}
+            style={{
+              position: 'absolute', top: '50%',
+              transform: 'translate(-50%, -50%)',
+              left: duration > 0 ? `${(ann.timestamp_sec / duration) * 100}%` : '0%',
+              cursor: 'pointer', zIndex: 2,
+              opacity: visible ? 1 : 0.2,
+              transition: 'opacity 0.2s',
+            }}
+          >
+            <AnnotationShape
+              labelKey={ann.label}
+              size={mobileSize ? 14 : 11}
+            />
+          </div>
+        )
+      })}
     </div>
   )
 
@@ -439,7 +457,7 @@ export default function GamePage({ params }: Props) {
               <div style={{ textAlign: 'center', color: '#8A8F9E', fontSize: 14, padding: '40px 0' }}>
                 No annotations yet.
               </div>
-            ) : annotations.map(ann => (
+            ) : filteredAnnotations.map(ann => (
               <AnnRow key={ann.id} ann={ann} compact />
             ))}
           </div>
@@ -456,8 +474,17 @@ export default function GamePage({ params }: Props) {
               />
             </div>
 
+            {/* Filter bar - mobile */}
+            <div style={{ padding: '6px 14px 0', flexShrink: 0, overflowX: 'auto' }}>
+              <AnnotationFilter
+                filter={filter}
+                onChange={setFilter}
+                counts={filterCounts}
+              />
+            </div>
+
             {/* Timeline */}
-            <div style={{ padding: '10px 14px 4px', flexShrink: 0 }}>
+            <div style={{ padding: '6px 14px 4px', flexShrink: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
                 <span style={{
                   fontFamily: 'Bebas Neue, sans-serif',
@@ -692,6 +719,15 @@ export default function GamePage({ params }: Props) {
                 <span>{formatTime(duration)}</span>
               </div>
 
+              {/* Filter bar */}
+              <div style={{ marginBottom: 8 }}>
+                <AnnotationFilter
+                  filter={filter}
+                  onChange={setFilter}
+                  counts={filterCounts}
+                />
+              </div>
+
               {/* Label picker */}
               <div style={{ marginBottom: 10 }}>
                 <LabelPicker />
@@ -819,7 +855,7 @@ export default function GamePage({ params }: Props) {
                 </div>
               )}
 
-              {annotations.map(ann => (
+              {filteredAnnotations.map(ann => (
                 <AnnRow key={ann.id} ann={ann} />
               ))}
             </div>
