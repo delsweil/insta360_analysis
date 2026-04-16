@@ -8,6 +8,7 @@ import Topbar from '@/components/Topbar'
 import AnnotationShape from '@/components/AnnotationShape'
 import ShareModal from '@/components/ShareModal'
 import AnnotationFilter, { type FilterState, ALL_FILTERS, passesFilter } from '@/components/AnnotationFilter'
+import ClipRecorder from '@/components/ClipRecorder'
 
 function formatTime(sec: number) {
   const m = Math.floor(sec / 60)
@@ -39,6 +40,7 @@ export default function GamePage({ params }: Props) {
   const [showAnnotations, setShowAnnotations] = useState(false)
   const [showShare, setShowShare] = useState(false)
   const [markIn, setMarkIn] = useState<number | null>(null)
+  const [isRecording, setIsRecording] = useState(false)
   const [filter, setFilter] = useState<FilterState>(ALL_FILTERS)
 
   // Filtered annotations
@@ -529,11 +531,15 @@ export default function GamePage({ params }: Props) {
               </div>
             )}
 
-            {/* Mark in / out / save */}
-            <div style={{ padding: '8px 14px 20px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {markIn === null ? (
+            {/* Clip recorder */}
+            {!isRecording ? (
+              <div style={{ padding: '8px 14px 20px', flexShrink: 0 }}>
                 <button
-                  onClick={() => setMarkIn(currentTime)}
+                  onClick={() => {
+                    setMarkIn(currentTime)
+                    setIsRecording(true)
+                    setSaved(false)
+                  }}
                   style={{
                     width: '100%', padding: '16px',
                     fontSize: 15, fontWeight: 700,
@@ -542,62 +548,50 @@ export default function GamePage({ params }: Props) {
                     background: '#0f2972', color: '#fff', cursor: 'pointer',
                   }}
                 >
-                  Mark in — {formatTime(currentTime)}
+                  Start clip — {formatTime(currentTime)}
                 </button>
-              ) : (
-                <>
-                  <div style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    background: '#FEF0E0', borderRadius: 10, padding: '10px 14px',
-                  }}>
-                    <span style={{ fontSize: 13, color: '#E8780A', fontWeight: 600 }}>
-                      In: {formatTime(markIn)}
-                    </span>
-                    <button
-                      onClick={() => setMarkIn(null)}
-                      style={{
-                        fontSize: 11, color: '#E8780A',
-                        background: 'none', border: 'none', cursor: 'pointer',
-                      }}
-                    >
-                      Reset
-                    </button>
-                  </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button
-                      onClick={handleRangeSave}
-                      disabled={saving}
-                      style={{
-                        flex: 1, padding: '14px',
-                        fontSize: 14, fontWeight: 700,
-                        fontFamily: 'DM Sans, sans-serif',
-                        borderRadius: 12, border: 'none',
-                        background: saved ? '#22c55e' : saving ? '#E4E6EE' : '#E8780A',
-                        color: saving ? '#8A8F9E' : '#fff',
-                        cursor: saving ? 'default' : 'pointer',
-                      }}
-                    >
-                      {saved ? '✓ Saved' : saving ? 'Saving...' : 'Save now'}
-                    </button>
-                    <button
-                      onClick={handleRangeSave}
-                      disabled={saving || currentTime <= markIn}
-                      style={{
-                        flex: 1, padding: '14px',
-                        fontSize: 14, fontWeight: 700,
-                        fontFamily: 'DM Sans, sans-serif',
-                        borderRadius: 12, border: 'none',
-                        background: currentTime > markIn ? '#0f2972' : '#E4E6EE',
-                        color: currentTime > markIn ? '#fff' : '#8A8F9E',
-                        cursor: currentTime > markIn ? 'pointer' : 'default',
-                      }}
-                    >
-                      Mark out — {formatTime(currentTime)}
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
+              </div>
+            ) : (
+              <ClipRecorder
+                currentTime={currentTime}
+                saving={saving}
+                saved={saved}
+                onSave={async (startTime, endTime) => {
+                  setSaving(true)
+                  const { data: { user } } = await supabase.auth.getUser()
+                  if (!user) { setSaving(false); return }
+                  const { data } = await supabase
+                    .from('annotations')
+                    .insert({
+                      game_id: id, user_id: user.id,
+                      timestamp_sec: startTime,
+                      end_timestamp_sec: endTime,
+                      label: selectedLabel,
+                      note: note.trim() || null,
+                      is_public: true,
+                    })
+                    .select('*, profiles(display_name)')
+                    .single()
+                  if (data) {
+                    setAnnotations(prev =>
+                      [...prev, data].sort((a, b) => a.timestamp_sec - b.timestamp_sec)
+                    )
+                    setSaved(true)
+                    setTimeout(() => {
+                      setSaved(false)
+                      setIsRecording(false)
+                      setMarkIn(null)
+                    }, 1500)
+                  }
+                  setSaving(false)
+                }}
+                onCancel={() => {
+                  setIsRecording(false)
+                  setMarkIn(null)
+                  setSaved(false)
+                }}
+              />
+            )}
           </>
         )}
       </div>
