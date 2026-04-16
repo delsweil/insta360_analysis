@@ -3,21 +3,10 @@
 export const dynamic = 'force-dynamic'
 
 import React, { useEffect, useRef, useState, useCallback } from 'react'
-import { supabase, type Game, type Annotation } from '@/lib/supabase'
-import ShareModal from '@/components/ShareModal'
+import { supabase, type Game, type Annotation, LABEL_DEFS, labelColor, labelDisplay } from '@/lib/supabase'
 import Topbar from '@/components/Topbar'
-
-const LABELS = [
-  { key: 'goal',     label: 'Goal',     color: '#ef4444' },
-  { key: 'shot',     label: 'Shot',     color: '#E8780A' },
-  { key: 'chance',   label: 'Chance',   color: '#22c55e' },
-  { key: 'tactical', label: 'Tactical', color: '#0f2972' },
-  { key: 'other',    label: 'Other',    color: '#8A8F9E' },
-]
-
-function labelColor(label: string) {
-  return LABELS.find(l => l.key === label)?.color ?? '#8A8F9E'
-}
+import AnnotationShape from '@/components/AnnotationShape'
+import ShareModal from '@/components/ShareModal'
 
 function formatTime(sec: number) {
   const m = Math.floor(sec / 60)
@@ -37,17 +26,18 @@ export default function GamePage({ params }: Props) {
   const [annotations, setAnnotations] = useState<Annotation[]>([])
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
-  const [selectedLabel, setSelectedLabel] = useState('goal')
+  const [selectedLabel, setSelectedLabel] = useState('goal_home')
   const [note, setNote] = useState('')
   const [isCoach, setIsCoach] = useState(false)
+  const [userRole, setUserRole] = useState<'admin' | 'coach' | 'player'>('player')
   const [userId, setUserId] = useState<string | null>(null)
-  const [userRole, setUserRole] = useState<'admin' | 'coach' | 'player'>( 'player')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [showAnnotations, setShowAnnotations] = useState(false)
   const [showShare, setShowShare] = useState(false)
+  const [markIn, setMarkIn] = useState<number | null>(null)
 
   // Detect mobile
   useEffect(() => {
@@ -62,18 +52,17 @@ export default function GamePage({ params }: Props) {
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
 
-      // Check if coach (you can extend this with a roles table later)
-    const { data: roleData } = await supabase
-      .from('user_roles')
-      .select('role')
-      .eq('user_id', user?.id ?? '')
-      .single()
-
-    const role = roleData?.role ?? 'player'
-    setUserId(user?.id ?? null)
-    setIsCoach(role === 'coach' || role === 'admin')
-    setUserRole(role as 'admin' | 'coach' | 'player')
-    console.log('Role fetched:', role, 'for user:', user?.id)
+      if (user) {
+        setUserId(user.id)
+        const { data: roleData } = await supabase
+          .from('user_roles')
+          .select('role')
+          .eq('user_id', user?.id ?? '')
+          .single()
+        const role = roleData?.role ?? 'player'
+        setUserRole(role as 'admin' | 'coach' | 'player')
+        setIsCoach(role === 'coach' || role === 'admin')
+      }
 
       const { data: gameData } = await supabase
         .from('games')
@@ -97,44 +86,31 @@ export default function GamePage({ params }: Props) {
     }
     load()
 
-    // Realtime subscription — live annotations from other users
+    // Realtime subscription
     const channel = supabase
       .channel(`game-${id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'annotations',
-          filter: `game_id=eq.${id}`,
-        },
-        (payload) => {
-          const newAnn = payload.new as Annotation
-          setAnnotations(prev => {
-            // Avoid duplicates (our own saves come through here too)
-            if (prev.find(a => a.id === newAnn.id)) return prev
-            return [...prev, newAnn].sort((a, b) => a.timestamp_sec - b.timestamp_sec)
-          })
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'DELETE',
-          schema: 'public',
-          table: 'annotations',
-          filter: `game_id=eq.${id}`,
-        },
-        (payload) => {
-          setAnnotations(prev => prev.filter(a => a.id !== payload.old.id))
-        }
-      )
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public',
+        table: 'annotations', filter: `game_id=eq.${id}`,
+      }, (payload) => {
+        const newAnn = payload.new as Annotation
+        setAnnotations(prev => {
+          if (prev.find(a => a.id === newAnn.id)) return prev
+          return [...prev, newAnn].sort((a, b) => a.timestamp_sec - b.timestamp_sec)
+        })
+      })
+      .on('postgres_changes', {
+        event: 'DELETE', schema: 'public',
+        table: 'annotations', filter: `game_id=eq.${id}`,
+      }, (payload) => {
+        setAnnotations(prev => prev.filter(a => a.id !== payload.old.id))
+      })
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
   }, [id])
 
-  // YouTube postMessage time tracking
+  // YouTube postMessage tracking
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       try {
@@ -167,25 +143,22 @@ export default function GamePage({ params }: Props) {
     )
   }, [])
 
-  // Single-tap save (mobile) or mark+save (desktop coach)
   const handleQuickSave = useCallback(async () => {
     if (saving) return
     setSaving(true)
-
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setSaving(false); return }
 
     const { data } = await supabase
       .from('annotations')
       .insert({
-        game_id: id,
-        user_id: user.id,
+        game_id: id, user_id: user.id,
         timestamp_sec: currentTime,
         label: selectedLabel,
         note: note.trim() || null,
         is_public: true,
       })
-      .select()
+      .select('*, profiles(display_name)')
       .single()
 
     if (data) {
@@ -199,34 +172,31 @@ export default function GamePage({ params }: Props) {
     setSaving(false)
   }, [saving, currentTime, selectedLabel, note, id])
 
-  // Range save (desktop coach only)
-  const [markIn, setMarkIn] = useState<number | null>(null)
-
   const handleRangeSave = useCallback(async () => {
     if (saving || markIn === null) return
     setSaving(true)
-
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setSaving(false); return }
 
     const { data } = await supabase
       .from('annotations')
       .insert({
-        game_id: id,
-        user_id: user.id,
+        game_id: id, user_id: user.id,
         timestamp_sec: markIn,
         end_timestamp_sec: currentTime > markIn + 1 ? currentTime : null,
         label: selectedLabel,
         note: note.trim() || null,
         is_public: true,
       })
-      .select()
+      .select('*, profiles(display_name)')
       .single()
 
     if (data) {
       setAnnotations(prev =>
         [...prev, data].sort((a, b) => a.timestamp_sec - b.timestamp_sec)
       )
+      setSaved(true)
+      setTimeout(() => setSaved(false), 1500)
     }
     setMarkIn(null)
     setNote('')
@@ -237,6 +207,171 @@ export default function GamePage({ params }: Props) {
     await supabase.from('annotations').delete().eq('id', annId)
     setAnnotations(prev => prev.filter(a => a.id !== annId))
   }, [])
+
+  // Label picker — available labels based on role
+  const availableLabels = LABEL_DEFS.filter(l => isCoach || !l.coachOnly)
+
+  const LabelPicker = ({ size = 'normal' }: { size?: 'normal' | 'large' }) => (
+    <div style={{
+      display: 'flex', gap: 6, flexWrap: 'wrap',
+      overflowX: size === 'large' ? 'auto' : undefined,
+    }}>
+      {LABEL_DEFS.map(l => {
+        const isSelected = selectedLabel === l.key
+        const isDisabled = l.coachOnly && !isCoach
+        const color = labelColor(l.key)
+        return (
+          <button
+            key={l.key}
+            onClick={() => !isDisabled && setSelectedLabel(l.key)}
+            disabled={isDisabled}
+            title={isDisabled ? 'Coaches only' : undefined}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              fontSize: size === 'large' ? 13 : 11,
+              fontWeight: 600,
+              padding: size === 'large' ? '7px 14px' : '4px 10px',
+              borderRadius: 99,
+              cursor: isDisabled ? 'default' : 'pointer',
+              border: `1.5px solid ${isSelected ? color : '#E4E6EE'}`,
+              background: isSelected ? `${color}18` : isDisabled ? '#F8F8F6' : '#fff',
+              color: isDisabled ? '#C0C4CE' : isSelected ? color : '#8A8F9E',
+              whiteSpace: 'nowrap', flexShrink: 0,
+              opacity: isDisabled ? 0.5 : 1,
+            }}
+          >
+            <AnnotationShape labelKey={l.key} size={size === 'large' ? 12 : 10} />
+            {l.display}
+            {l.team !== 'none' && (
+              <span style={{
+                fontSize: size === 'large' ? 10 : 9,
+                opacity: 0.7,
+                fontWeight: 400,
+              }}>
+                {l.team === 'home' ? game?.home_team ?? 'Home' : game?.away_team ?? 'Away'}
+              </span>
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+
+  // Timeline with shapes
+  const Timeline = ({ height = 24, mobileSize = false }: { height?: number, mobileSize?: boolean }) => (
+    <div
+      style={{
+        position: 'relative', height,
+        background: '#F8F8F6', borderRadius: 4,
+        border: '1px solid #E4E6EE', cursor: 'pointer',
+      }}
+      onClick={(e) => {
+        const rect = e.currentTarget.getBoundingClientRect()
+        seekTo(((e.clientX - rect.left) / rect.width) * duration)
+      }}
+    >
+      {/* Progress fill */}
+      <div style={{
+        position: 'absolute', left: 0, top: 0,
+        height: '100%',
+        width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%',
+        background: '#e8edf8', borderRadius: '3px 0 0 3px',
+      }} />
+      {/* Playhead */}
+      <div style={{
+        position: 'absolute', top: -4, bottom: -4, width: 2.5,
+        background: '#E8780A',
+        left: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%',
+        borderRadius: 2,
+      }} />
+      {/* Mark in indicator */}
+      {markIn !== null && duration > 0 && (
+        <div style={{
+          position: 'absolute', top: -4, bottom: -4, width: 2,
+          background: '#0f2972',
+          left: `${(markIn / duration) * 100}%`, borderRadius: 2,
+        }} />
+      )}
+      {/* Annotation shapes */}
+      {annotations.map(ann => (
+        <div
+          key={ann.id}
+          onClick={(e) => { e.stopPropagation(); seekTo(ann.timestamp_sec) }}
+          style={{
+            position: 'absolute', top: '50%',
+            transform: 'translate(-50%, -50%)',
+            left: duration > 0 ? `${(ann.timestamp_sec / duration) * 100}%` : '0%',
+            cursor: 'pointer', zIndex: 2,
+          }}
+        >
+          <AnnotationShape
+            labelKey={ann.label}
+            size={mobileSize ? 14 : 11}
+          />
+        </div>
+      ))}
+    </div>
+  )
+
+  // Annotation row
+  const AnnRow = ({ ann, compact = false }: { ann: Annotation, compact?: boolean }) => (
+    <div
+      style={{
+        padding: compact ? '8px 10px' : '7px 0',
+        borderBottom: compact ? 'none' : '1px solid #F8F8F6',
+        borderRadius: compact ? 8 : 0,
+        marginBottom: compact ? 8 : 0,
+        background: compact ? '#fff' : 'transparent',
+        border: compact ? '1px solid #E4E6EE' : undefined,
+        cursor: 'pointer',
+      }}
+      onClick={() => {
+        seekTo(ann.timestamp_sec)
+        if (isMobile) setShowAnnotations(false)
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <AnnotationShape labelKey={ann.label} size={compact ? 12 : 10} />
+        <span style={{
+          fontFamily: 'Bebas Neue, sans-serif',
+          fontSize: compact ? 15 : 14,
+          color: '#0f2972', minWidth: 36, letterSpacing: '0.04em',
+        }}>
+          {formatTime(ann.timestamp_sec)}
+        </span>
+        <span style={{ fontSize: compact ? 13 : 12, color: '#111318', flex: 1 }}>
+          {labelDisplay(ann.label, game?.home_team, game?.away_team)}
+        </span>
+        {ann.profiles?.display_name && (
+          <span style={{ fontSize: 10, color: '#8A8F9E', flexShrink: 0 }}>
+            {ann.profiles.display_name}
+          </span>
+        )}
+        {(isCoach || ann.user_id === userId) && (
+          <button
+            onClick={(e) => { e.stopPropagation(); handleDelete(ann.id) }}
+            style={{
+              fontSize: 12, color: '#8A8F9E',
+              background: 'none', border: 'none',
+              cursor: 'pointer', padding: '2px 4px', flexShrink: 0,
+            }}
+          >
+            ✕
+          </button>
+        )}
+      </div>
+      {ann.end_timestamp_sec && (
+        <div style={{ fontSize: 10, color: '#8A8F9E', paddingLeft: 17, marginTop: 2 }}>
+          {formatTime(ann.timestamp_sec)} → {formatTime(ann.end_timestamp_sec)}
+        </div>
+      )}
+      {ann.note && (
+        <div style={{ fontSize: 10, color: '#4A4F5C', paddingLeft: 17, marginTop: 2, fontStyle: 'italic' }}>
+          {ann.note}
+        </div>
+      )}
+    </div>
+  )
 
   if (loading) return (
     <div style={{
@@ -258,8 +393,6 @@ export default function GamePage({ params }: Props) {
     </div>
   )
 
-  const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0
-
   // ── MOBILE LAYOUT ──────────────────────────────────────────────
   if (isMobile) {
     return (
@@ -274,8 +407,7 @@ export default function GamePage({ params }: Props) {
         <div style={{ padding: '10px 14px 0' }}>
           <div style={{
             fontFamily: 'Bebas Neue, sans-serif',
-            fontSize: 17, color: '#0f2972', letterSpacing: '0.02em',
-            lineHeight: 1.1,
+            fontSize: 17, color: '#0f2972', letterSpacing: '0.02em', lineHeight: 1.1,
           }}>
             {game.title}
           </div>
@@ -283,84 +415,38 @@ export default function GamePage({ params }: Props) {
             {new Date(game.date).toLocaleDateString('de-DE', {
               day: '2-digit', month: 'long', year: 'numeric'
             })}
+            &nbsp;·&nbsp;
+            <span style={{ color: '#E8780A', fontWeight: 600 }}>{annotations.length}</span>
+            &nbsp;annotations&nbsp;·&nbsp;
+            <span style={{ color: '#22c55e', fontWeight: 600 }}>● live</span>
           </div>
         </div>
 
         {showAnnotations ? (
-          // ── Annotations view ──
+          // Annotations list view
           <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px' }}>
+            <button
+              onClick={() => setShowAnnotations(false)}
+              style={{
+                marginBottom: 10, fontSize: 12, fontWeight: 600,
+                color: '#0f2972', background: 'none', border: 'none',
+                cursor: 'pointer', padding: 0,
+              }}
+            >
+              ← Back to video
+            </button>
             {annotations.length === 0 ? (
-              <div style={{
-                textAlign: 'center', color: '#8A8F9E',
-                fontSize: 14, padding: '40px 0',
-              }}>
+              <div style={{ textAlign: 'center', color: '#8A8F9E', fontSize: 14, padding: '40px 0' }}>
                 No annotations yet.
               </div>
             ) : annotations.map(ann => (
-              <div
-                key={ann.id}
-                onClick={() => {
-                  seekTo(ann.timestamp_sec)
-                  setShowAnnotations(false)
-                }}
-                style={{
-                  background: '#fff',
-                  border: '1px solid #E4E6EE',
-                  borderRadius: 10,
-                  padding: '12px 14px',
-                  marginBottom: 8,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                }}
-              >
-                <div style={{
-                  width: 10, height: 10, borderRadius: '50%',
-                  background: labelColor(ann.label), flexShrink: 0,
-                }} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{
-                      fontFamily: 'Bebas Neue, sans-serif',
-                      fontSize: 15, color: '#0f2972', letterSpacing: '0.04em',
-                    }}>
-                      {formatTime(ann.timestamp_sec)}
-                    </span>
-                    <span style={{ fontSize: 13, color: '#111318' }}>
-                      {LABELS.find(l => l.key === ann.label)?.label ?? ann.label}
-                    </span>
-                  </div>
-                  {ann.note && (
-                    <div style={{ fontSize: 11, color: '#4A4F5C', marginTop: 2, fontStyle: 'italic' }}>
-                      {ann.note}
-                    </div>
-                  )}
-                </div>
-                {isCoach && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleDelete(ann.id) }}
-                    style={{
-                      fontSize: 14, color: '#8A8F9E',
-                      background: 'none', border: 'none',
-                      cursor: 'pointer', padding: '4px 6px',
-                    }}
-                  >
-                    ✕
-                  </button>
-                )}
-              </div>
+              <AnnRow key={ann.id} ann={ann} compact />
             ))}
           </div>
         ) : (
-          // ── Video + annotation controls ──
           <>
             {/* Video */}
-            <div style={{
-              background: '#091d52',
-              aspectRatio: '16/9',
-              flexShrink: 0,
-            }}>
+            <div style={{ background: '#091d52', aspectRatio: '16/9', flexShrink: 0 }}>
               <iframe
                 ref={playerRef}
                 src={`${game.video_url}?enablejsapi=1`}
@@ -371,7 +457,7 @@ export default function GamePage({ params }: Props) {
             </div>
 
             {/* Timeline */}
-            <div style={{ padding: '10px 14px 6px', flexShrink: 0 }}>
+            <div style={{ padding: '10px 14px 4px', flexShrink: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
                 <span style={{
                   fontFamily: 'Bebas Neue, sans-serif',
@@ -379,123 +465,63 @@ export default function GamePage({ params }: Props) {
                 }}>
                   {formatTime(currentTime)}
                 </span>
-                <span style={{ fontSize: 11, color: '#8A8F9E' }}>
-                  {formatTime(duration)}
-                </span>
-              </div>
-              <div
-                style={{
-                  position: 'relative', height: 20,
-                  background: '#F8F8F6', borderRadius: 4,
-                  border: '1px solid #E4E6EE', cursor: 'pointer',
-                }}
-                onClick={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect()
-                  seekTo(((e.clientX - rect.left) / rect.width) * duration)
-                }}
-              >
-                <div style={{
-                  position: 'absolute', left: 0, top: 0,
-                  height: '100%', width: `${progressPct}%`,
-                  background: '#e8edf8', borderRadius: '3px 0 0 3px',
-                }} />
-                <div style={{
-                  position: 'absolute', top: -3, bottom: -3,
-                  width: 3, background: '#E8780A',
-                  left: `${progressPct}%`, borderRadius: 2,
-                }} />
-                {annotations.map(ann => (
-                  <div
-                    key={ann.id}
-                    style={{
-                      position: 'absolute', top: '50%',
-                      transform: 'translate(-50%, -50%)',
-                      width: 12, height: 12, borderRadius: '50%',
-                      background: labelColor(ann.label),
-                      border: '2px solid #fff',
-                      left: duration > 0 ? `${(ann.timestamp_sec / duration) * 100}%` : '0%',
-                      zIndex: 2,
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {/* Label selector */}
-            <div style={{
-              padding: '0 14px 8px',
-              display: 'flex', gap: 6, overflowX: 'auto',
-              flexShrink: 0,
-            }}>
-              {LABELS.map(l => (
                 <button
-                  key={l.key}
-                  onClick={() => setSelectedLabel(l.key)}
+                  onClick={() => setShowAnnotations(true)}
                   style={{
-                    fontSize: 12, fontWeight: 600,
-                    padding: '6px 14px', borderRadius: 99,
-                    border: `2px solid ${selectedLabel === l.key ? l.color : '#E4E6EE'}`,
-                    background: selectedLabel === l.key
-                      ? l.key === 'goal' ? '#fef2f2'
-                        : l.key === 'shot' ? '#FEF0E0'
-                        : l.key === 'chance' ? '#f0fdf4'
-                        : l.key === 'tactical' ? '#e8edf8'
-                        : '#F8F8F6'
-                      : '#fff',
-                    color: selectedLabel === l.key ? l.color : '#8A8F9E',
-                    cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+                    fontSize: 11, fontWeight: 600, color: '#0f2972',
+                    background: '#e8edf8', border: 'none', borderRadius: 99,
+                    padding: '3px 10px', cursor: 'pointer',
                   }}
                 >
-                  {l.label}
+                  Annotations ({annotations.length})
                 </button>
-              ))}
+              </div>
+              <Timeline height={20} mobileSize />
             </div>
 
-            {/* Coach note (coaches only) */}
+            {/* Label picker */}
+            <div style={{ padding: '6px 14px', flexShrink: 0, overflowX: 'auto' }}>
+              <LabelPicker size="large" />
+            </div>
+
+            {/* Coach note */}
             {isCoach && (
-              <div style={{ padding: '0 14px 8px', flexShrink: 0 }}>
+              <div style={{ padding: '4px 14px', flexShrink: 0 }}>
                 <input
                   type="text"
-                  placeholder="Add a tactical note..."
+                  placeholder="Tactical note..."
                   value={note}
                   onChange={e => setNote(e.target.value)}
                   style={{
-                    width: '100%', fontSize: 13,
-                    padding: '8px 12px',
+                    width: '100%', fontSize: 13, padding: '8px 12px',
                     border: '1px solid #E4E6EE', borderRadius: 8,
                     outline: 'none', fontFamily: 'DM Sans, sans-serif',
-                    color: '#111318', background: '#fff',
-                    boxSizing: 'border-box',
+                    color: '#111318', background: '#fff', boxSizing: 'border-box',
                   }}
                 />
               </div>
             )}
 
-            {/* Mark in / Mark out / Save */}
-            <div style={{ padding: '0 14px 20px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {/* Mark in / out / save */}
+            <div style={{ padding: '8px 14px 20px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
               {markIn === null ? (
-                // Step 1: Mark in
                 <button
                   onClick={() => setMarkIn(currentTime)}
                   style={{
                     width: '100%', padding: '16px',
-                    fontSize: 16, fontWeight: 700,
+                    fontSize: 15, fontWeight: 700,
                     fontFamily: 'DM Sans, sans-serif',
                     borderRadius: 12, border: 'none',
-                    background: '#0f2972', color: '#fff',
-                    cursor: 'pointer', letterSpacing: '0.02em',
+                    background: '#0f2972', color: '#fff', cursor: 'pointer',
                   }}
                 >
-                  {`Mark in — ${formatTime(currentTime)}`}
+                  Mark in — {formatTime(currentTime)}
                 </button>
               ) : (
-                // Step 2: Mark out or save now
                 <>
                   <div style={{
-                    display: 'flex', alignItems: 'center',
-                    justifyContent: 'space-between',
-                    background: '#FEF0E0', borderRadius: 10,
-                    padding: '10px 14px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    background: '#FEF0E0', borderRadius: 10, padding: '10px 14px',
                   }}>
                     <span style={{ fontSize: 13, color: '#E8780A', fontWeight: 600 }}>
                       In: {formatTime(markIn)}
@@ -504,8 +530,7 @@ export default function GamePage({ params }: Props) {
                       onClick={() => setMarkIn(null)}
                       style={{
                         fontSize: 11, color: '#E8780A',
-                        background: 'none', border: 'none',
-                        cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
+                        background: 'none', border: 'none', cursor: 'pointer',
                       }}
                     >
                       Reset
@@ -525,13 +550,10 @@ export default function GamePage({ params }: Props) {
                         cursor: saving ? 'default' : 'pointer',
                       }}
                     >
-                      {saved ? '✓ Saved' : saving ? 'Saving...' : `Save now`}
+                      {saved ? '✓ Saved' : saving ? 'Saving...' : 'Save now'}
                     </button>
                     <button
-                      onClick={() => {
-                        // Mark out = save with current time as end
-                        handleRangeSave()
-                      }}
+                      onClick={handleRangeSave}
                       disabled={saving || currentTime <= markIn}
                       style={{
                         flex: 1, padding: '14px',
@@ -543,7 +565,7 @@ export default function GamePage({ params }: Props) {
                         cursor: currentTime > markIn ? 'pointer' : 'default',
                       }}
                     >
-                      {`Mark out — ${formatTime(currentTime)}`}
+                      Mark out — {formatTime(currentTime)}
                     </button>
                   </div>
                 </>
@@ -564,7 +586,7 @@ export default function GamePage({ params }: Props) {
       <Topbar role={userRole} backHref="/" />
 
       <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {/* Game title */}
+        {/* Game title bar */}
         <div style={{
           background: '#fff', border: '1px solid #E4E6EE',
           borderRadius: 12, padding: '10px 14px',
@@ -586,9 +608,7 @@ export default function GamePage({ params }: Props) {
                 {annotations.length} annotations
               </span>
               &nbsp;·&nbsp;
-              <span style={{ color: '#22c55e', fontWeight: 600 }}>
-                ● live
-              </span>
+              <span style={{ color: '#22c55e', fontWeight: 600 }}>● live</span>
             </div>
           </div>
           {isCoach && (
@@ -599,8 +619,7 @@ export default function GamePage({ params }: Props) {
                 padding: '7px 16px', borderRadius: 8,
                 border: 'none', background: '#E8780A',
                 color: '#fff', cursor: 'pointer',
-                fontFamily: 'DM Sans, sans-serif',
-                flexShrink: 0,
+                fontFamily: 'DM Sans, sans-serif', flexShrink: 0,
               }}
             >
               Share highlights
@@ -616,7 +635,7 @@ export default function GamePage({ params }: Props) {
           />
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 10 }}>
           {/* Left */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {/* Video */}
@@ -638,6 +657,7 @@ export default function GamePage({ params }: Props) {
               background: '#fff', border: '1px solid #E4E6EE',
               borderRadius: 12, padding: '12px 14px',
             }}>
+              {/* Time + hint */}
               <div style={{
                 display: 'flex', justifyContent: 'space-between',
                 alignItems: 'center', marginBottom: 8,
@@ -651,57 +671,16 @@ export default function GamePage({ params }: Props) {
                 <span style={{ fontSize: 10, color: '#8A8F9E' }}>
                   {isCoach
                     ? markIn !== null ? `Mark in: ${formatTime(markIn)}` : 'Mark in/out for range'
-                    : 'Tap a label then mark'}
+                    : 'Pick a label then mark'}
                 </span>
               </div>
 
-              {/* Track */}
-              <div
-                style={{
-                  position: 'relative', height: 24,
-                  background: '#F8F8F6', borderRadius: 4,
-                  border: '1px solid #E4E6EE', cursor: 'pointer', marginBottom: 5,
-                }}
-                onClick={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect()
-                  seekTo(((e.clientX - rect.left) / rect.width) * duration)
-                }}
-              >
-                <div style={{
-                  position: 'absolute', left: 0, top: 0,
-                  height: '100%', width: `${progressPct}%`,
-                  background: '#e8edf8', borderRadius: '3px 0 0 3px',
-                }} />
-                <div style={{
-                  position: 'absolute', top: -4, bottom: -4,
-                  width: 2.5, background: '#E8780A',
-                  left: `${progressPct}%`, borderRadius: 2,
-                }} />
-                {markIn !== null && duration > 0 && (
-                  <div style={{
-                    position: 'absolute', top: -4, bottom: -4,
-                    width: 2, background: '#0f2972',
-                    left: `${(markIn / duration) * 100}%`, borderRadius: 2,
-                  }} />
-                )}
-                {annotations.map(ann => (
-                  <div
-                    key={ann.id}
-                    onClick={(e) => { e.stopPropagation(); seekTo(ann.timestamp_sec) }}
-                    title={`${formatTime(ann.timestamp_sec)} — ${ann.label}`}
-                    style={{
-                      position: 'absolute', top: '50%',
-                      transform: 'translate(-50%, -50%)',
-                      width: 10, height: 10, borderRadius: '50%',
-                      background: labelColor(ann.label),
-                      border: '2px solid #fff',
-                      left: duration > 0 ? `${(ann.timestamp_sec / duration) * 100}%` : '0%',
-                      cursor: 'pointer', zIndex: 2,
-                    }}
-                  />
-                ))}
+              {/* Timeline */}
+              <div style={{ marginBottom: 5 }}>
+                <Timeline height={26} />
               </div>
 
+              {/* Time labels */}
               <div style={{
                 display: 'flex', justifyContent: 'space-between',
                 fontSize: 10, color: '#8A8F9E', marginBottom: 10,
@@ -713,32 +692,12 @@ export default function GamePage({ params }: Props) {
                 <span>{formatTime(duration)}</span>
               </div>
 
-              {/* Labels */}
-              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 8 }}>
-                {LABELS.map(l => (
-                  <button
-                    key={l.key}
-                    onClick={() => setSelectedLabel(l.key)}
-                    style={{
-                      fontSize: 11, fontWeight: 600,
-                      padding: '3px 10px', borderRadius: 99, cursor: 'pointer',
-                      border: `1.5px solid ${selectedLabel === l.key ? l.color : '#E4E6EE'}`,
-                      background: selectedLabel === l.key
-                        ? l.key === 'goal' ? '#fef2f2'
-                          : l.key === 'shot' ? '#FEF0E0'
-                          : l.key === 'chance' ? '#f0fdf4'
-                          : l.key === 'tactical' ? '#e8edf8'
-                          : '#F8F8F6'
-                        : '#fff',
-                      color: selectedLabel === l.key ? l.color : '#8A8F9E',
-                    }}
-                  >
-                    {l.label}
-                  </button>
-                ))}
+              {/* Label picker */}
+              <div style={{ marginBottom: 10 }}>
+                <LabelPicker />
               </div>
 
-              {/* Controls */}
+              {/* Mark in/out (coach) or quick save (player) */}
               {isCoach ? (
                 <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
                   <button
@@ -783,11 +742,12 @@ export default function GamePage({ params }: Props) {
                 >
                   {saved
                     ? `✓ Saved at ${formatTime(currentTime)}`
-                    : `Mark ${LABELS.find(l => l.key === selectedLabel)?.label} at ${formatTime(currentTime)}`
+                    : `Mark ${labelDisplay(selectedLabel, game.home_team, game.away_team)} at ${formatTime(currentTime)}`
                   }
                 </button>
               )}
 
+              {/* Coach note */}
               {isCoach && (
                 <input
                   type="text"
@@ -804,16 +764,24 @@ export default function GamePage({ params }: Props) {
               )}
 
               {/* Legend */}
-              <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
-                {LABELS.map(l => (
-                  <div key={l.key} style={{
-                    display: 'flex', alignItems: 'center', gap: 4,
-                    fontSize: 10, color: '#8A8F9E',
-                  }}>
-                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: l.color }} />
-                    {l.label}
-                  </div>
-                ))}
+              <div style={{
+                display: 'flex', gap: 8, marginTop: 10,
+                flexWrap: 'wrap',
+              }}>
+                <span style={{ fontSize: 10, color: '#8A8F9E' }}>
+                  <span style={{
+                    display: 'inline-block', width: 8, height: 8,
+                    background: '#0f2972', borderRadius: 1, marginRight: 3,
+                  }} />
+                  {game.home_team}
+                </span>
+                <span style={{ fontSize: 10, color: '#8A8F9E' }}>
+                  <span style={{
+                    display: 'inline-block', width: 8, height: 8,
+                    background: '#E8780A', borderRadius: 1, marginRight: 3,
+                  }} />
+                  {game.away_team}
+                </span>
               </div>
             </div>
           </div>
@@ -823,6 +791,7 @@ export default function GamePage({ params }: Props) {
             <div style={{
               background: '#fff', border: '1px solid #E4E6EE',
               borderRadius: 12, padding: '12px 14px',
+              overflowY: 'auto', maxHeight: 600,
             }}>
               <div style={{
                 fontFamily: 'Bebas Neue, sans-serif',
@@ -851,58 +820,7 @@ export default function GamePage({ params }: Props) {
               )}
 
               {annotations.map(ann => (
-                <div
-                  key={ann.id}
-                  style={{
-                    padding: '7px 0', borderBottom: '1px solid #F8F8F6',
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => seekTo(ann.timestamp_sec)}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                    <div style={{
-                      width: 8, height: 8, borderRadius: '50%',
-                      background: labelColor(ann.label), flexShrink: 0,
-                    }} />
-                    <span style={{
-                      fontFamily: 'Bebas Neue, sans-serif',
-                      fontSize: 14, color: '#0f2972',
-                      minWidth: 36, letterSpacing: '0.04em',
-                    }}>
-                      {formatTime(ann.timestamp_sec)}
-                    </span>
-                    <span style={{ fontSize: 12, color: '#111318', flex: 1 }}>
-                      {LABELS.find(l => l.key === ann.label)?.label ?? ann.label}
-                    </span>
-                    {ann.profiles?.display_name && (
-                      <span style={{ fontSize: 10, color: '#8A8F9E', flexShrink: 0 }}>
-                        {ann.profiles.display_name}
-                      </span>
-                    )}
-                    {(isCoach || ann.user_id === userId) && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleDelete(ann.id) }}
-                        style={{
-                          fontSize: 10, color: '#8A8F9E',
-                          background: 'none', border: 'none',
-                          cursor: 'pointer', padding: '2px 4px',
-                        }}
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                  {ann.end_timestamp_sec && (
-                    <div style={{ fontSize: 10, color: '#8A8F9E', paddingLeft: 15, marginTop: 2 }}>
-                      {formatTime(ann.timestamp_sec)} → {formatTime(ann.end_timestamp_sec)}
-                    </div>
-                  )}
-                  {ann.note && (
-                    <div style={{ fontSize: 10, color: '#4A4F5C', paddingLeft: 15, marginTop: 2, fontStyle: 'italic' }}>
-                      {ann.note}
-                    </div>
-                  )}
-                </div>
+                <AnnRow key={ann.id} ann={ann} />
               ))}
             </div>
 
@@ -929,10 +847,8 @@ export default function GamePage({ params }: Props) {
                     padding: '0 4px',
                   }}>
                     <div style={{
-                      fontFamily: 'Bebas Neue, sans-serif',
-                      fontSize: 22,
-                      color: s.orange ? '#E8780A' : '#fff',
-                      lineHeight: 1,
+                      fontFamily: 'Bebas Neue, sans-serif', fontSize: 22,
+                      color: s.orange ? '#E8780A' : '#fff', lineHeight: 1,
                     }}>
                       {s.n}
                     </div>
