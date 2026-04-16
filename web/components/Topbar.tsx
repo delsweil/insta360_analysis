@@ -20,6 +20,7 @@ export default function Topbar({
 }: TopbarProps) {
   const router = useRouter()
 
+  console.log('Topbar role:', role)
   const rolePill = role === 'admin'
     ? { label: 'Admin', bg: '#ef4444' }
     : role === 'coach'
