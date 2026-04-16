@@ -18,6 +18,8 @@ function labelColor(label: string) {
   return LABELS.find(l => l.key === label)?.color ?? '#8A8F9E'
 }
 
+const PRE_ROLL_SEC = 5  // seconds before annotation to start playback
+
 function formatTime(sec: number) {
   const m = Math.floor(sec / 60)
   const s = Math.floor(sec % 60)
@@ -155,13 +157,13 @@ export default function SharePage({ params }: Props) {
 
   const handleSelectAnnotation = (idx: number) => {
     setCurrentIdx(idx)
-    seekTo(annotations[idx].timestamp_sec)
+    seekTo(Math.max(0, annotations[idx].timestamp_sec - PRE_ROLL_SEC))
     if (!autoPlay) setAutoPlay(false)
   }
 
   const handlePlayAll = () => {
     setCurrentIdx(0)
-    seekTo(annotations[0].timestamp_sec)
+    seekTo(Math.max(0, annotations[0].timestamp_sec - PRE_ROLL_SEC))
     setAutoPlay(true)
   }
 

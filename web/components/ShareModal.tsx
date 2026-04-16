@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Annotation } from '@/lib/supabase'
+import AnnotationFilter, { type FilterState, ALL_FILTERS, passesFilter } from './AnnotationFilter'
 
 const LABELS = [
   { key: 'goal',     label: 'Goal',     color: '#ef4444' },
@@ -25,22 +26,25 @@ function labelColor(label: string) {
 interface Props {
   gameId: string
   annotations: Annotation[]
+  initialFilter?: FilterState
   onClose: () => void
 }
 
-export default function ShareModal({ gameId, annotations, onClose }: Props) {
+export default function ShareModal({ gameId, annotations, initialFilter, onClose }: Props) {
+  const [filter, setFilter] = useState<FilterState>(initialFilter ?? ALL_FILTERS)
+  const visibleAnnotations = annotations.filter(a => passesFilter(a.label, filter))
   const [selected, setSelected] = useState<Set<string>>(
-    new Set(annotations.map(a => a.id))
+    new Set(annotations.filter(a => passesFilter(a.label, initialFilter ?? ALL_FILTERS)).map(a => a.id))
   )
   const [generating, setGenerating] = useState(false)
   const [shareUrl, setShareUrl] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
   const toggleAll = () => {
-    if (selected.size === annotations.length) {
+    if (selected.size === visibleAnnotations.length) {
       setSelected(new Set())
     } else {
-      setSelected(new Set(annotations.map(a => a.id)))
+      setSelected(new Set(visibleAnnotations.map(a => a.id)))
     }
   }
 
@@ -133,18 +137,30 @@ export default function ShareModal({ gameId, annotations, onClose }: Props) {
         }}>
           <input
             type="checkbox"
-            checked={selected.size === annotations.length}
+            checked={selected.size === visibleAnnotations.length && visibleAnnotations.length > 0}
             onChange={toggleAll}
             style={{ cursor: 'pointer', width: 16, height: 16 }}
           />
           <span style={{ fontSize: 13, color: '#4A4F5C' }}>
-            Select all ({selected.size} / {annotations.length} selected)
+            Select all ({selected.size} / {visibleAnnotations.length} visible)
           </span>
+        </div>
+
+        {/* Filter bar */}
+        <div style={{ padding: '8px 20px', borderBottom: '1px solid #E4E6EE', flexShrink: 0 }}>
+          <AnnotationFilter
+            filter={filter}
+            onChange={(f) => {
+              setFilter(f)
+              // Update selected to match new filter
+              setSelected(new Set(annotations.filter(a => passesFilter(a.label, f)).map(a => a.id)))
+            }}
+          />
         </div>
 
         {/* Annotations list */}
         <div style={{ overflowY: 'auto', flex: 1, padding: '8px 20px' }}>
-          {annotations.map(ann => (
+          {visibleAnnotations.map(ann => (
             <div
               key={ann.id}
               onClick={() => toggleOne(ann.id)}

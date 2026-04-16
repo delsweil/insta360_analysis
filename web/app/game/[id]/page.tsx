@@ -658,6 +658,7 @@ export default function GamePage({ params }: Props) {
           <ShareModal
             gameId={id}
             annotations={annotations}
+            initialFilter={filter}
             onClose={() => setShowShare(false)}
           />
         )}
