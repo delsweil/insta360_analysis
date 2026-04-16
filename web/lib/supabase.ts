@@ -25,6 +25,9 @@ export type Annotation = {
   note?: string
   is_public: boolean
   created_at: string
+  profiles?: {
+    display_name: string
+  }
 }
 
 export type UserRole = 'admin' | 'coach' | 'player'

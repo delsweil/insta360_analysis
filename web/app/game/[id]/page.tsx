@@ -88,7 +88,7 @@ export default function GamePage({ params }: Props) {
 
       const { data: annData } = await supabase
         .from('annotations')
-        .select('*')
+        .select('*, profiles(display_name)')
         .eq('game_id', id)
         .order('timestamp_sec')
 
@@ -874,6 +874,11 @@ export default function GamePage({ params }: Props) {
                     <span style={{ fontSize: 12, color: '#111318', flex: 1 }}>
                       {LABELS.find(l => l.key === ann.label)?.label ?? ann.label}
                     </span>
+                    {ann.profiles?.display_name && (
+                      <span style={{ fontSize: 10, color: '#8A8F9E', flexShrink: 0 }}>
+                        {ann.profiles.display_name}
+                      </span>
+                    )}
                     {(isCoach || ann.user_id === userId) && (
                       <button
                         onClick={(e) => { e.stopPropagation(); handleDelete(ann.id) }}
