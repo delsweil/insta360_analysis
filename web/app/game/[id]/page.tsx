@@ -71,6 +71,7 @@ export default function GamePage({ params }: Props) {
     const role = roleData?.role ?? 'player'
     setIsCoach(role === 'coach' || role === 'admin')
     setUserRole(role as 'admin' | 'coach' | 'player')
+    console.log('Role fetched:', role, 'for user:', user?.id)
 
       const { data: gameData } = await supabase
         .from('games')
