@@ -91,6 +91,42 @@ export default function GamePage({ params }: Props) {
       setLoading(false)
     }
     load()
+
+    // Realtime subscription — live annotations from other users
+    const channel = supabase
+      .channel(`game-${id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'annotations',
+          filter: `game_id=eq.${id}`,
+        },
+        (payload) => {
+          const newAnn = payload.new as Annotation
+          setAnnotations(prev => {
+            // Avoid duplicates (our own saves come through here too)
+            if (prev.find(a => a.id === newAnn.id)) return prev
+            return [...prev, newAnn].sort((a, b) => a.timestamp_sec - b.timestamp_sec)
+          })
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'annotations',
+          filter: `game_id=eq.${id}`,
+        },
+        (payload) => {
+          setAnnotations(prev => prev.filter(a => a.id !== payload.old.id))
+        }
+      )
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
   }, [id])
 
   // YouTube postMessage time tracking
