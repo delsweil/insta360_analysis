@@ -20,9 +20,31 @@ function extractYouTubeId(url: string): string | null {
   return null
 }
 
+const inputStyle = {
+  width: '100%',
+  padding: '10px 14px',
+  border: '1px solid #E4E6EE',
+  borderRadius: 8,
+  fontSize: 14,
+  fontFamily: 'DM Sans, sans-serif',
+  color: '#111318',
+  outline: 'none',
+  background: '#fff',
+  boxSizing: 'border-box' as const,
+}
+
+const labelStyle = {
+  fontSize: 12,
+  fontWeight: 600 as const,
+  color: '#4A4F5C',
+  display: 'block' as const,
+  marginBottom: 4,
+}
+
 export default function AddGamePage() {
   const router = useRouter()
-  const [title, setTitle] = useState('')
+  const [homeTeam, setHomeTeam] = useState('ASN Pfeil Phönix')
+  const [awayTeam, setAwayTeam] = useState('')
   const [date, setDate] = useState('')
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [durationMin, setDurationMin] = useState('')
@@ -30,6 +52,7 @@ export default function AddGamePage() {
   const [saving, setSaving] = useState(false)
 
   const videoId = extractYouTubeId(youtubeUrl)
+  const title = homeTeam && awayTeam ? `${homeTeam} vs. ${awayTeam}` : ''
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -39,19 +62,22 @@ export default function AddGamePage() {
       setError('Please enter a valid YouTube URL')
       return
     }
+    if (!homeTeam.trim() || !awayTeam.trim()) {
+      setError('Please enter both team names')
+      return
+    }
 
     setSaving(true)
     const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      router.push('/login')
-      return
-    }
+    if (!user) { router.push('/login'); return }
 
     const embedUrl = `https://www.youtube.com/embed/${videoId}`
     const { data, error: err } = await supabase
       .from('games')
       .insert({
         title,
+        home_team: homeTeam.trim(),
+        away_team: awayTeam.trim(),
         date,
         video_url: embedUrl,
         duration_sec: durationMin ? parseInt(durationMin) * 60 : null,
@@ -71,16 +97,13 @@ export default function AddGamePage() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#F8F8F6', fontFamily: 'DM Sans, sans-serif' }}>
-      {/* Topbar */}
       <Topbar backHref="/" />
 
       <div style={{ padding: '24px 20px', maxWidth: 560, margin: '0 auto' }}>
         <div style={{
           fontFamily: 'Bebas Neue, sans-serif',
-          fontSize: 28,
-          color: '#0f2972',
-          letterSpacing: '0.02em',
-          marginBottom: 4,
+          fontSize: 28, color: '#0f2972',
+          letterSpacing: '0.02em', marginBottom: 4,
         }}>
           Spiel hinzufügen
         </div>
@@ -89,60 +112,59 @@ export default function AddGamePage() {
         </div>
 
         <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {/* Title */}
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#4A4F5C', display: 'block', marginBottom: 4 }}>
-              Spieltitel
-            </label>
-            <input
-              type="text"
-              placeholder="z.B. ASN Pfeil Phönix vs. FC Grün-Weiß"
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-              required
-              style={{
-                width: '100%',
-                padding: '10px 14px',
-                border: '1px solid #E4E6EE',
-                borderRadius: 8,
-                fontSize: 14,
-                fontFamily: 'DM Sans, sans-serif',
-                color: '#111318',
-                outline: 'none',
-                background: '#fff',
-              }}
-            />
+
+          {/* Teams */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div>
+              <label style={labelStyle}>Heimteam</label>
+              <input
+                type="text"
+                placeholder="ASN Pfeil Phönix"
+                value={homeTeam}
+                onChange={e => setHomeTeam(e.target.value)}
+                required
+                style={inputStyle}
+              />
+            </div>
+            <div>
+              <label style={labelStyle}>Auswärtsteam</label>
+              <input
+                type="text"
+                placeholder="FC Gegner"
+                value={awayTeam}
+                onChange={e => setAwayTeam(e.target.value)}
+                required
+                style={inputStyle}
+              />
+            </div>
           </div>
+
+          {/* Auto-generated title preview */}
+          {title && (
+            <div style={{
+              fontSize: 13, color: '#0f2972', fontWeight: 600,
+              padding: '8px 12px', background: '#e8edf8',
+              borderRadius: 8,
+            }}>
+              {title}
+            </div>
+          )}
 
           {/* Date */}
           <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#4A4F5C', display: 'block', marginBottom: 4 }}>
-              Datum
-            </label>
+            <label style={labelStyle}>Datum</label>
             <input
               type="date"
               value={date}
               onChange={e => setDate(e.target.value)}
               required
-              style={{
-                width: '100%',
-                padding: '10px 14px',
-                border: '1px solid #E4E6EE',
-                borderRadius: 8,
-                fontSize: 14,
-                fontFamily: 'DM Sans, sans-serif',
-                color: '#111318',
-                outline: 'none',
-                background: '#fff',
-              }}
+              style={inputStyle}
             />
           </div>
 
           {/* YouTube URL */}
           <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#4A4F5C', display: 'block', marginBottom: 4 }}>
-              YouTube URL
-            </label>
+            <label style={labelStyle}>YouTube URL</label>
             <input
               type="url"
               placeholder="https://www.youtube.com/watch?v=..."
@@ -150,15 +172,8 @@ export default function AddGamePage() {
               onChange={e => setYoutubeUrl(e.target.value)}
               required
               style={{
-                width: '100%',
-                padding: '10px 14px',
+                ...inputStyle,
                 border: `1px solid ${videoId ? '#22c55e' : '#E4E6EE'}`,
-                borderRadius: 8,
-                fontSize: 14,
-                fontFamily: 'DM Sans, sans-serif',
-                color: '#111318',
-                outline: 'none',
-                background: '#fff',
               }}
             />
             {youtubeUrl && !videoId && (
@@ -175,25 +190,13 @@ export default function AddGamePage() {
 
           {/* Duration */}
           <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#4A4F5C', display: 'block', marginBottom: 4 }}>
-              Spieldauer (Minuten, optional)
-            </label>
+            <label style={labelStyle}>Spieldauer (Minuten, optional)</label>
             <input
               type="number"
               placeholder="90"
               value={durationMin}
               onChange={e => setDurationMin(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '10px 14px',
-                border: '1px solid #E4E6EE',
-                borderRadius: 8,
-                fontSize: 14,
-                fontFamily: 'DM Sans, sans-serif',
-                color: '#111318',
-                outline: 'none',
-                background: '#fff',
-              }}
+              style={inputStyle}
             />
           </div>
 
@@ -209,7 +212,10 @@ export default function AddGamePage() {
           )}
 
           {error && (
-            <div style={{ fontSize: 12, color: '#ef4444', background: '#fef2f2', padding: '8px 12px', borderRadius: 8 }}>
+            <div style={{
+              fontSize: 12, color: '#ef4444',
+              background: '#fef2f2', padding: '8px 12px', borderRadius: 8,
+            }}>
               {error}
             </div>
           )}
@@ -219,16 +225,11 @@ export default function AddGamePage() {
               type="button"
               onClick={() => router.push('/')}
               style={{
-                flex: 1,
-                padding: '11px',
-                background: '#fff',
-                color: '#0f2972',
-                border: '2px solid #0f2972',
-                borderRadius: 8,
-                fontSize: 14,
-                fontWeight: 600,
-                cursor: 'pointer',
-                fontFamily: 'DM Sans, sans-serif',
+                flex: 1, padding: '11px',
+                background: '#fff', color: '#0f2972',
+                border: '2px solid #0f2972', borderRadius: 8,
+                fontSize: 14, fontWeight: 600,
+                cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
               }}
             >
               Abbrechen
@@ -237,14 +238,11 @@ export default function AddGamePage() {
               type="submit"
               disabled={saving || !videoId}
               style={{
-                flex: 1,
-                padding: '11px',
+                flex: 1, padding: '11px',
                 background: saving || !videoId ? '#E4E6EE' : '#0f2972',
                 color: saving || !videoId ? '#8A8F9E' : '#fff',
-                border: 'none',
-                borderRadius: 8,
-                fontSize: 14,
-                fontWeight: 600,
+                border: 'none', borderRadius: 8,
+                fontSize: 14, fontWeight: 600,
                 cursor: saving || !videoId ? 'default' : 'pointer',
                 fontFamily: 'DM Sans, sans-serif',
               }}

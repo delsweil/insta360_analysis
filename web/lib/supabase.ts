@@ -8,6 +8,8 @@ export const supabase = createClient(
 export type Game = {
   id: string
   title: string
+  home_team: string
+  away_team: string
   date: string
   video_url: string
   duration_sec: number
@@ -31,6 +33,53 @@ export type Annotation = {
 }
 
 export type UserRole = 'admin' | 'coach' | 'player'
+
+// ── Label system ────────────────────────────────────────────────
+
+export type LabelKey =
+  | 'goal_home' | 'goal_away'
+  | 'shot_home' | 'shot_away'
+  | 'setpiece_home' | 'setpiece_away'
+  | 'tactical'
+
+export type LabelDef = {
+  key: LabelKey
+  display: string     // short name shown in UI
+  team: 'home' | 'away' | 'none'
+  shape: 'circle' | 'square' | 'triangle' | 'cross'
+  coachOnly: boolean
+}
+
+export const LABEL_DEFS: LabelDef[] = [
+  { key: 'goal_home',     display: 'Goal',      team: 'home', shape: 'circle',   coachOnly: false },
+  { key: 'goal_away',     display: 'Goal',      team: 'away', shape: 'circle',   coachOnly: false },
+  { key: 'shot_home',     display: 'Shot',      team: 'home', shape: 'square',   coachOnly: false },
+  { key: 'shot_away',     display: 'Shot',      team: 'away', shape: 'square',   coachOnly: false },
+  { key: 'setpiece_home', display: 'Set piece', team: 'home', shape: 'triangle', coachOnly: false },
+  { key: 'setpiece_away', display: 'Set piece', team: 'away', shape: 'triangle', coachOnly: false },
+  { key: 'tactical',      display: 'Tactical',  team: 'none', shape: 'cross',    coachOnly: true  },
+]
+
+// Navy for home, orange for away, grey for tactical
+export function labelColor(key: string): string {
+  if (key.endsWith('_home')) return '#0f2972'
+  if (key.endsWith('_away')) return '#E8780A'
+  return '#4A4F5C'
+}
+
+export function labelDef(key: string): LabelDef | undefined {
+  return LABEL_DEFS.find(l => l.key === key)
+}
+
+export function labelDisplay(key: string, homeTeam?: string, awayTeam?: string): string {
+  const def = labelDef(key)
+  if (!def) return key
+  if (def.team === 'home') return `${def.display} · ${homeTeam ?? 'Home'}`
+  if (def.team === 'away') return `${def.display} · ${awayTeam ?? 'Away'}`
+  return def.display
+}
+
+// ── Role helpers ────────────────────────────────────────────────
 
 export async function getCurrentUserRole(): Promise<UserRole | null> {
   const { data: { user } } = await supabase.auth.getUser()
