@@ -40,6 +40,7 @@ export default function GamePage({ params }: Props) {
   const [selectedLabel, setSelectedLabel] = useState('goal')
   const [note, setNote] = useState('')
   const [isCoach, setIsCoach] = useState(false)
+  const [userId, setUserId] = useState<string | null>(null)
   const [userRole, setUserRole] = useState<'admin' | 'coach' | 'player'>( 'player')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -69,6 +70,7 @@ export default function GamePage({ params }: Props) {
       .single()
 
     const role = roleData?.role ?? 'player'
+    setUserId(user?.id ?? null)
     setIsCoach(role === 'coach' || role === 'admin')
     setUserRole(role as 'admin' | 'coach' | 'player')
     console.log('Role fetched:', role, 'for user:', user?.id)
@@ -872,7 +874,7 @@ export default function GamePage({ params }: Props) {
                     <span style={{ fontSize: 12, color: '#111318', flex: 1 }}>
                       {LABELS.find(l => l.key === ann.label)?.label ?? ann.label}
                     </span>
-                    {isCoach && (
+                    {(isCoach || ann.user_id === userId) && (
                       <button
                         onClick={(e) => { e.stopPropagation(); handleDelete(ann.id) }}
                         style={{
