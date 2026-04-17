@@ -336,14 +336,31 @@ def choose_target(
             ball_x, ball_y = ball_gate.last_pos
             w_ball = 1.5 * decay
 
-    # 2. Player centroid signal — always present when players detected
+    # 2. Player centroid — weighted by alignment with ball direction
     player_x, player_y, w_players = centre_x, centre_y, 0.0
     if player_boxes:
-        xs = [b.cx for b in player_boxes]
-        ys = [b.cy for b in player_boxes]
+        # Base: trim outliers (remove most extreme left/right player
+        # UNLESS ball is heading toward them)
+        if len(player_boxes) > 3:
+            sorted_by_x = sorted(player_boxes, key=lambda b: b.cx)
+            # Check if ball is heading left or right
+            ball_going_left = vx < -3.0
+            ball_going_right = vx > 3.0
+            # Remove leftmost player unless ball heading left
+            if not ball_going_left:
+                sorted_by_x = sorted_by_x[1:]
+            # Remove rightmost player unless ball heading right
+            if not ball_going_right:
+                sorted_by_x = sorted_by_x[:-1]
+            boxes_for_centroid = sorted_by_x
+        else:
+            boxes_for_centroid = player_boxes
+
+        xs = [b.cx for b in boxes_for_centroid]
+        ys = [b.cy for b in boxes_for_centroid]
         player_x = float(np.mean(xs))
         player_y = float(np.mean(ys))
-        w_players = 0.7  # steady background — ball overrides when moving fast
+        w_players = 0.7
 
     # 3. Centre — weak constant pull to prevent camera drifting off pitch
     w_centre = 0.2
