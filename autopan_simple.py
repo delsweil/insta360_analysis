@@ -91,7 +91,7 @@ class Config:
     max_pitch_step: float = 1.2
     target_alpha: float = 0.08  # slower smoothing = less jerk
     vel_alpha: float = 0.15
-    max_yaw_dev: float = 40.0   # max pan range
+    max_yaw_dev: float = 50.0   # max pan range
     max_pitch_dev: float = 14.0
     deadband_x: float = 0.08
     deadband_y: float = 0.06
