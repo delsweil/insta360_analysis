@@ -67,7 +67,7 @@ class Config:
     ball_model_path: str = "models/ball.pt"
 
     # Detection
-    imgsz: int = 1280
+    imgsz: int = 640   # lower res = 2x faster, players still detectable
     conf_players: float = 0.20
     conf_ball: float = 0.35    # higher = fewer false positives
     ball_static_thresh: float = 5.0  # pixels — reject if ball hasn't moved this much
@@ -514,10 +514,13 @@ def run(cfg: Config) -> None:
             break
 
         # ── project to perspective ──
+        # Rotate raw INSV frames (stored 90° CW)
+        if cfg.rotate_input:
+            frame360 = cv2.rotate(frame360, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
         persp = project_frame(
             frame360, cam.yaw, cam.pitch,
             cfg.fov_deg, cfg.out_h, cfg.out_w,
-            rotate_ccw=cfg.rotate_input,
         )
 
         # ── detection (sampled) ──
@@ -646,8 +649,8 @@ def parse_args() -> Config:
     p.add_argument("--calib",   default="calibration/pitch.json")
     p.add_argument("--players", default="models/yolo11n.pt")
     p.add_argument("--ball",    default="models/ball.pt")
-    p.add_argument("--imgsz",   type=int,   default=1280)
-    p.add_argument("--sample",  type=int,   default=1,    help="Detect every N frames")
+    p.add_argument("--imgsz",   type=int,   default=640)
+    p.add_argument("--sample",  type=int,   default=3,    help="Detect every N frames")
     p.add_argument("--out-w",   type=int,   default=1280)
     p.add_argument("--out-h",   type=int,   default=720)
     p.add_argument("--fov",     type=float, default=90.0)
