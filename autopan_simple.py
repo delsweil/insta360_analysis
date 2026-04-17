@@ -312,25 +312,29 @@ def choose_target(
 
     # ── Compute each signal and its weight ──
 
-    # 1. Ball signal — high weight when trusted, decays exponentially when lost
+    # 1. Ball signal — weight scales with confidence and speed
     ball_x, ball_y, w_ball = centre_x, centre_y, 0.0
+    vx, vy = ball_gate.velocity
+    ball_speed = (vx**2 + vy**2) ** 0.5
+
     if ball_gate.trusted and ball_pos is not None:
         ball_x, ball_y = ball_pos
-        w_ball = 3.0  # strong when actively detected
+        # Boost weight when ball is moving fast — clear signal of action
+        speed_boost = min(3.0, ball_speed / 5.0)
+        w_ball = 3.0 + speed_boost
     elif ball_gate.last_pos is not None:
-        # Decay weight based on how long ago we saw the ball
         decay = max(0.0, 1.0 - ball_gate.frames_since / miss_short)
-        w_ball = 1.5 * decay
         # Use velocity prediction if ball was moving fast
-        vx, vy = ball_gate.velocity
-        speed = (vx**2 + vy**2) ** 0.5
-        if speed > 2.0 and ball_gate.frames_since < 15:
+        if ball_speed > 2.0 and ball_gate.frames_since < 15:
             ball_x = ball_gate.last_pos[0] + vx * ball_gate.frames_since * 0.5
             ball_y = ball_gate.last_pos[1] + vy * ball_gate.frames_since * 0.5
             ball_x = float(np.clip(ball_x, 0, out_w))
             ball_y = float(np.clip(ball_y, 0, out_h))
+            # Keep weight high when predicting fast ball — don't let players override
+            w_ball = 2.5 * decay
         else:
             ball_x, ball_y = ball_gate.last_pos
+            w_ball = 1.5 * decay
 
     # 2. Player centroid signal — always present when players detected
     player_x, player_y, w_players = centre_x, centre_y, 0.0
@@ -339,7 +343,7 @@ def choose_target(
         ys = [b.cy for b in player_boxes]
         player_x = float(np.mean(xs))
         player_y = float(np.mean(ys))
-        w_players = 1.0  # steady background signal
+        w_players = 0.7  # steady background — ball overrides when moving fast
 
     # 3. Centre — weak constant pull to prevent camera drifting off pitch
     w_centre = 0.2
