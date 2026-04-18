@@ -11,11 +11,16 @@ detects the pitch boundary and writes calibration/pitch.json.
 Algorithm:
   1. Black mask  — remove camera body occlusion → reliable ROI
   2. Far touchline Y — variance-minimum-in-bright-zone in the centre column band
-  3. Pitch corner X — brightness scan outward from centre at far touchline Y
-  4. Near touchline Y — local contrast scan down the halfway line (vertical white stripe)
-  5. Ellipse construction — pitch boundary modelled as two half-ellipses sharing
-     the same semi-major axis, with different semi-minor axes for top/bottom arcs
-  6. Polygon output — sampled from the ellipse, saved as pitch.json
+  3. Pitch colour sampling — adaptive HSV sampling from multiple interior points
+  4. Pitch corner X — HSV pitch mask scan (robust to shadow and surface type)
+  5. Near touchline Y — local contrast scan down the halfway line
+  6. Ellipse construction — pitch boundary modelled as two half-ellipses
+  7. ROI clamping — all polygon points clamped within camera ROI
+  8. Polygon output — saved as pitch.json
+
+Tested on:
+  - Natural grass, evening shadow (Nürnberg, July 2025)
+  - Artificial turf, daylight (October 2024)
 
 Usage:
     # Extract a frame first:
@@ -26,14 +31,16 @@ Usage:
     # Run auto-calibration:
     python3 calibrate_auto.py --input /tmp/equirect_frame.png --output calibration/pitch.json
 
-    # Optional: visualise result
+    # With visualisation:
     python3 calibrate_auto.py --input /tmp/equirect_frame.png --output calibration/pitch.json --vis /tmp/calib_vis.jpg
+
+    # If polygon is consistently too small:
+    python3 calibrate_auto.py --input /tmp/equirect_frame.png --output calibration/pitch.json --vis /tmp/calib_vis.jpg --scale 1.02
 """
 
 import argparse
 import json
 import os
-import sys
 
 import cv2
 import numpy as np
@@ -45,9 +52,7 @@ import numpy as np
 
 def compute_roi_mask(gray: np.ndarray) -> np.ndarray:
     """Return binary mask of non-black (non-camera-body) pixels."""
-    black_mask = gray < 20
-    roi = (~black_mask).astype(np.uint8) * 255
-    return roi
+    return (~(gray < 20)).astype(np.uint8) * 255
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -65,14 +70,12 @@ def detect_far_touchline_y(
     mean_frac: float = 0.70,
 ) -> int:
     """
-    Find the far touchline Y position using variance-minimum-in-bright-zone.
+    Find the far touchline Y using variance-minimum-in-bright-zone.
 
-    The far touchline sits at the boundary between the high-variance stand/tree
-    zone above and the low-variance grass below. Within the bright zone (above
-    70% of peak row-mean brightness), the far touchline appears as a local
-    variance minimum — it's a narrow uniform stripe.
-
-    Returns: Y coordinate in equirect frame.
+    The far touchline sits at the boundary between the high-variance
+    stand/tree zone above and the low-variance grass below. Within the
+    bright zone (above 70% of peak row-mean brightness), it appears as
+    a local variance minimum — a narrow uniform stripe.
     """
     h, w = gray.shape
     cx_left  = int(w * x_frac_left)
@@ -91,86 +94,122 @@ def detect_far_touchline_y(
     ys    = np.array(ys)
     vars_ = np.array(vars_)
     means = np.array(means)
-
-    k = np.ones(smooth_k) / smooth_k
+    k     = np.ones(smooth_k) / smooth_k
     vars_s  = np.convolve(vars_,  k, mode='same')
     means_s = np.convolve(means, k, mode='same')
 
     mean_threshold = np.max(means_s) * mean_frac
     search_mask = means_s > mean_threshold
     if search_mask.sum() < 5:
-        # Fallback: use rough horizon
         return int(ys[len(ys) // 3])
 
-    search_ys   = ys[search_mask]
-    search_vars = vars_s[search_mask]
-    return int(search_ys[np.argmin(search_vars)])
+    return int(ys[search_mask][np.argmin(vars_s[search_mask])])
 
 
 # ──────────────────────────────────────────────────────────────────
-# Stage 3: Pitch corner X detection
+# Stage 3: Pitch colour sampling
+# ──────────────────────────────────────────────────────────────────
+
+def sample_pitch_colour(
+    hsv: np.ndarray,
+    roi: np.ndarray,
+    far_tl_y: int,
+    patch_size: int = 20,
+) -> tuple[int, int, int]:
+    """
+    Adaptively sample the pitch surface colour from multiple interior points.
+
+    Samples from 6 points spread across the pitch interior avoiding the
+    centre shadow band. Uses 75th percentile of V to avoid dark shadow
+    pixels pulling the estimate too low.
+
+    Returns: (hue, saturation, value) HSV of pitch surface.
+    """
+    h, w = hsv.shape[:2]
+    depth = h - far_tl_y
+
+    candidates = [
+        (int(w * 0.35), int(far_tl_y + depth * 0.30)),
+        (int(w * 0.65), int(far_tl_y + depth * 0.30)),
+        (int(w * 0.30), int(far_tl_y + depth * 0.40)),
+        (int(w * 0.70), int(far_tl_y + depth * 0.40)),
+        (int(w * 0.40), int(far_tl_y + depth * 0.50)),
+        (int(w * 0.60), int(far_tl_y + depth * 0.50)),
+    ]
+
+    best_v, best_hsv = -1, (40, 150, 80)
+    for sx, sy in candidates:
+        sy = min(sy, h - patch_size - 1)
+        if roi[sy, sx] == 0:
+            continue
+        patch = hsv[sy - patch_size:sy + patch_size,
+                    sx - patch_size:sx + patch_size]
+        v  = int(np.percentile(patch[:, :, 2], 75))
+        hh = int(np.median(patch[:, :, 0]))
+        s  = int(np.median(patch[:, :, 1]))
+        if v > best_v:
+            best_v   = v
+            best_hsv = (hh, s, v)
+
+    return best_hsv
+
+
+# ──────────────────────────────────────────────────────────────────
+# Stage 4: Pitch corner X detection (HSV-based)
 # ──────────────────────────────────────────────────────────────────
 
 def detect_pitch_corners_x(
-    gray: np.ndarray,
+    hsv: np.ndarray,
     roi: np.ndarray,
     far_tl_y: int,
-    band_rows: int = 20,
-    smooth_k: int = 30,
-    brightness_margin: float = 15.0,
+    pitch_hsv: tuple[int, int, int],
+    scan_depth_frac: float = 0.25,
+    h_tol: int = 20,
+    s_tol: int = 80,
 ) -> tuple[int, int]:
     """
-    Find the left and right X extents of the pitch at the far touchline Y.
+    Find pitch left/right X extents using HSV colour matching.
 
-    Scans horizontally: the pitch interior is dark shadowed grass, the
-    surrounds (stands, track, etc.) are brighter. Scanning outward from
-    centre, we find where brightness rises above the interior level.
+    Builds a pitch colour mask and finds the leftmost/rightmost pitch
+    pixels at a scan Y below the far touchline. Robust to:
+    - Natural grass in shadow (V is low but H/S are stable)
+    - Artificial turf in daylight (bright, uniform colour)
+    - Red running tracks (different H, excluded by hue tolerance)
 
-    Returns: (pitch_left_x, pitch_right_x)
+    Falls back to ROI edges if pitch extends to the camera body.
     """
-    h, w = gray.shape
+    h_img, w = hsv.shape[:2]
+    pitch_h, pitch_s, _ = pitch_hsv
 
-    # Average over a band of rows for robustness
-    y1 = max(0, far_tl_y - band_rows)
-    y2 = min(h, far_tl_y + band_rows)
-    row_band   = np.mean(gray[y1:y2, :].astype(float), axis=0)
-    row_smooth = np.convolve(row_band, np.ones(smooth_k) / smooth_k, mode='same')
-    row_roi    = roi[far_tl_y, :]
+    # Build pitch colour mask — no V constraint to handle deep shadow
+    pitch_mask = cv2.inRange(hsv,
+        (max(0,   pitch_h - h_tol), max(0,   pitch_s - s_tol), 0),
+        (min(179, pitch_h + h_tol), 255,                        255))
+    pitch_mask = cv2.bitwise_and(pitch_mask, roi)
 
-    cx = w // 2
-    interior_brightness = float(np.mean(row_smooth[int(w*0.40):int(w*0.60)]))
-    threshold = interior_brightness + brightness_margin
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+    pitch_mask = cv2.morphologyEx(pitch_mask, cv2.MORPH_CLOSE, k)
+    pitch_mask = cv2.morphologyEx(pitch_mask, cv2.MORPH_OPEN,  k)
 
-    # ROI bounds
-    roi_cols  = np.where(row_roi > 0)[0]
-    roi_left  = int(roi_cols.min()) if len(roi_cols) else 0
-    roi_right = int(roi_cols.max()) if len(roi_cols) else w - 1
+    # Scan at Y well below far touchline where pitch mask is reliable
+    scan_y = int(far_tl_y + (h_img - far_tl_y) * scan_depth_frac)
+    row_p  = pitch_mask[scan_y, :]
+    row_r  = roi[scan_y, :]
 
-    # Left: scan outward from centre leftward
-    pitch_left = roi_left
-    for x in range(cx, roi_left, -1):
-        if row_roi[x] == 0:
-            pitch_left = x + smooth_k
-            break
-        if row_smooth[x] > threshold:
-            pitch_left = x
-            break
+    p_cols = np.where(row_p > 0)[0]
+    r_cols = np.where(row_r > 0)[0]
 
-    # Right: scan outward from centre rightward
-    pitch_right = roi_right
-    for x in range(cx, roi_right):
-        if row_roi[x] == 0:
-            pitch_right = x - smooth_k
-            break
-        if row_smooth[x] > threshold:
-            pitch_right = x
-            break
-
-    return int(pitch_left), int(pitch_right)
+    if len(p_cols) > 10:
+        return int(p_cols.min()), int(p_cols.max())
+    elif len(r_cols) > 0:
+        # Fallback: pitch extends to camera body edges
+        return int(r_cols.min()), int(r_cols.max())
+    else:
+        return int(w * 0.25), int(w * 0.75)
 
 
 # ──────────────────────────────────────────────────────────────────
-# Stage 4: Near touchline Y detection
+# Stage 5: Near touchline Y detection
 # ──────────────────────────────────────────────────────────────────
 
 def detect_near_touchline_y(
@@ -182,33 +221,28 @@ def detect_near_touchline_y(
     contrast_threshold: float = 8.0,
 ) -> int:
     """
-    Find near touchline Y by scanning the halfway line's local contrast.
+    Find near touchline Y via halfway line local contrast.
 
-    The halfway line is a vertical white stripe at x ≈ w//2. Even in shadow
-    it is brighter than the grass immediately to its left and right. We scan
-    downward from the far touchline, tracking where the centre band is
-    brighter than its surroundings. The lowest such row is the near touchline.
-
-    Returns: Y coordinate of near touchline.
+    The halfway line is a vertical white stripe at x ≈ w//2. Even in
+    shadow and on artificial turf it is brighter than adjacent grass.
+    The lowest row where centre brightness exceeds surroundings is the
+    near touchline intersection with the halfway line.
     """
     h = gray.shape[0]
     last_positive_y = far_tl_y
 
     for y in range(far_tl_y, h - 10):
-        centre_val = float(np.mean(gray[y, centre_x - band_w:centre_x + band_w]))
-        left_val   = float(np.mean(gray[y, centre_x - band_w - surround_offset:centre_x - band_w]))
-        right_val  = float(np.mean(gray[y, centre_x + band_w:centre_x + band_w + surround_offset]))
-        surround   = (left_val + right_val) / 2.0
-        contrast   = centre_val - surround
-
-        if contrast > contrast_threshold:
+        c = float(np.mean(gray[y, centre_x - band_w:centre_x + band_w]))
+        l = float(np.mean(gray[y, centre_x - band_w - surround_offset:centre_x - band_w]))
+        r = float(np.mean(gray[y, centre_x + band_w:centre_x + band_w + surround_offset]))
+        if c - (l + r) / 2.0 > contrast_threshold:
             last_positive_y = y
 
     return last_positive_y
 
 
 # ──────────────────────────────────────────────────────────────────
-# Stage 5 + 6: Build ellipse polygon
+# Stage 6 + 7: Build ellipse polygon with ROI clamping
 # ──────────────────────────────────────────────────────────────────
 
 def build_pitch_polygon(
@@ -216,6 +250,7 @@ def build_pitch_polygon(
     pitch_left: int,
     pitch_right: int,
     near_tl_y: int,
+    roi: np.ndarray,
     n_top: int = 7,
     n_bottom: int = 11,
     semi_b_top_ratio: float = 0.068,
@@ -224,34 +259,21 @@ def build_pitch_polygon(
     """
     Build pitch boundary polygon from the four detected anchor values.
 
-    The pitch boundary is modelled as two half-ellipses:
-      - Top arc (far touchline): low semi-minor axis, curves slightly downward
-        at corners (projection of a straight line at distance)
-      - Bottom arc (near touchline): large semi-minor axis, pronounced curve
+    Models the pitch as two half-ellipses sharing the same semi-major axis:
+      - Top arc (far touchline): slight downward droop at corners due to
+        projection geometry of a straight line viewed at an angle
+      - Bottom arc (near touchline): pronounced curve
 
-    Both arcs share the same semi-major axis (half the pitch width).
-
-    Args:
-        far_tl_y:          Far touchline Y at centre (lowest point of top arc)
-        pitch_left:        Left pitch edge X
-        pitch_right:       Right pitch edge X
-        near_tl_y:         Near touchline Y at centre (lowest point of bottom arc)
-        n_top:             Number of points on top arc (incl. corners)
-        n_bottom:          Number of points on bottom arc (excl. shared corners)
-        semi_b_top_ratio:  Ratio of top semi-minor to semi-major (controls corner droop)
-        scale:             Overall scale factor applied to semi axes
-
-    Returns: List of [x, y] polygon points (closed, clockwise from top-left).
+    All points are clamped to stay within the camera ROI.
     """
+    h, w = roi.shape[:2]
     ellipse_cx = (pitch_left + pitch_right) // 2
     semi_a     = (pitch_right - pitch_left) / 2 * scale
     semi_b     = (near_tl_y - far_tl_y) * scale
     semi_b_top = semi_a * semi_b_top_ratio
 
-    # Top arc: left corner → far touchline → right corner
+    # Top arc: left corner → centre → right corner
     # y = far_tl_y + semi_b_top * cos²(θ)
-    # At θ=π/2 (centre): y = far_tl_y          (minimum, highest point)
-    # At θ=0,π (corners): y = far_tl_y + semi_b_top (droop at edges)
     top_thetas = np.linspace(np.pi, 0, n_top)
     top_pts = [
         [int(ellipse_cx + semi_a * np.cos(t)),
@@ -259,10 +281,8 @@ def build_pitch_polygon(
         for t in top_thetas
     ]
 
-    # Bottom arc: right corner → near touchline → left corner
+    # Bottom arc: right corner → near touchline bottom → left corner
     # y = far_tl_y + semi_b * sin(θ)
-    # At θ=0,π (corners): y = far_tl_y  (matches top arc corner Y before droop)
-    # At θ=π/2 (centre):  y = far_tl_y + semi_b (deepest point)
     bot_thetas = np.linspace(0, np.pi, n_bottom)
     bot_pts = [
         [int(ellipse_cx + semi_a * np.cos(t)),
@@ -270,10 +290,27 @@ def build_pitch_polygon(
         for t in bot_thetas
     ]
 
-    # Combine: top arc (left→right) + bottom arc interior (right→left)
-    # Skip first and last bot_pts (they duplicate the top arc corners in X)
+    # Combine: top arc + bottom arc interior (skip shared corner points)
     full_poly = top_pts + bot_pts[1:-1]
-    return [[int(p[0]), int(p[1])] for p in full_poly]
+
+    # Clamp all points to ROI — no point should land in the black camera body
+    clamped = []
+    for px, py in full_poly:
+        py_c = int(np.clip(py, 0, h - 1))
+        px_c = int(np.clip(px, 0, w - 1))
+
+        if roi[py_c, px_c] == 0:
+            # Scan inward toward frame centre to find ROI edge
+            direction = 1 if px_c < w // 2 else -1
+            for dx in range(0, w // 2, 2):
+                nx = px_c + direction * dx
+                if 0 <= nx < w and roi[py_c, nx] > 0:
+                    px_c = nx
+                    break
+
+        clamped.append([px_c, py_c])
+
+    return clamped
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -293,7 +330,6 @@ def visualise(
     diag = img.copy()
     h, w = img.shape[:2]
 
-    # Pitch polygon
     pts = np.array(poly, dtype=np.int32)
     cv2.polylines(diag, [pts], True, (0, 255, 0), 3)
     for i, (px, py) in enumerate(poly):
@@ -301,16 +337,13 @@ def visualise(
         cv2.putText(diag, str(i + 1), (px + 8, py),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
 
-    # Reference lines
     cv2.line(diag, (0, far_tl_y),  (w, far_tl_y),  (255, 255, 0), 1)
     cv2.line(diag, (0, near_tl_y), (w, near_tl_y), (0, 165, 255), 1)
     cv2.line(diag, (pitch_left,  0), (pitch_left,  h), (255, 165, 0), 1)
     cv2.line(diag, (pitch_right, 0), (pitch_right, h), (255, 165, 0), 1)
 
-    # Optional ground truth
     if manual_gt:
-        gt_pts = np.array(manual_gt, dtype=np.int32)
-        cv2.polylines(diag, [gt_pts], True, (0, 0, 255), 2)
+        cv2.polylines(diag, [np.array(manual_gt, dtype=np.int32)], True, (0, 0, 255), 2)
 
     legend = "Green=auto  Yellow=far TL  Orange=near TL"
     if manual_gt:
@@ -323,7 +356,7 @@ def visualise(
 
 
 # ──────────────────────────────────────────────────────────────────
-# Main
+# Main pipeline
 # ──────────────────────────────────────────────────────────────────
 
 def auto_calibrate(
@@ -335,15 +368,14 @@ def auto_calibrate(
 ) -> list[list[int]]:
     """
     Run full auto-calibration pipeline.
-
     Returns the pitch polygon as a list of [x, y] points.
     """
-    # Load
     img = cv2.imread(input_path)
     if img is None:
         raise RuntimeError(f"Cannot read image: {input_path}")
     h, w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    hsv  = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
     if verbose:
         print(f"Input: {input_path}  ({w}x{h})")
@@ -359,31 +391,37 @@ def auto_calibrate(
     if verbose:
         print(f"Stage 2: Far touchline Y = {far_tl_y}")
 
-    # Stage 3: Pitch corners X
-    pitch_left, pitch_right = detect_pitch_corners_x(gray, roi, far_tl_y)
+    # Stage 3: Pitch colour
+    pitch_hsv = sample_pitch_colour(hsv, roi, far_tl_y)
+    if verbose:
+        print(f"Stage 3: Pitch colour HSV = {pitch_hsv}")
+
+    # Stage 4: Pitch corners X
+    pitch_left, pitch_right = detect_pitch_corners_x(hsv, roi, far_tl_y, pitch_hsv)
     ellipse_cx = (pitch_left + pitch_right) // 2
     if verbose:
-        print(f"Stage 3: Pitch corners X = {pitch_left} (left), {pitch_right} (right)")
+        print(f"Stage 4: Pitch corners X = {pitch_left} (left), {pitch_right} (right)")
         print(f"         Ellipse centre X = {ellipse_cx}  (frame centre = {w//2})")
 
-    # Stage 4: Near touchline Y
+    # Stage 5: Near touchline Y
     near_tl_y = detect_near_touchline_y(gray, far_tl_y, centre_x=w // 2)
     semi_b = near_tl_y - far_tl_y
     semi_a = (pitch_right - pitch_left) / 2
     if verbose:
-        print(f"Stage 4: Near touchline Y = {near_tl_y}  (depth = {semi_b}px)")
+        print(f"Stage 5: Near touchline Y = {near_tl_y}  (depth = {semi_b}px)")
         print(f"         Ellipse ratio b/a = {semi_b/semi_a:.3f}")
 
-    # Stage 5+6: Build polygon
+    # Stage 6+7: Build polygon with ROI clamping
     poly = build_pitch_polygon(
         far_tl_y=far_tl_y,
         pitch_left=pitch_left,
         pitch_right=pitch_right,
         near_tl_y=near_tl_y,
+        roi=roi,
         scale=scale,
     )
     if verbose:
-        print(f"Stage 5: Polygon — {len(poly)} points")
+        print(f"Stage 6: Polygon — {len(poly)} points (ROI-clamped)")
 
     # Save JSON
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
@@ -393,7 +431,6 @@ def auto_calibrate(
     if verbose:
         print(f"Saved: {output_path}")
 
-    # Visualise
     if vis_path:
         visualise(img, poly, far_tl_y, near_tl_y, pitch_left, pitch_right, vis_path)
 
@@ -401,19 +438,24 @@ def auto_calibrate(
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Auto pitch calibration for Insta360 equirect frames")
-    p.add_argument("--input",  required=True, help="Equirect frame (2880x1440 PNG/JPG)")
-    p.add_argument("--output", default="calibration/pitch.json", help="Output JSON path")
-    p.add_argument("--vis",    default=None,  help="Optional visualisation output path")
+    p = argparse.ArgumentParser(
+        description="Auto pitch calibration for Insta360 equirect frames")
+    p.add_argument("--input",  required=True,
+                   help="Equirect frame (2880x1440 PNG/JPG)")
+    p.add_argument("--output", default="calibration/pitch.json",
+                   help="Output JSON path")
+    p.add_argument("--vis",    default=None,
+                   help="Optional visualisation output path")
     p.add_argument("--scale",  type=float, default=1.0,
-                   help="Scale factor for ellipse axes (default 1.0, increase slightly if polygon too small)")
-    p.add_argument("--quiet",  action="store_true", help="Suppress progress output")
+                   help="Scale factor for ellipse axes (increase if polygon too small)")
+    p.add_argument("--quiet",  action="store_true",
+                   help="Suppress progress output")
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    poly = auto_calibrate(
+    auto_calibrate(
         input_path=args.input,
         output_path=args.output,
         vis_path=args.vis,
