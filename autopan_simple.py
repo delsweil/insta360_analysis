@@ -76,7 +76,7 @@ class Config:
     # Output video
     out_w: int = 1280
     out_h: int = 960
-    fov_deg: float = 80.0
+    fov_deg: float = 75.0   # slightly narrower = more zoom
     pitch_deg: float = -20.0     # vertical tilt of output view
     out_fps: Optional[float] = None   # None = match input fps
     out_bitrate: str = "8000k"
@@ -91,7 +91,7 @@ class Config:
     max_pitch_step: float = 1.2
     target_alpha: float = 0.08  # slower smoothing = less jerk
     vel_alpha: float = 0.15
-    max_yaw_dev: float = 50.0   # max pan range
+    max_yaw_dev: float = 60.0   # max pan range
     max_pitch_dev: float = 14.0
     deadband_x: float = 0.08
     deadband_y: float = 0.06
@@ -524,7 +524,7 @@ def run(cfg: Config) -> None:
         )
 
         # ── detection (sampled) ──
-        if idx % cfg.sample_every == 0:
+        if idx % cfg.sample_every == 0 or idx == 0:
             mask_bin = project_mask(
                 mask360, cam.yaw, cam.pitch,
                 cfg.fov_deg, cfg.out_h, cfg.out_w,
