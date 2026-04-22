@@ -61,51 +61,8 @@ def compute_roi_mask(gray: np.ndarray) -> np.ndarray:
 
 
 # ──────────────────────────────────────────────────────────────────
-# Stage 2: Far touchline Y — sky-aware
+# Stage 2: Far touchline Y — unified bright-sky approach
 # ──────────────────────────────────────────────────────────────────
-
-def detect_sky_bottom(
-    hsv: np.ndarray,
-    roi: np.ndarray,
-    cx_left: int,
-    cx_right: int,
-    search_top: int = 300,
-    search_bot: int = 800,
-    sky_frac_threshold: float = 0.90,
-    max_variance: float = 100.0,
-) -> int | None:
-    """
-    Find the lowest row that is clear blue sky in the centre band.
-
-    Requires BOTH:
-      - sky_frac > 0.90 (nearly all pixels are blue sky hue)
-      - row variance < 100 (uniform — not patchy clouds)
-
-    This combination reliably distinguishes clear blue sky from overcast
-    or partly cloudy conditions. On overcast days sky_frac rarely exceeds
-    0.78 and variance is 100-400+; on clear days both conditions hold
-    across many consecutive rows with variance typically 20-35.
-
-    Blue sky HSV: H=90-130, S=50-255, V>100.
-    Returns Y coordinate or None if no clear blue sky detected.
-    """
-    sky_mask = cv2.inRange(hsv, (90, 50, 100), (130, 255, 255))
-    # Convert HSV back to gray for variance check
-    bgr      = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-    gray     = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-
-    sky_bottom = None
-    for y in range(search_top, search_bot):
-        strip  = sky_mask[y, cx_left:cx_right]
-        roi_px = (roi[y, cx_left:cx_right] > 0).sum()
-        if roi_px < 50:
-            continue
-        sky_frac = (strip > 0).sum() / roi_px
-        variance = float(np.var(gray[y, cx_left:cx_right]))
-        if sky_frac > sky_frac_threshold and variance < max_variance:
-            sky_bottom = y
-    return sky_bottom
-
 
 def detect_far_touchline_y(
     gray: np.ndarray,
@@ -113,56 +70,86 @@ def detect_far_touchline_y(
     roi: np.ndarray,
     cx_left: int,
     cx_right: int,
+    bright_mean_threshold: float = 150.0,
+    stable_var_frac: float = 0.35,
     default_search_top: int = 550,
     default_search_bot: int = 950,
     smooth_k: int = 10,
     mean_frac: float = 0.70,
-    stable_var_frac: float = 0.35,
-) -> int:
+) -> tuple[int, str]:
     """
-    Far touchline Y with sky-aware search strategy.
+    Detect far touchline Y position using a unified sky-aware strategy.
 
-    Two modes depending on sky conditions:
+    Two modes:
 
-    Clear sky present:
-      The sky/stand boundary causes an immediate variance spike just below
-      sky_bottom. The far touchline is where variance drops back to a stable
-      low level after that spike (i.e. the first row of pitch grass).
-      Strategy: find where variance falls below 35% of peak after the spike.
+    Bright sky (mean > 150 in any row 400-800):
+      Covers clear blue sky, overcast, and mixed cloud — any condition
+      where the sky contributes bright rows above the pitch.
+      Strategy: anchor below the last bright row, then find where
+      variance drops back below 35% of peak after the tree/stand spike.
+      Validated errors: clear sky 0px, overcast -12px, mixed cloud -25px.
 
-    No clear sky (overcast, trees to horizon):
-      The far touchline sits at the boundary between the high-variance
-      stand/tree zone and the low-variance grass below. It appears as a
-      local variance minimum within the bright-zone rows.
-      Strategy: variance minimum within rows above 70% of peak brightness.
+    No bright sky (G1-style deep shadow / evening):
+      The sky region is dark or absent. Use variance minimum within the
+      bright-zone rows (original strategy).
+      Validated error: 0px on G1 evening.
+
+    Returns: (far_tl_y, mode_string)
     """
-    sky_bottom = detect_sky_bottom(hsv, roi, cx_left, cx_right)
+    h = gray.shape[0]
 
-    if sky_bottom is not None:
-        # ── Sky mode ──────────────────────────────────────────────
-        search_top = sky_bottom
-        search_bot = sky_bottom + 400
+    # ── Detect clear blue sky (strict) ───────────────────────────
+    sky_mask   = cv2.inRange(hsv, (90, 50, 100), (130, 255, 255))
+    bgr_from_hsv = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    gray_hsv   = cv2.cvtColor(bgr_from_hsv, cv2.COLOR_BGR2GRAY)
+    clear_sky_bottom = None
+    for y in range(300, 800):
+        strip  = sky_mask[y, cx_left:cx_right]
+        roi_px = (roi[y, cx_left:cx_right] > 0).sum()
+        if roi_px < 50:
+            continue
+        if ((strip > 0).sum() / roi_px > 0.90
+                and float(np.var(gray_hsv[y, cx_left:cx_right])) < 100):
+            clear_sky_bottom = y
 
+    # ── Detect any bright sky (relaxed — catches overcast + mixed) ─
+    bright_sky_bottom = None
+    for y in range(400, 800):
+        strip  = gray[y, cx_left:cx_right]
+        roi_px = (roi[y, cx_left:cx_right] > 0).sum()
+        if roi_px < 100:
+            continue
+        if float(np.mean(strip)) > bright_mean_threshold:
+            bright_sky_bottom = y
+
+    anchor = clear_sky_bottom or bright_sky_bottom
+    mode   = ("clear_sky" if clear_sky_bottom
+              else "bright_sky" if bright_sky_bottom
+              else "no_sky")
+
+    if anchor is not None:
+        # ── Bright sky mode: variance drops after peak ────────────
         ys, vars_ = [], []
-        for y in range(search_top, min(search_bot, gray.shape[0])):
-            if roi[y, (cx_left + cx_right) // 2] == 0:
+        for y in range(anchor, min(anchor + 400, h)):
+            strip  = gray[y, cx_left:cx_right]
+            roi_px = (roi[y, cx_left:cx_right] > 0).sum()
+            if roi_px < 100:
                 continue
-            strip = gray[y, cx_left:cx_right]
             ys.append(y)
             vars_.append(float(np.var(strip)))
 
         if not ys:
-            return sky_bottom + 80
+            return anchor + 80, mode
 
-        ys    = np.array(ys)
-        vars_ = np.array(vars_)
-        k     = np.ones(8) / 8
+        ys     = np.array(ys)
+        vars_  = np.array(vars_)
+        k      = np.ones(8) / 8
         vars_s = np.convolve(vars_, k, mode='same')
 
-        peak_var          = float(np.max(vars_s))
-        stable_threshold  = peak_var * stable_var_frac
-        in_high_var       = False
-        far_tl_y          = int(ys[0]) + 50  # fallback
+        peak_var         = float(np.max(vars_s))
+        stable_threshold = peak_var * stable_var_frac
+        in_high_var      = False
+        far_tl_y         = int(ys[0]) + 50  # fallback
 
         for i in range(len(ys)):
             if vars_s[i] > stable_threshold:
@@ -171,12 +158,12 @@ def detect_far_touchline_y(
                 far_tl_y = int(ys[i])
                 break
 
-        return far_tl_y
+        return far_tl_y, mode
 
     else:
-        # ── No-sky mode ───────────────────────────────────────────
+        # ── No-sky mode: variance minimum in bright zone ──────────
         ys, vars_, means = [], [], []
-        for y in range(default_search_top, min(default_search_bot, gray.shape[0])):
+        for y in range(default_search_top, min(default_search_bot, h)):
             if roi[y, (cx_left + cx_right) // 2] == 0:
                 ys.append(y); vars_.append(0.0); means.append(0.0)
                 continue
@@ -195,9 +182,9 @@ def detect_far_touchline_y(
         mean_threshold = np.max(means_s) * mean_frac
         search_mask    = means_s > mean_threshold
         if search_mask.sum() >= 5:
-            return int(ys[search_mask][np.argmin(vars_s[search_mask])])
+            return int(ys[search_mask][np.argmin(vars_s[search_mask])]), mode
 
-        return int(ys[len(ys) // 3])
+        return int(ys[len(ys) // 3]), mode
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -483,11 +470,9 @@ def auto_calibrate(
     cx_right = int(w * 0.65)
 
     # Stage 2: Far touchline Y
-    sky_bottom = detect_sky_bottom(hsv, roi, cx_left, cx_right)
-    far_tl_y   = detect_far_touchline_y(gray, hsv, roi, cx_left, cx_right)
+    far_tl_y, sky_mode = detect_far_touchline_y(gray, hsv, roi, cx_left, cx_right)
     if verbose:
-        sky_str = f"Y={sky_bottom}" if sky_bottom else "none"
-        print(f"Stage 2: Far touchline Y = {far_tl_y}  (sky bottom: {sky_str})")
+        print(f"Stage 2: Far touchline Y = {far_tl_y}  (mode: {sky_mode})")
 
     # Stage 3: Pitch colour
     pitch_hsv = sample_pitch_colour(hsv, roi, far_tl_y)
@@ -531,7 +516,7 @@ def auto_calibrate(
 
     if vis_path:
         visualise(img, poly, far_tl_y, near_tl_y, pitch_left, pitch_right,
-                  vis_path, sky_bottom=sky_bottom)
+                  vis_path)
 
     return poly
 
