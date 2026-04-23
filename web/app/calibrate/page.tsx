@@ -186,6 +186,15 @@ export default function CalibratePage() {
     setSaveMsg('')
   }, [currentIdx, queue])
 
+  // Sync edited points back into the queue item
+  useEffect(() => {
+    if (currentIdx < 0 || !queue[currentIdx]) return
+    if (queue[currentIdx].status !== 'review') return
+    setQueue(prev => prev.map((q, i) =>
+      i === currentIdx ? { ...q, polygon: points } : q
+    ))
+  }, [points])
+  
   // ── Scan folder ────────────────────────────────────────────────
   const handleScan = async () => {
     if (!folderPath.trim()) return
