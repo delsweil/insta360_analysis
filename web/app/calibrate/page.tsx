@@ -214,12 +214,6 @@ export default function CalibratePage() {
     ))
   }
 
-  const toggleRecordingSelected = (seqKey: string) => {
-    setRecordings(prev => prev.map(r =>
-      r.sequence === seqKey ? { ...r, _queued: !r._queued } as any : r
-    ))
-  }
-
   // ── Process a queue item ───────────────────────────────────────
   const processItem = useCallback(async (idx: number, q: QueueItem[]) => {
     const item = q[idx]
