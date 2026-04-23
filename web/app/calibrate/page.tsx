@@ -113,12 +113,14 @@ export default function CalibratePage() {
   const [scanError, setScanError]     = useState('')
   const [date, setDate]               = useState(() => new Date().toISOString().slice(0, 10))
   const [opponent, setOpponent]       = useState('')
+  const [homeAway, setHomeAway]       = useState<'home' | 'away'>('home')
   const [venueId, setVenueId]         = useState('')
   const [newVenueName, setNewVenueName] = useState('')
   const [frameTime, setFrameTime]     = useState('00:04:00')
   const [formError, setFormError]     = useState('')
 
   // Step 2: processing queue
+  const [gameId, setGameId]           = useState<string | null>(null)
   const [queue, setQueue]         = useState<QueueItem[]>([])
   const [currentIdx, setCurrentIdx] = useState(0)
   const [step, setStep]           = useState<'form' | 'processing'>('form')
@@ -214,6 +216,7 @@ export default function CalibratePage() {
     ))
   }
 
+
   // ── Process a queue item ───────────────────────────────────────
   const processItem = useCallback(async (idx: number, q: QueueItem[]) => {
     const item = q[idx]
@@ -269,6 +272,23 @@ export default function CalibratePage() {
       }
     }
 
+    // Create game record
+    const { data: { user } } = await supabase.auth.getUser()
+    const homeTeam = homeAway === 'home' ? 'ASN Pfeil Phönix' : opponent.trim()
+    const awayTeam = homeAway === 'home' ? opponent.trim() : 'ASN Pfeil Phönix'
+    const { data: gameData } = await supabase.from('games').insert({
+      title:       `${homeTeam} vs. ${awayTeam}`,
+      opponent:    opponent.trim(),
+      home_team:   homeTeam,
+      away_team:   awayTeam,
+      home_away:   homeAway,
+      date,
+      venue_id:    finalVenueId || null,
+      status:      'raw',
+      uploaded_by: user?.id,
+    }).select('id').single()
+    if (gameData) setGameId(gameData.id)
+
     const items: QueueItem[] = selected.map(rec => {
       const file = rec.files.find(f => f.path === rec.selected_file) ?? rec.files[0]
       return { id: crypto.randomUUID(), recording: rec, file, status: 'queued', timestamp: frameTime }
@@ -292,16 +312,34 @@ export default function CalibratePage() {
     goTo(currentIdx + 1)
   }
 
-  const reExtract = async () => {
+  // Core re-extract — accepts optional overrides for file and rotation
+  const reExtractWith = async (overrides: { file?: InsvFile; rotation?: string; timestamp?: string } = {}) => {
     if (!current) return
     const update = (patch: Partial<QueueItem>) =>
       setQueue(prev => prev.map((q, i) => i === currentIdx ? { ...q, ...patch } : q))
+
+    const targetFile     = overrides.file      ?? current.file
+    const targetRotation = overrides.rotation  ?? current.rotation
+    const targetTs       = overrides.timestamp ?? current.timestamp
+
+    // Apply file/rotation overrides to queue item immediately
+    if (overrides.file || overrides.rotation) {
+      update({
+        ...(overrides.file     ? { file: overrides.file }         : {}),
+        ...(overrides.rotation ? { rotation: overrides.rotation } : {}),
+      })
+    }
+
     update({ status: 'extracting', polygon: undefined, frame_url: undefined })
     setPoints([]); setClosed(false)
     try {
       const r = await fetch(`${WORKER}/extract-frame`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ insv_path: current.file.path, timestamp: current.timestamp }),
+        body: JSON.stringify({
+          insv_path: targetFile.path,
+          timestamp: targetTs,
+          ...(targetRotation ? { rotation: targetRotation } : {}),
+        }),
       })
       if (!r.ok) throw new Error((await r.json()).detail ?? 'Extract failed')
       const ex = await r.json()
@@ -319,6 +357,10 @@ export default function CalibratePage() {
       update({ status: 'error', error: err.message })
     }
   }
+
+  const reExtract       = () => reExtractWith()
+  const switchFile      = (file: InsvFile) => { if (file.path !== current?.file.path) reExtractWith({ file }) }
+  const switchRotation  = (rotation: string) => { if (rotation !== current?.rotation) reExtractWith({ rotation }) }
 
   // ── Editor ─────────────────────────────────────────────────────
   const undoPoint    = () => { if (closed) setClosed(false); else setPoints(p => p.slice(0, -1)); setSaveMsg('') }
@@ -340,12 +382,25 @@ export default function CalibratePage() {
           imageStorageUrl = publicUrl
         }
       }
+      const normPoly = pixelToNorm(points)
+
+      // Update venue polygon (template for future games)
       const { error } = await supabase.from('venues').update({
-        pitch_polygon: pixelToNorm(points),
+        pitch_polygon: normPoly,
         ...(imageStorageUrl ? { calibration_image_url: imageStorageUrl } : {}),
         updated_at: new Date().toISOString(),
       }).eq('id', effectiveVenueId)
       if (error) throw error
+
+      // Update game record with this game's specific polygon
+      if (gameId) {
+        await supabase.from('games').update({
+          pitch_polygon: normPoly,
+          status: 'calibrated',
+          updated_at: new Date().toISOString(),
+        }).eq('id', gameId)
+      }
+
       setQueue(prev => prev.map((q, i) => i === currentIdx ? { ...q, status: 'accepted' } : q))
       setSaveMsg('Gespeichert ✓')
       setTimeout(() => goTo(currentIdx + 1), 700)
@@ -518,6 +573,35 @@ export default function CalibratePage() {
                     </div>
                   </div>
 
+                  {/* Home / Away toggle */}
+                  <div>
+                    <label style={labelStyle}>ASN spielt</label>
+                    <div style={{ display: 'flex', gap: 0, borderRadius: 8, overflow: 'hidden', border: `1px solid ${border}` }}>
+                      {(['home', 'away'] as const).map(side => (
+                        <button
+                          key={side}
+                          type="button"
+                          onClick={() => setHomeAway(side)}
+                          style={{
+                            flex: 1, padding: '10px 0', fontSize: 13, fontWeight: 600,
+                            fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', border: 'none',
+                            background: homeAway === side ? navy : '#fff',
+                            color: homeAway === side ? '#fff' : muted,
+                          }}
+                        >
+                          {side === 'home' ? '🏠 Heimspiel' : '✈️ Auswärtsspiel'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Title preview */}
+                  {opponent && (
+                    <div style={{ fontSize: 13, color: navy, fontWeight: 600, padding: '8px 12px', background: '#e8edf8', borderRadius: 8 }}>
+                      {homeAway === 'home' ? `ASN Pfeil Phönix vs. ${opponent}` : `${opponent} vs. ASN Pfeil Phönix`}
+                    </div>
+                  )}
+
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                     <div>
                       <label style={labelStyle}>Spielstätte</label>
@@ -609,15 +693,63 @@ export default function CalibratePage() {
                 ) : (
                   <>
                     {/* File header */}
-                    <div style={{ background: '#fff', border: `1px solid ${border}`, borderRadius: 12, padding: '12px 16px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: navy }}>{current.recording.recorded_at} — {current.recording.estimated_duration}</div>
-                        <div style={{ fontSize: 11, color: muted, marginTop: 1 }}>{current.file.name} · {current.file.size_mb}MB</div>
+                    <div style={{ background: '#fff', border: `1px solid ${border}`, borderRadius: 12, padding: '12px 16px', marginBottom: 12 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: navy }}>{current.recording.recorded_at} — {current.recording.estimated_duration}</div>
+                          <div style={{ fontSize: 11, color: muted, marginTop: 1 }}>{current.file.name} · {current.file.size_mb}MB</div>
+                        </div>
+                        <StatusPill status={current.status} />
+                        {current.confidence !== undefined && <ConfidencePill value={current.confidence} />}
+                        <span style={{ fontSize: 11, color: muted }}>{currentIdx + 1}/{queue.length}</span>
                       </div>
-                      <StatusPill status={current.status} />
-                      {current.confidence !== undefined && <ConfidencePill value={current.confidence} />}
-                      {current.rotation && <span style={{ fontSize: 11, color: muted }}>Rotation: {current.rotation}</span>}
-                      <span style={{ fontSize: 11, color: muted }}>{currentIdx + 1}/{queue.length}</span>
+
+                      {/* Lens + rotation controls */}
+                      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', borderTop: `1px solid ${border}`, paddingTop: 10 }}>
+
+                        {/* Lens switcher — only shown when recording has multiple files */}
+                        {current.recording.files.length > 1 && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 11, color: muted, fontWeight: 600 }}>Linse</span>
+                            {current.recording.files.map(f => (
+                              <button
+                                key={f.path}
+                                onClick={() => switchFile(f)}
+                                style={{
+                                  padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+                                  cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
+                                  background: current.file.path === f.path ? navy : '#fff',
+                                  color: current.file.path === f.path ? '#fff' : muted,
+                                  border: `1px solid ${current.file.path === f.path ? navy : border}`,
+                                }}
+                              >
+                                {f.name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Rotation toggle */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: 11, color: muted, fontWeight: 600 }}>Rotation</span>
+                          {([['cw', '↻ CW'], ['ccw', '↺ CCW']] as const).map(([val, label]) => (
+                            <button
+                              key={val}
+                              onClick={() => switchRotation(val)}
+                              style={{
+                                padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+                                cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
+                                background: current.rotation === val ? navy : '#fff',
+                                color: current.rotation === val ? '#fff' : muted,
+                                border: `1px solid ${current.rotation === val ? navy : border}`,
+                              }}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+
+                      </div>
                     </div>
 
                     {/* Spinner */}
