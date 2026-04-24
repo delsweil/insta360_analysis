@@ -784,8 +784,20 @@ export default function CalibratePage() {
                             imageNaturalWidth={IMAGE_W}
                             imageNaturalHeight={IMAGE_H}
                             points={points}
-                            onAddPoint={p => { if (!closed) setPoints(prev => [...prev, p]); setSaveMsg('') }}
-                            onUpdatePoint={(i, p) => { setPoints(prev => prev.map((pt, idx) => idx === i ? p : pt)); setSaveMsg('') }}
+                            onAddPoint={p => {
+                              if (!closed) {
+                                const next = [...points, p]
+                                setPoints(next)
+                                setQueue(prev => prev.map((q, i) => i === currentIdx ? { ...q, polygon: next } : q))
+                                setSaveMsg('')
+                              }
+                            }}
+                            onUpdatePoint={(i, p) => {
+                              const next = points.map((pt, idx) => idx === i ? p : pt)
+                              setPoints(next)
+                              setQueue(prev => prev.map((q, i) => i === currentIdx ? { ...q, polygon: next } : q))
+                              setSaveMsg('')
+                            }}
                             closed={closed}
                           />
                         </div>
