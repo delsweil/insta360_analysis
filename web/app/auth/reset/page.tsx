@@ -24,6 +24,20 @@ export default function ResetPasswordPage() {
     setTimeout(() => router.push('/'), 2000)
   }
 
+  useEffect(() => {
+    // Supabase sends tokens in the URL hash — extract and set session
+    const hashParams = new URLSearchParams(window.location.hash.substring(1))
+    const accessToken = hashParams.get('access_token')
+    const refreshToken = hashParams.get('refresh_token')
+    
+    if (accessToken && refreshToken) {
+      supabase.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      })
+    }
+  }, [])
+
   return (
     <div style={{
       minHeight: '100vh', background: '#F8F8F6',
