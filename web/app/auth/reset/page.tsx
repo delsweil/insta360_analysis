@@ -25,15 +25,24 @@ export default function ResetPasswordPage() {
   }
 
   useEffect(() => {
-    // Supabase sends tokens in the URL hash — extract and set session
-    const hashParams = new URLSearchParams(window.location.hash.substring(1))
+    const hash = window.location.hash
+    console.log('Full hash:', hash)
+    
+    const hashParams = new URLSearchParams(hash.substring(1))
     const accessToken = hashParams.get('access_token')
     const refreshToken = hashParams.get('refresh_token')
+    const type = hashParams.get('type')
+    
+    console.log('access_token:', accessToken?.substring(0, 20) + '...')
+    console.log('refresh_token:', refreshToken)
+    console.log('type:', type)
     
     if (accessToken && refreshToken) {
       supabase.auth.setSession({
         access_token: accessToken,
         refresh_token: refreshToken,
+      }).then(({ data, error }) => {
+        console.log('setSession result:', data, error)
       })
     }
   }, [])
