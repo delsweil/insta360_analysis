@@ -1,0 +1,22 @@
+[
+  {
+    "insv": "/Volumes/Untitled/DCIM/Camera01/VID_20241028_124047_10_010.insv",
+    "project": "/Users/davidelsweiler/Desktop/Project/52180dc0ccd03a6f9948b433c6616615/VID_20241028_124047_00_010.insv.insprj",
+    "calib": "/tmp/pitch_010.json"
+  },
+  {
+    "insv": "/Volumes/Untitled/DCIM/Camera01/VID_20241028_131005_10_011.insv",
+    "project": "/Users/davidelsweiler/Desktop/Project/e79c934b65277900cca5fbf83f211ec2/VID_20241028_131005_00_011.insv.insprj",
+    "calib": "/tmp/pitch_010.json"
+  },
+  {
+    "insv": "/Volumes/Untitled/DCIM/Camera01/VID_20241028_133508_10_013.insv",
+    "project": "/Users/davidelsweiler/Desktop/Project/53fe2097a98c74634dfd8a62d1f8e25f/VID_20241028_133508_00_013.insv.insprj",
+    "calib": "/tmp/pitch_010.json"
+  },
+  {
+    "insv": "/Volumes/Untitled/DCIM/Camera01/VID_20241028_140425_10_014.insv",
+    "project": "/Users/davidelsweiler/Desktop/Project/a156c96c17fbd86e7be17cfe76c4d23c/VID_20241028_140425_00_014.insv.insprj",
+    "calib": "/tmp/pitch_010.json"
+  }
+]
