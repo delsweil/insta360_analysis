@@ -1,0 +1,22 @@
+[
+  {
+    "insv": "/Volumes/Untitled/DCIM/Camera01/VID_20241028_144020_10_001.insv",
+    "project": "/Users/davidelsweiler/Documents/Insta360/Studio/Project/f725993765ffc068c8bda82a0cff664b/VID_20241028_144020_00_001.insv.insprj",
+    "calib": "/Users/davidelsweiler/insta360_analysis/calibration/pitch_game2.json"
+  },
+  {
+    "insv": "/Volumes/Untitled/DCIM/Camera01/VID_20241028_150939_10_002.insv",
+    "project": "/Users/davidelsweiler/Documents/Insta360/Studio/Project/390731f074f9cfa1adb92c5642b85c7e/VID_20241028_150939_00_002.insv.insprj",
+    "calib": "/Users/davidelsweiler/insta360_analysis/calibration/pitch_game2.json"
+  },
+  {
+    "insv": "/Volumes/Untitled/DCIM/Camera01/VID_20241028_153158_10_003.insv",
+    "project": "/Users/davidelsweiler/Documents/Insta360/Studio/Project/f32d506722a0e0ed0e6fc782a0603b7f/VID_20241028_153158_00_003.insv.insprj",
+    "calib": "/Users/davidelsweiler/insta360_analysis/calibration/pitch_game2.json"
+  },
+  {
+    "insv": "/Volumes/Untitled/DCIM/Camera01/VID_20241028_160117_10_004.insv",
+    "project": "/Users/davidelsweiler/Documents/Insta360/Studio/Project/be3ec0e4dd6da1473a1613191a1cb44d/VID_20241028_160117_00_004.insv.insprj",
+    "calib": "/Users/davidelsweiler/insta360_analysis/calibration/pitch_game2.json"
+  }
+]
