@@ -244,17 +244,18 @@ class Detector:
 def compute_features(players, ball, H, fw, fh, prefix,
                      centre_pan=0.0, centre_tilt=0.0, fov_h=120.0):
     pitch_players = []
-    eq_pans = []
+    eq_pans  = []
+    eq_tilts = []
     if H is not None:
         for p in players:
             px, py = map_to_pitch(p['foot_x'], p['foot_y'], H, fw, fh)
             if -0.1 <= px <= 1.1 and -0.1 <= py <= 1.1:
                 pitch_players.append((float(np.clip(px, 0, 1)),
                                       float(np.clip(py, 0, 1))))
-            # Also compute equirect pan angle
-            ep, _ = pixel_to_eq_pan(p['foot_x'], p['foot_y'], fw, fh,
-                                     centre_pan, centre_tilt, fov_h)
+            ep, et = pixel_to_eq_pan(p['foot_x'], p['foot_y'], fw, fh,
+                                      centre_pan, centre_tilt, fov_h)
             eq_pans.append(ep)
+            eq_tilts.append(et)
 
     if pitch_players:
         xs = [p[0] for p in pitch_players]
@@ -273,9 +274,13 @@ def compute_features(players, ball, H, fw, fh, prefix,
     if eq_pans:
         action_pan      = float(np.mean(eq_pans))
         action_pan_std  = float(np.std(eq_pans)) if len(eq_pans) > 1 else 0.0
+        action_tilt     = float(np.mean(eq_tilts))
+        action_tilt_std = float(np.std(eq_tilts)) if len(eq_tilts) > 1 else 0.0
     else:
-        action_pan      = centre_pan  # fallback to current pan
+        action_pan      = centre_pan
         action_pan_std  = 0.0
+        action_tilt     = centre_tilt
+        action_tilt_std = 0.0
 
     bx = by = bc = 0.0
     bd = 0
@@ -292,9 +297,12 @@ def compute_features(players, ball, H, fw, fh, prefix,
 
     return {
         f'{prefix}_player_count':      len(eq_pans),
-        f'{prefix}_action_pan':        action_pan,        # KEY: equirect pan of action
-        f'{prefix}_action_pan_offset': action_pan - centre_pan,  # offset from current pan
+        f'{prefix}_action_pan':        action_pan,
+        f'{prefix}_action_pan_offset': action_pan - centre_pan,
         f'{prefix}_action_pan_std':    action_pan_std,
+        f'{prefix}_action_tilt':       action_tilt,
+        f'{prefix}_action_tilt_offset': action_tilt - centre_tilt,
+        f'{prefix}_action_tilt_std':   action_tilt_std,
         f'{prefix}_centroid_x':        cx,
         f'{prefix}_centroid_y':        cy,
         f'{prefix}_spread_x':          sx,
@@ -434,12 +442,14 @@ FIELDNAMES = [
     'clip', 'timestamp_s', 'is_keyframe', 'time_since_kf',
     'pan_prev', 'pan_velocity',
     'wide_player_count', 'wide_action_pan', 'wide_action_pan_offset',
-    'wide_action_pan_std', 'wide_centroid_x', 'wide_centroid_y',
+    'wide_action_pan_std', 'wide_action_tilt', 'wide_action_tilt_offset',
+    'wide_action_tilt_std', 'wide_centroid_x', 'wide_centroid_y',
     'wide_spread_x', 'wide_spread_y', 'wide_players_left_frac',
     'wide_ball_eq_pan', 'wide_ball_x', 'wide_ball_y',
     'wide_ball_conf', 'wide_ball_detected',
     'studio_player_count', 'studio_action_pan', 'studio_action_pan_offset',
-    'studio_action_pan_std', 'studio_centroid_x', 'studio_centroid_y',
+    'studio_action_pan_std', 'studio_action_tilt', 'studio_action_tilt_offset',
+    'studio_action_tilt_std', 'studio_centroid_x', 'studio_centroid_y',
     'studio_spread_x', 'studio_spread_y', 'studio_players_left_frac',
     'studio_ball_eq_pan', 'studio_ball_x', 'studio_ball_y',
     'studio_ball_conf', 'studio_ball_detected',
