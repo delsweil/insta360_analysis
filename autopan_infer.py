@@ -1,54 +1,68 @@
 #!/usr/bin/env python3
 """
-autopan_infer.py — Apply trained autopan model to unannotated footage.
+autopan_infer.py — Autopan inference using direct PD control (v5 approach).
 
-Extracts 5 random 30-second segments from a game clip, runs the
-trained pan MLP, smooths the output, and renders perspective video.
+Instead of predicting absolute pan values with ML, this script:
+1. Projects the current view
+2. Detects players and ball in that view
+3. Computes error between target and frame centre
+4. Moves camera proportionally (PD control with velocity damping)
+5. Applies exponential smoothing on target position
+
+This is more robust than absolute pan prediction — it only needs to know
+"is the target left or right of centre".
 
 Usage:
     python autopan_infer.py \
         --insv  /path/to/VID_xxx_10_001.insv \
-        --model models/autopan_model.pkl \
-        --calib calibration/pitch_game2.json \
-        --players models/yolo11n.pt \
-        --output /tmp/infer_test.mp4 \
-        [--segments 5] \
-        [--seg-duration 30] \
-        [--device cpu]
+        --calib calibration/pitch.json \
+        --output /tmp/out.mp4 \
+        [--players models/yolo11n.pt] \
+        [--ball    models/ball_v2.pt] \
+        [--segments 5] [--seg-duration 30] \
+        [--device cpu|mps|cuda] \
+        [--debug]
 """
 
 from __future__ import annotations
-
-import argparse
-import json
-import os
-import pickle
-import subprocess
-import time
-from pathlib import Path
-from typing import List, Optional
+import argparse, json, subprocess, time, warnings
+from dataclasses import dataclass, field
+from typing import Optional, List, Tuple
 
 import cv2
 import numpy as np
 from py360convert import e2p
 from scipy.interpolate import PchipInterpolator
 
-# ── Output parameters ─────────────────────────────────────────────
-OUT_W   = 1280
-OUT_H    = 720
-OUT_FPS  = 29.97
-# Tilt and FOV derived from calibration polygon at runtime
+# ── Output ────────────────────────────────────────────────────────
+OUT_W, OUT_H = 1280, 720
+OUT_FPS      = 29.97
 
-# ── Detection parameters ──────────────────────────────────────────
-DETECT_FOV   = 120.0
-DETECT_YAW   =   0.0
-DETECT_TILT  = -15.0
-DETECT_W     = 1280
-DETECT_H     =  720
-IMGSZ        =  640
-CONF_PLAYERS = 0.15
+# ── Detection ─────────────────────────────────────────────────────
+IMGSZ_PLAYERS  = 960
+IMGSZ_BALL     = 640
+CONF_PLAYERS   = 0.20
+CONF_BALL      = 0.25
+DETECT_EVERY   = 5      # detect every N frames (~0.17s at 30fps)
 
-# ── Pitch polygon coordinate assignments ──────────────────────────
+# ── Control ───────────────────────────────────────────────────────
+YAW_GAIN       = 0.30   # how aggressively to pan toward target
+PITCH_GAIN     = 0.22
+MAX_YAW_STEP   = 1.6    # degrees per frame max
+MAX_PITCH_STEP = 1.2
+VEL_ALPHA      = 0.15   # velocity smoothing (lower = more damping)
+TARGET_ALPHA   = 0.12   # target EMA smoothing (lower = smoother)
+DEADBAND_X     = 0.08   # ignore errors smaller than this fraction of frame
+DEADBAND_Y     = 0.06
+MAX_YAW_DEV    = 55.0   # max pan deviation from centre
+MAX_PITCH_DEV  =  5.0   # pitch stays negative (always looking down)
+
+# ── Ball gating ───────────────────────────────────────────────────
+BALL_CONFIRM_FRAMES  = 3    # frames needed to trust ball
+BALL_SHORT_FALLBACK  = 10   # frames before falling back to players
+BALL_LONG_FALLBACK   = 90   # frames before falling back to centre
+
+# ── Pitch polygon ─────────────────────────────────────────────────
 PITCH_COORDS_NORM = [
     (0.00,0.00),(0.17,0.00),(0.33,0.00),(0.50,0.00),
     (0.67,0.00),(0.83,0.00),(1.00,0.00),
@@ -58,90 +72,59 @@ PITCH_COORDS_NORM = [
 ]
 
 
-def derive_tilt_fov_from_calib(calib_path):
-    """Estimate sensible default tilt and FOV from pitch polygon."""
+# ── Calibration ───────────────────────────────────────────────────
+
+def derive_tilt_fov(calib_path: str) -> Tuple[float, float]:
+    """Derive e2p tilt and FOV from pitch polygon."""
     with open(calib_path) as f:
         poly = np.array(json.load(f)['pitch_polygon'], dtype=np.float32)
-    EW, EH = 2880, 1440
-    tilt_deg = (0.5 - poly[:,1] / EH) * 180
+    tilt_deg  = (0.5 - poly[:,1] / 1440) * 180
     far_tilt  = float(np.mean(tilt_deg[:7]))
     near_tilt = float(np.mean(tilt_deg[7:]))
     mid_tilt  = (far_tilt + near_tilt) / 2
-    # Convert to e2p tilt using our calibrated scale
-    e2p_tilt = mid_tilt * 1.20
-    # FOV: span from far to near touchline + margin
-    tilt_span = abs(near_tilt - far_tilt)
-    e2p_fov   = min(130, max(80, tilt_span * 1.85))
-    print(f"  Calibration: far_tilt={far_tilt:.1f}° near_tilt={near_tilt:.1f}°")
-    print(f"  Derived: e2p_tilt={e2p_tilt:.1f}° e2p_fov={e2p_fov:.1f}°")
+    e2p_tilt  = mid_tilt * 1.20
+    e2p_fov   = float(np.clip(abs(near_tilt - far_tilt) * 1.85, 80, 130))
+    print(f"  Calibration: far={far_tilt:.1f}° near={near_tilt:.1f}°")
+    print(f"  e2p_tilt={e2p_tilt:.1f}° e2p_fov={e2p_fov:.1f}°")
     return e2p_tilt, e2p_fov
 
 
-def build_homography(calib_path, fov, yaw, tilt, fw, fh):
+def build_pitch_mask(calib_path: str, yaw: float, pitch: float,
+                     fov: float, h: int, w: int) -> Optional[np.ndarray]:
+    """Project pitch polygon into current perspective view as binary mask."""
     with open(calib_path) as f:
         poly_eq = np.array(json.load(f)['pitch_polygon'], dtype=np.float32)
     EW, EH = 2880, 1440
-    src, dst = [], []
-    for i, (px, py) in enumerate(poly_eq):
-        eq = np.zeros((EH, EW, 3), dtype=np.uint8)
-        cv2.circle(eq, (int(px), int(py)), 8, (255,255,255), -1)
-        rgb = cv2.cvtColor(eq, cv2.COLOR_BGR2RGB)
-        proj = e2p(rgb, fov_deg=fov, u_deg=yaw, v_deg=tilt,
-                   out_hw=(fh, fw), mode='bilinear')
-        gray = cv2.cvtColor(cv2.cvtColor(proj, cv2.COLOR_RGB2BGR),
-                            cv2.COLOR_BGR2GRAY)
-        locs = np.where(gray > 128)
-        if len(locs[0]) > 0:
-            src.append([float(np.mean(locs[1])), float(np.mean(locs[0]))])
-            px_n, py_n = PITCH_COORDS_NORM[i]
-            dst.append([px_n * fw, py_n * fh])
-    if len(src) < 4:
-        return None
-    H, _ = cv2.findHomography(np.array(src, dtype=np.float32),
-                               np.array(dst, dtype=np.float32), cv2.RANSAC, 5.0)
-    return H
+
+    # Build equirect mask
+    mask_eq = np.zeros((EH, EW), dtype=np.uint8)
+    pts = poly_eq.astype(np.int32).reshape((-1, 1, 2))
+    cv2.fillPoly(mask_eq, [pts], 255)
+
+    # Project to perspective
+    mask_rgb = np.stack([mask_eq]*3, axis=-1)
+    proj = e2p(mask_rgb, fov_deg=fov, u_deg=-yaw, v_deg=pitch,
+               out_hw=(h, w), mode='bilinear')
+    return (proj[:,:,0] > 127).astype(np.uint8)
 
 
-def pixel_to_eq_pan(px, py, fw, fh, centre_pan, centre_tilt, fov_h):
-    aspect = fw / fh
-    fov_v  = np.degrees(2 * np.arctan(np.tan(np.radians(fov_h/2)) / aspect))
-    ndx = (px - fw/2) / (fw/2)
-    ndy = (py - fh/2) / (fh/2)
-    dpan  = np.degrees(np.arctan(ndx * np.tan(np.radians(fov_h/2))))
-    dtilt = np.degrees(np.arctan(ndy * np.tan(np.radians(fov_v/2))))
-    return float(centre_pan + dpan), float(centre_tilt - dtilt)
+# ── FFmpeg ────────────────────────────────────────────────────────
 
-
-def map_to_pitch(fx, fy, H, fw, fh):
-    pt = np.array([[[fx, fy]]], dtype=np.float32)
-    m  = cv2.perspectiveTransform(pt, H)[0][0]
-    return float(m[0]/fw), float(m[1]/fh)
-
-
-def get_clip_duration(insv_path):
-    result = subprocess.run(
-        ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
+def get_duration(insv_path: str) -> float:
+    r = subprocess.run(
+        ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
          '-of', 'default=noprint_wrappers=1:nokey=1', insv_path],
         capture_output=True, text=True)
-    txt = result.stdout.strip()
+    txt = r.stdout.strip()
     if not txt:
-        # fallback: try stderr
-        result2 = subprocess.run(
-            ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-             '-of', 'csv=p=0', insv_path],
-            capture_output=True, text=True)
-        txt = result2.stdout.strip()
-    if not txt:
-        # last resort: assume 30 minutes
         print("WARNING: could not determine duration, assuming 1800s")
         return 1800.0
     return float(txt)
 
 
-def open_stream(insv_path, start_s, duration_s):
+def open_stream(insv_path: str, start_s: float, duration_s: float):
     cmd = [
-        'ffmpeg',
-        '-ss', str(max(0, start_s)),
+        'ffmpeg', '-ss', str(max(0, start_s)),
         '-i', insv_path,
         '-t', str(duration_s + 2),
         '-vf', 'rotate=PI/2*3,v360=fisheye:equirect:ih_fov=200:iv_fov=200,scale=2880:1440',
@@ -150,23 +133,20 @@ def open_stream(insv_path, start_s, duration_s):
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
 
-def read_frame(proc, w=2880, h=1440):
+def read_frame(proc, w=2880, h=1440) -> Optional[np.ndarray]:
     nbytes = w * h * 3
-    chunks = []
-    remaining = nbytes
+    chunks, remaining = [], nbytes
     while remaining > 0:
         chunk = proc.stdout.read(min(65536, remaining))
-        if not chunk:
-            break
+        if not chunk: break
         chunks.append(chunk)
         remaining -= len(chunk)
     data = b''.join(chunks)
-    if len(data) < nbytes:
-        return None
+    if len(data) < nbytes: return None
     return np.frombuffer(data, dtype=np.uint8).reshape((h, w, 3)).copy()
 
 
-def open_writer(output_path, fps):
+def open_writer(output_path: str, fps: float):
     cmd = [
         'ffmpeg', '-y',
         '-f', 'rawvideo', '-pix_fmt', 'bgr24',
@@ -178,217 +158,286 @@ def open_writer(output_path, fps):
     return subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
 
-def smooth_pan_curve(times, pans, smooth_s=1.0):
-    """Smooth pan predictions using PchipInterpolator on keypoints."""
-    if len(times) < 2:
-        return times, pans
-    # Subsample to one point per smooth_s seconds for interpolation
-    interp = PchipInterpolator(times, pans)
-    times_dense = np.linspace(times[0], times[-1], len(times))
-    return times_dense, interp(times_dense)
+# ── Detection ─────────────────────────────────────────────────────
+
+def detect_players(frame: np.ndarray, model, device: str,
+                   mask: Optional[np.ndarray] = None) -> List[Tuple[float,float]]:
+    """Returns list of (cx, cy) foot positions within pitch mask."""
+    names = model.names
+    res = model(frame, imgsz=IMGSZ_PLAYERS, conf=CONF_PLAYERS,
+                device=device, verbose=False)[0]
+    centroids = []
+    for b in res.boxes:
+        if names.get(int(b.cls[0]), '') != 'person': continue
+        x1,y1,x2,y2 = map(float, b.xyxy[0].tolist())
+        cx, cy = (x1+x2)/2, (y1+y2)/2
+        foot_y = y2
+        if mask is not None:
+            xi = int(np.clip(cx, 0, mask.shape[1]-1))
+            yi = int(np.clip(foot_y, 0, mask.shape[0]-1))
+            if not mask[yi, xi]: continue
+        centroids.append((cx, foot_y))
+    return centroids
 
 
-def detect_players(frame, player_model, device):
-    results = player_model(frame, imgsz=IMGSZ, conf=CONF_PLAYERS,
-                           device=device, verbose=False)[0]
-    names = player_model.names
-    players = []
-    for b in results.boxes:
-        if names.get(int(b.cls[0]), '') != 'person':
-            continue
-        x1, y1, x2, y2 = map(float, b.xyxy[0].tolist())
-        players.append({'foot_x': (x1+x2)/2, 'foot_y': y2, 'conf': float(b.conf[0])})
-    return players
+def detect_ball(frame: np.ndarray, model, device: str,
+                mask: Optional[np.ndarray] = None) -> Optional[Tuple[float,float,float]]:
+    """Returns (cx, cy, conf) of best ball detection within pitch mask, or None."""
+    res = model(frame, imgsz=IMGSZ_BALL, conf=CONF_BALL,
+                device=device, verbose=False)[0]
+    best = None
+    for b in res.boxes:
+        x1,y1,x2,y2 = map(float, b.xyxy[0].tolist())
+        area = (x2-x1)*(y2-y1)
+        if area > OUT_W * OUT_H * 0.02: continue
+        cx, cy = (x1+x2)/2, (y1+y2)/2
+        conf = float(b.conf[0])
+        if mask is not None:
+            xi = int(np.clip(cx, 0, mask.shape[1]-1))
+            yi = int(np.clip(cy, 0, mask.shape[0]-1))
+            if not mask[yi, xi]: continue
+        if best is None or conf > best[2]:
+            best = (cx, cy, conf)
+    return best
 
 
-def run_segment(insv_path, start_s, duration_s, model_data, H,
-                player_model, device, pan_init=0.0, tilt_init=-19.0,
-                fov_init=111.0):
-    """
-    Run inference on one segment. Returns list of (t, pan, tilt, fov) tuples.
-    """
-    mlp     = model_data['pan_model']
-    scaler  = model_data['pan_scaler']
-    features = model_data['pan_features']
+# ── Control ───────────────────────────────────────────────────────
 
-    fps = OUT_FPS
+@dataclass
+class CameraState:
+    yaw:   float = 0.0
+    pitch: float = 0.0
+    yaw_vel:   float = 0.0
+    pitch_vel: float = 0.0
+
+
+@dataclass
+class BallState:
+    trusted:      bool  = False
+    confirm:      int   = 0
+    frames_since: int   = 999
+    last_pos:     Optional[Tuple[float,float]] = None
+
+
+@dataclass
+class TargetState:
+    sm_tx: float = OUT_W / 2
+    sm_ty: float = OUT_H / 2
+
+
+def choose_target(
+    players: List[Tuple[float,float]],
+    ball: Optional[Tuple[float,float,float]],
+    ball_state: BallState,
+) -> Tuple[float, float, str]:
+    """Choose pan target. Priority: trusted ball > players centroid > centre."""
+
+    # Update ball state
+    if ball is not None:
+        ball_state.confirm += 1
+        ball_conf = ball[2]
+        # High confidence ball: trust immediately, no confirmation needed
+        if ball_conf >= 0.50 or ball_state.confirm >= BALL_CONFIRM_FRAMES:
+            ball_state.trusted = True
+        ball_state.last_pos = (ball[0], ball[1])
+        ball_state.frames_since = 0
+    else:
+        ball_state.frames_since += 1
+        ball_state.confirm = 0
+
+    # Use trusted ball — high conf ball always wins immediately
+    if ball is not None and ball[2] >= 0.50:
+        return ball[0], ball[1], 'ball_highconf'
+    if ball_state.trusted and ball_state.frames_since < BALL_SHORT_FALLBACK:
+        return ball_state.last_pos[0], ball_state.last_pos[1], 'ball'
+
+    # Recently saw ball — use last known position briefly
+    if ball_state.last_pos and ball_state.frames_since < BALL_LONG_FALLBACK:
+        if players:
+            cx = float(np.mean([p[0] for p in players]))
+            cy = float(np.mean([p[1] for p in players]))
+            # Blend toward last ball position
+            alpha = 1.0 - ball_state.frames_since / BALL_LONG_FALLBACK
+            tx = alpha * ball_state.last_pos[0] + (1-alpha) * cx
+            ty = alpha * ball_state.last_pos[1] + (1-alpha) * cy
+            return tx, ty, 'blend'
+        return ball_state.last_pos[0], ball_state.last_pos[1], 'last_ball'
+
+    # Players centroid — require at least 2 players to avoid goalkeeper trap
+    if len(players) >= 2:
+        cx = float(np.mean([p[0] for p in players]))
+        cy = float(np.mean([p[1] for p in players]))
+        return cx, cy, 'players'
+    elif len(players) == 1:
+        # Single player — blend toward centre to avoid locking on
+        cx = float(players[0][0])
+        cy = float(players[0][1])
+        tx = 0.3 * cx + 0.7 * (OUT_W/2)
+        ty = 0.3 * cy + 0.7 * (OUT_H/2)
+        return tx, ty, 'players'
+
+    # Centre fallback
+    return OUT_W / 2, OUT_H / 2, 'centre'
+
+
+def update_camera(cam: CameraState, target_x: float, target_y: float,
+                  sm_target: TargetState, e2p_tilt: float = -20.0,
+                  mode: str = 'players') -> None:
+    """PD control: move camera toward smoothed target."""
+
+    # Smooth target with EMA — react faster when ball is detected
+    alpha = min(TARGET_ALPHA * 3, 0.5) if 'ball' in mode else TARGET_ALPHA
+    sm_target.sm_tx += alpha * (target_x - sm_target.sm_tx)
+    sm_target.sm_ty += alpha * (target_y - sm_target.sm_ty)
+
+    # Compute normalised error (-0.5 to +0.5)
+    err_x = (sm_target.sm_tx - OUT_W/2) / OUT_W
+    err_y = (sm_target.sm_ty - OUT_H/2) / OUT_H
+
+    # Deadband
+    if abs(err_x) < DEADBAND_X: err_x = 0.0
+    if abs(err_y) < DEADBAND_Y: err_y = 0.0
+
+    # Update velocity with damping
+    cam.yaw_vel   = cam.yaw_vel   * (1 - VEL_ALPHA) + err_x * YAW_GAIN
+    cam.pitch_vel = cam.pitch_vel * (1 - VEL_ALPHA) + err_y * PITCH_GAIN
+
+    # Clamp step — allow larger steps when far from target (recovery mode)
+    target_err = abs(sm_target.sm_tx - OUT_W/2) / (OUT_W/2)
+    recovery_scale = 1.0 + 2.0 * max(0, target_err - 0.3)  # up to 3x when very off
+    max_yaw   = MAX_YAW_STEP   * recovery_scale
+    max_pitch = MAX_PITCH_STEP * recovery_scale
+    cam.yaw_vel   = float(np.clip(cam.yaw_vel,   -max_yaw,   max_yaw))
+    cam.pitch_vel = float(np.clip(cam.pitch_vel, -max_pitch, max_pitch))
+
+    # Update yaw/pitch
+    cam.yaw   += cam.yaw_vel
+    cam.pitch += cam.pitch_vel
+
+    # Clamp to max deviation
+    cam.yaw   = float(np.clip(cam.yaw,   -MAX_YAW_DEV,   MAX_YAW_DEV))
+    # Pitch must always be negative — camera always looks down at pitch
+    cam.pitch = float(np.clip(cam.pitch, e2p_tilt - MAX_PITCH_DEV, e2p_tilt + 5.0))
+
+
+# ── Segment processing ────────────────────────────────────────────
+
+def process_segment(insv_path: str, start_s: float, duration_s: float,
+                    calib_path: str, e2p_tilt: float, e2p_fov: float,
+                    player_model, ball_model, device: str,
+                    writer, debug: bool = False,
+                    yaw_init: float = 0.0) -> int:
+
+    cam        = CameraState(yaw=yaw_init, pitch=e2p_tilt)
+    ball_state = BallState()
+    sm_target  = TargetState(sm_tx=OUT_W/2, sm_ty=OUT_H/2)
+
     proc = open_stream(insv_path, start_s, duration_s)
-
-    tilt_cur      = tilt_init
-    fov_cur       = fov_init
-    time_since_kf = 0.0
-
-    # Warm start: detect players on first frame to initialise pan
-    first_eq = None
-    warm_proc = open_stream(insv_path, start_s, 2)
-    first_eq = read_frame(warm_proc)
-    warm_proc.stdout.close()
-    warm_proc.wait()
-
-    if first_eq is not None and H is not None:
-        rgb0 = cv2.cvtColor(first_eq, cv2.COLOR_BGR2RGB)
-        det0 = cv2.cvtColor(
-            e2p(rgb0, fov_deg=DETECT_FOV, u_deg=0, v_deg=DETECT_TILT,
-                out_hw=(DETECT_H, DETECT_W), mode='bilinear'),
-            cv2.COLOR_RGB2BGR)
-        players0 = detect_players(det0, player_model, device)
-        if players0:
-            eq_pans0 = [pixel_to_eq_pan(p['foot_x'], p['foot_y'],
-                                         DETECT_W, DETECT_H, 0, DETECT_TILT,
-                                         DETECT_FOV)[0] for p in players0]
-            pan_init = float(np.mean(eq_pans0))
-            print(f"  Warm start: {len(players0)} players detected, "
-                  f"initial pan={pan_init:.1f}°")
-        else:
-            print(f"  Warm start: no players detected, using pan=0°")
-
-    pan_prev     = pan_init
-    pan_velocity = 0.0
-
-    predictions = []  # (t, pan, tilt, fov)
-    frame_idx   = 0
+    frame_idx  = 0
+    ball_count = 0
+    mode_counts = {'ball_highconf':0, 'ball':0, 'blend':0, 'last_ball':0, 'players':0, 'centre':0}
+    last_players, last_ball = [], None
+    t0 = time.time()
 
     while True:
         eq = read_frame(proc)
-        if eq is None:
-            break
-        t = start_s + frame_idx / fps
-        if t > start_s + duration_s:
-            break
+        if eq is None: break
+        t = start_s + frame_idx / OUT_FPS
+        if t > start_s + duration_s: break
 
         rgb = cv2.cvtColor(eq, cv2.COLOR_BGR2RGB)
 
+        # ── Project current view ───────────────────────────────
+        persp_rgb = e2p(rgb, fov_deg=e2p_fov,
+                        u_deg=-cam.yaw, v_deg=cam.pitch,
+                        out_hw=(OUT_H, OUT_W), mode='bilinear')
+        persp = cv2.cvtColor(persp_rgb, cv2.COLOR_RGB2BGR)
+
+        # ── Pitch mask in current view ─────────────────────────
+        if frame_idx % (DETECT_EVERY * 5) == 0:  # update mask less often
+            mask = build_pitch_mask(calib_path, cam.yaw, cam.pitch,
+                                    e2p_fov, OUT_H, OUT_W)
+        elif frame_idx == 0:
+            mask = build_pitch_mask(calib_path, cam.yaw, cam.pitch,
+                                    e2p_fov, OUT_H, OUT_W)
+
         # ── Detection ──────────────────────────────────────────
-        # Use current pan for detection view
-        det_frame = cv2.cvtColor(
-            e2p(rgb, fov_deg=fov_cur * (1/1.85) * DETECT_FOV/120 * 120,
-                u_deg=-pan_prev, v_deg=DETECT_TILT,
-                out_hw=(DETECT_H, DETECT_W), mode='bilinear'),
-            cv2.COLOR_RGB2BGR)
+        if frame_idx % DETECT_EVERY == 0:
+            last_players = detect_players(persp, player_model, device, mask)
+            if ball_model is not None:
+                last_ball = detect_ball(persp, ball_model, device, mask)
+            else:
+                last_ball = None
+            if last_ball: ball_count += 1
 
-        players = detect_players(det_frame, player_model, device)
+        # ── Choose target + update camera ──────────────────────
+        tx, ty, mode = choose_target(last_players, last_ball, ball_state)
+        mode_counts[mode] += 1
+        update_camera(cam, tx, ty, sm_target, e2p_tilt=e2p_tilt, mode=mode)
 
-        # ── Feature extraction ─────────────────────────────────
-        eq_pans = []
-        if H is not None and players:
-            for p in players:
-                ep, _ = pixel_to_eq_pan(p['foot_x'], p['foot_y'],
-                                         DETECT_W, DETECT_H,
-                                         pan_prev, DETECT_TILT, DETECT_FOV)
-                eq_pans.append(ep)
-
-        if eq_pans:
-            action_pan        = float(np.mean(eq_pans))
-            action_pan_offset = action_pan - pan_prev
-            action_pan_std    = float(np.std(eq_pans)) if len(eq_pans) > 1 else 0.0
+        # ── Debug overlay ──────────────────────────────────────
+        if debug:
+            # Draw players
+            for (cx, cy) in last_players:
+                cv2.circle(persp, (int(cx), int(cy)), 8, (0,255,0), 2)
+            # Draw ball
+            if last_ball:
+                cv2.circle(persp, (int(last_ball[0]), int(last_ball[1])),
+                           12, (0,0,255), 3)
+                cv2.putText(persp, f"{last_ball[2]:.2f}",
+                            (int(last_ball[0])+14, int(last_ball[1])),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
+            # Draw smoothed target
+            cv2.circle(persp, (int(sm_target.sm_tx), int(sm_target.sm_ty)),
+                       10, (0,255,255), 2)
+            # Draw pitch mask contour
+            if mask is not None:
+                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
+                                               cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(persp, contours, -1, (255,100,0), 1)
+            # HUD
+            cv2.putText(persp,
+                        f"pan={cam.yaw:+.1f}° pitch={cam.pitch:.1f}° "
+                        f"mode={mode} t={t-start_s:.1f}s",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
         else:
-            action_pan        = pan_prev
-            action_pan_offset = 0.0
-            action_pan_std    = 0.0
+            cv2.putText(persp, f"pan={cam.yaw:+.1f}° t={t-start_s:.1f}s",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
 
-        # Centroid_y in frame space
-        if players:
-            centroid_y = float(np.mean([p['foot_y'] for p in players])) / DETECT_H
-            spread_x   = float(np.std([(p['foot_x']) for p in players]) / DETECT_W) \
-                         if len(players) > 1 else 0.0
-        else:
-            centroid_y = 0.5
-            spread_x   = 0.0
-
-        # Build feature vector
-        feat_dict = {
-            'pan_prev':                  pan_prev,
-            'pan_velocity':              pan_velocity,
-            'studio_action_pan_offset':  action_pan_offset,
-            'studio_action_pan_std':     action_pan_std,
-            'studio_player_count':       len(players),
-            'studio_centroid_y':         centroid_y,
-            'studio_spread_x':           spread_x,
-            'time_since_kf':             min(time_since_kf, 30.0),
-        }
-        X = np.array([[feat_dict[f] for f in features]])
-        X_s = scaler.transform(X)
-
-        # ── Predict pan ────────────────────────────────────────
-        pan_pred = float(mlp.predict(X_s)[0])
-        pan_pred = float(np.clip(pan_pred, -80, 80))
-
-        predictions.append((t, pan_pred, tilt_cur, fov_cur))
-
-        pan_velocity = pan_pred - pan_prev
-        pan_prev     = pan_pred
-        time_since_kf += 1.0 / fps
-        frame_idx    += 1
-
-    proc.stdout.close()
-    proc.wait()
-    return predictions
-
-
-def render_segment(insv_path, start_s, duration_s, predictions, writer):
-    """Render one segment using smoothed predictions."""
-    if not predictions:
-        return
-
-    # Smooth pan with PchipInterpolator
-    times = np.array([p[0] for p in predictions])
-    pans  = np.array([p[1] for p in predictions])
-
-    # Smooth over ~2 second window by downsampling then interpolating
-    fps = OUT_FPS
-    stride = max(1, int(fps * 2.0))
-    kf_idx = list(range(0, len(times), stride))
-    if kf_idx[-1] != len(times) - 1:
-        kf_idx.append(len(times) - 1)
-
-    kf_times = times[kf_idx]
-    kf_pans  = pans[kf_idx]
-    smoother = PchipInterpolator(kf_times, kf_pans)
-    pans_smooth = smoother(times)
-
-    tilt = predictions[0][2]
-    fov  = predictions[0][3]
-
-    # Stream equirect and render
-    proc = open_stream(insv_path, start_s, duration_s)
-
-    for i, (t, _, _, _) in enumerate(predictions):
-        eq = read_frame(proc)
-        if eq is None:
-            break
-
-        pan_s = float(pans_smooth[i])
-        e2p_pan  = -pan_s
-        e2p_tilt = tilt   # already in e2p space
-        e2p_fov  = fov    # already in e2p space
-
-        rgb  = cv2.cvtColor(eq, cv2.COLOR_BGR2RGB)
-        persp = e2p(rgb, fov_deg=e2p_fov, u_deg=e2p_pan, v_deg=e2p_tilt,
-                    out_hw=(OUT_H, OUT_W), mode='bilinear')
-        out = cv2.cvtColor(persp, cv2.COLOR_RGB2BGR)
-
-        # Burn pan value onto frame for debugging
-        cv2.putText(out, f"pan={pan_s:+.1f}° t={t-start_s:.1f}s",
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
-
-        writer.stdin.write(out.tobytes())
+        writer.stdin.write(persp.tobytes())
+        frame_idx += 1
 
     proc.stdout.close()
     proc.wait()
 
+    elapsed = time.time() - t0
+    det_windows = frame_idx // DETECT_EVERY
+    print(f"  {frame_idx} frames in {elapsed:.1f}s ({frame_idx/elapsed:.1f} fps)  "
+          f"ball={ball_count}/{det_windows}  modes={mode_counts}")
+    return frame_idx
+
+
+# ── Main ──────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--insv',     required=True)
-    parser.add_argument('--model',    default='models/autopan_model.pkl')
-    parser.add_argument('--calib',    required=True)
-    parser.add_argument('--players',  default='models/yolo11n.pt')
-    parser.add_argument('--output',   default='/tmp/infer_test.mp4')
-    parser.add_argument('--segments', type=int,   default=5)
-    parser.add_argument('--seg-duration', type=float, default=30.0)
-    parser.add_argument('--device',   default=None)
-    parser.add_argument('--seed',     type=int,   default=42)
-    args = parser.parse_args()
+    p = argparse.ArgumentParser()
+    p.add_argument('--insv',         required=True)
+    p.add_argument('--calib',        required=True)
+    p.add_argument('--output',       default='/tmp/infer_out.mp4')
+    p.add_argument('--players',      default='models/yolo11s.pt')
+    p.add_argument('--ball',         default='models/ball_v2.pt')  # yolov8s elevated
+    p.add_argument('--segments',     type=int,   default=5)
+    p.add_argument('--seg-duration', type=float, default=30.0)
+    p.add_argument('--device',       default=None)
+    p.add_argument('--seed',         type=int,   default=42)
+    p.add_argument('--debug',        action='store_true')
+    p.add_argument('--yaw-gain',     type=float, default=YAW_GAIN)
+    p.add_argument('--target-alpha', type=float, default=TARGET_ALPHA)
+    args = p.parse_args()
+
+    # Allow tuning from command line
+    yaw_gain     = args.yaw_gain
+    target_alpha = args.target_alpha
 
     # Device
     if args.device is None:
@@ -402,65 +451,64 @@ def main():
         device = args.device
     print(f"Device: {device}")
 
-    # Load model
-    with open(args.model, 'rb') as f:
-        model_data = pickle.load(f)
-    print(f"Model loaded: {model_data.get('training_rows',0)} training rows")
-
-    # Load detector
+    # Detectors
     from ultralytics import YOLO
     player_model = YOLO(args.players)
-    print("Player model loaded")
+    ball_model   = YOLO(args.ball) if args.ball else None
+    print("Detectors loaded")
 
-    # Derive tilt/fov from calibration
-    print("Deriving tilt/FOV from calibration...")
-    tilt_default, fov_default = derive_tilt_fov_from_calib(args.calib)
+    # Calibration
+    print("Calibration...")
+    e2p_tilt, e2p_fov = derive_tilt_fov(args.calib)
 
-    # Build homography
-    print("Building homography...")
-    H = build_homography(args.calib, DETECT_FOV, DETECT_YAW, DETECT_TILT,
-                         DETECT_W, DETECT_H)
-    print(f"Homography: {'OK' if H is not None else 'FAILED'}")
-
-    # Get clip duration and pick random segments
-    duration = get_clip_duration(args.insv)
-    print(f"Clip duration: {duration:.1f}s")
-
+    # Duration + segments
+    duration = get_duration(args.insv)
+    print(f"Clip: {duration:.0f}s")
     rng = np.random.default_rng(args.seed)
-    max_start = duration - args.seg_duration - 5
-    if max_start < 0:
-        print("Clip too short!")
-        return
-
+    max_start = max(10, duration - args.seg_duration - 5)
     starts = sorted(rng.uniform(10, max_start, args.segments).tolist())
-    print(f"\nSelected {args.segments} segments:")
+    print(f"\nSegments:")
     for i, s in enumerate(starts):
-        print(f"  {i+1}: t={s:.1f}s – {s+args.seg_duration:.1f}s")
+        print(f"  {i+1}: {s:.0f}s – {s+args.seg_duration:.0f}s")
 
-    # Open video writer
+    # Warm-start yaw from first frame player centroid
+    yaw_init = 0.0
+    warm_proc = open_stream(args.insv, starts[0], 2)
+    first_eq = read_frame(warm_proc)
+    warm_proc.stdout.close(); warm_proc.wait()
+    if first_eq is not None:
+        rgb0  = cv2.cvtColor(first_eq, cv2.COLOR_BGR2RGB)
+        # Project at yaw=0 to find initial players
+        p0 = e2p(rgb0, fov_deg=e2p_fov, u_deg=0, v_deg=e2p_tilt,
+                 out_hw=(OUT_H, OUT_W), mode='bilinear')
+        p0_bgr = cv2.cvtColor(p0, cv2.COLOR_RGB2BGR)
+        players0 = detect_players(p0_bgr, player_model, device)
+        if players0:
+            cx0 = float(np.mean([p[0] for p in players0]))
+            # Convert frame x to yaw offset
+            err_x = (cx0 - OUT_W/2) / OUT_W
+            yaw_init = err_x * e2p_fov * 0.5
+            print(f"Warm start: {len(players0)} players → yaw_init={yaw_init:.1f}°")
+
+    # Process
     writer = open_writer(args.output, OUT_FPS)
-
-    # Process each segment
+    t0 = time.time()
+    total = 0
     for i, start_s in enumerate(starts):
-        print(f"\n[{i+1}/{args.segments}] Segment at t={start_s:.1f}s")
-        t0 = time.time()
-
-        # Inference pass
-        predictions = run_segment(
+        print(f"\n[{i+1}/{args.segments}] t={start_s:.0f}s")
+        total += process_segment(
             args.insv, start_s, args.seg_duration,
-            model_data, H, player_model, device,
-            tilt_init=tilt_default, fov_init=fov_default,
+            args.calib, e2p_tilt, e2p_fov,
+            player_model, ball_model, device,
+            writer, debug=args.debug,
+            yaw_init=yaw_init,
         )
-        print(f"  Inference: {len(predictions)} frames in {time.time()-t0:.1f}s")
-
-        # Render pass
-        t1 = time.time()
-        render_segment(args.insv, start_s, args.seg_duration, predictions, writer)
-        print(f"  Render:    {time.time()-t1:.1f}s")
 
     writer.stdin.close()
     writer.wait()
-    print(f"\nDone. Output: {args.output}")
+    elapsed = time.time() - t0
+    print(f"\nDone: {total} frames in {elapsed:.1f}s ({total/elapsed:.1f} fps)")
+    print(f"Output: {args.output}")
 
 
 if __name__ == '__main__':
