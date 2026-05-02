@@ -70,7 +70,7 @@ STUDIO_TILT_SCALE = 1.20
 # ── Detection config ──────────────────────────────────────────────
 IMGSZ        = 640
 CONF_PLAYERS = 0.15
-CONF_BALL    = 0.35
+CONF_BALL    = 0.25
 
 # ── Pitch polygon coordinate assignments (16 points) ─────────────
 PITCH_COORDS_NORM = [
@@ -222,16 +222,24 @@ class Detector:
                         'conf': float(b.conf[0])})
         return out
 
-    def detect_ball(self, frame: np.ndarray) -> Optional[dict]:
+    def detect_ball(self, frame: np.ndarray,
+                     H=None, fw=DETECT_W, fh=DETECT_H) -> Optional[dict]:
         res = self.ball_model(frame, imgsz=IMGSZ, conf=CONF_BALL,
                               device=self.device, verbose=False)[0]
         balls = []
         for b in res.boxes:
             x1, y1, x2, y2 = map(float, b.xyxy[0].tolist())
             area = (x2-x1)*(y2-y1)
-            if area <= DETECT_W * DETECT_H * 0.02:
-                balls.append({'foot_x': (x1+x2)/2, 'foot_y': y2,
-                              'conf': float(b.conf[0]), 'area': area})
+            if area > DETECT_W * DETECT_H * 0.02:
+                continue
+            cx, cy = (x1+x2)/2, (y1+y2)/2
+            # Filter detections outside pitch boundary
+            if H is not None:
+                px, py = map_to_pitch(cx, cy, H, fw, fh)
+                if not (-0.05 <= px <= 1.05 and -0.05 <= py <= 1.05):
+                    continue
+            balls.append({'foot_x': cx, 'foot_y': cy,
+                          'conf': float(b.conf[0]), 'area': area})
         if not balls:
             return None
         return max(balls, key=lambda b: (b['conf'], -b['area']))
@@ -392,7 +400,7 @@ def process_clip(insv, project, calib, detector, writer, interval_s=0.5, verbose
                     out_hw=(DETECT_H, DETECT_W), mode='bilinear'),
                 cv2.COLOR_RGB2BGR)
             sp = detector.detect_players(studio_bgr)
-            sb = detector.detect_ball(studio_bgr)
+            sb = detector.detect_ball(studio_bgr, H=H_studio)
             sf = compute_features(sp, sb, H_studio, DETECT_W, DETECT_H, 'studio')
 
             pan_velocity = pan - pan_prev
@@ -462,7 +470,7 @@ def main():
     p.add_argument('--clips',    required=True)
     p.add_argument('--output',   default='dataset.csv')
     p.add_argument('--players',  default='models/yolo11n.pt')
-    p.add_argument('--ball',     default='models/ball.pt')
+    p.add_argument('--ball',     default='models/ball_v2.pt')
     p.add_argument('--device',   default=None)
     p.add_argument('--interval', type=float, default=0.5)
     p.add_argument('--append',   action='store_true')
