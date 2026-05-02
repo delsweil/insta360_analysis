@@ -77,7 +77,12 @@ PITCH_COORDS_NORM = [
 def derive_tilt_fov(calib_path: str) -> Tuple[float, float]:
     """Derive e2p tilt and FOV from pitch polygon."""
     with open(calib_path) as f:
-        poly = np.array(json.load(f)['pitch_polygon'], dtype=np.float32)
+        raw = json.load(f)['pitch_polygon']
+    # Handle both normalised {x,y} dicts and pixel [x,y] lists
+    if isinstance(raw[0], dict):
+        poly = np.array([[p['x']*2880, p['y']*1440] for p in raw], dtype=np.float32)
+    else:
+        poly = np.array(raw, dtype=np.float32)
     tilt_deg  = (0.5 - poly[:,1] / 1440) * 180
     far_tilt  = float(np.mean(tilt_deg[:7]))
     near_tilt = float(np.mean(tilt_deg[7:]))
@@ -93,7 +98,11 @@ def build_pitch_mask(calib_path: str, yaw: float, pitch: float,
                      fov: float, h: int, w: int) -> Optional[np.ndarray]:
     """Project pitch polygon into current perspective view as binary mask."""
     with open(calib_path) as f:
-        poly_eq = np.array(json.load(f)['pitch_polygon'], dtype=np.float32)
+        raw = json.load(f)['pitch_polygon']
+    if isinstance(raw[0], dict):
+        poly_eq = np.array([[p['x']*2880, p['y']*1440] for p in raw], dtype=np.float32)
+    else:
+        poly_eq = np.array(raw, dtype=np.float32)
     EW, EH = 2880, 1440
 
     # Build equirect mask
