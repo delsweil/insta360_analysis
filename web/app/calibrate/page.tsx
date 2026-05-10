@@ -158,7 +158,9 @@ export default function CalibratePage() {
         const vr = await fetch(`${WORKER}/scan-volumes`)
         const vdata = await vr.json()
         if (vdata.volumes?.length > 0) {
-          setFolderPath(vdata.volumes[0].path)
+          // Prefer SD card (non-Macintosh HD) over local footage
+          const sdCard = vdata.volumes.find((v: any) => v.volume !== 'Macintosh HD')
+          setFolderPath((sdCard ?? vdata.volumes[0]).path)
         }
       } catch {
         setWorkerOk(false)
