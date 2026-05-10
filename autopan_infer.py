@@ -77,8 +77,8 @@ PITCH_COORDS_NORM = [
 def derive_tilt_fov(calib_path: str) -> Tuple[float, float]:
     """Derive e2p tilt and FOV from pitch polygon."""
     with open(calib_path) as f:
-        raw = json.load(f)['pitch_polygon']
-    # Handle both normalised {x,y} dicts and pixel [x,y] lists
+        d = json.load(f)
+    raw = d.get('pitch_polygon') or d.get('pixel_polygon') or d.get('auto_polygon')
     if isinstance(raw[0], dict):
         poly = np.array([[p['x']*2880, p['y']*1440] for p in raw], dtype=np.float32)
     else:
@@ -98,7 +98,8 @@ def build_pitch_mask(calib_path: str, yaw: float, pitch: float,
                      fov: float, h: int, w: int) -> Optional[np.ndarray]:
     """Project pitch polygon into current perspective view as binary mask."""
     with open(calib_path) as f:
-        raw = json.load(f)['pitch_polygon']
+        d = json.load(f)
+    raw = d.get('pitch_polygon') or d.get('pixel_polygon') or d.get('auto_polygon')
     if isinstance(raw[0], dict):
         poly_eq = np.array([[p['x']*2880, p['y']*1440] for p in raw], dtype=np.float32)
     else:
