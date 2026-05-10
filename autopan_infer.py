@@ -88,7 +88,7 @@ def derive_tilt_fov(calib_path: str) -> Tuple[float, float]:
     near_tilt = float(np.mean(tilt_deg[7:]))
     mid_tilt  = (far_tilt + near_tilt) / 2
     e2p_tilt  = mid_tilt * 1.20
-    e2p_fov   = float(np.clip(abs(near_tilt - far_tilt) * 1.85, 80, 130))
+    e2p_fov   = float(np.clip(abs(near_tilt - far_tilt) * 1.85, 100, 130))
     print(f"  Calibration: far={far_tilt:.1f}° near={near_tilt:.1f}°")
     print(f"  e2p_tilt={e2p_tilt:.1f}° e2p_fov={e2p_fov:.1f}°")
     return e2p_tilt, e2p_fov
@@ -273,18 +273,33 @@ def choose_target(
             return tx, ty, 'blend'
         return ball_state.last_pos[0], ball_state.last_pos[1], 'last_ball'
 
-    # Players centroid — require at least 2 players to avoid goalkeeper trap
+    # Players centroid — weighted by proximity to median position
+    # This down-weights outliers (e.g. goalkeeper on far side)
     if len(players) >= 2:
-        cx = float(np.mean([p[0] for p in players]))
-        cy = float(np.mean([p[1] for p in players]))
-        return cx, cy, 'players'
+        xs = np.array([p[0] for p in players])
+        ys = np.array([p[1] for p in players])
+        # Median as action centre
+        med_x = float(np.median(xs))
+        med_y = float(np.median(ys))
+        # Gaussian weights: sigma = 25% of frame width (~320px)
+        sigma = OUT_W * 0.25
+        dists_sq = (xs - med_x)**2 + (ys - med_y)**2
+        weights = np.exp(-dists_sq / (2 * sigma**2))
+        weights /= weights.sum()
+        cx = float(np.sum(weights * xs))
+        cy = float(np.sum(weights * ys))
+        if len(players) >= 4:
+            return cx, cy, 'players'
+        else:
+            # Few players — weak pull, mostly stay put
+            tx = 0.2 * cx + 0.8 * (OUT_W/2)
+            ty = 0.2 * cy + 0.8 * (OUT_H/2)
+            return tx, ty, 'few_players'
     elif len(players) == 1:
-        # Single player — blend toward centre to avoid locking on
-        cx = float(players[0][0])
-        cy = float(players[0][1])
-        tx = 0.3 * cx + 0.7 * (OUT_W/2)
-        ty = 0.3 * cy + 0.7 * (OUT_H/2)
-        return tx, ty, 'players'
+        # Single player — almost entirely ignore, drift to centre
+        tx = 0.05 * players[0][0] + 0.95 * (OUT_W/2)
+        ty = 0.05 * players[0][1] + 0.95 * (OUT_H/2)
+        return tx, ty, 'single_player'
 
     # Centre fallback
     return OUT_W / 2, OUT_H / 2, 'centre'
@@ -336,7 +351,8 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
                     calib_path: str, e2p_tilt: float, e2p_fov: float,
                     player_model, ball_model, device: str,
                     writer, debug: bool = False,
-                    yaw_init: float = 0.0) -> int:
+                    yaw_init: float = 0.0,
+                    csv_writer=None) -> int:
 
     cam        = CameraState(yaw=yaw_init, pitch=e2p_tilt)
     ball_state = BallState()
@@ -345,7 +361,7 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
     proc = open_stream(insv_path, start_s, duration_s)
     frame_idx  = 0
     ball_count = 0
-    mode_counts = {'ball_highconf':0, 'ball':0, 'blend':0, 'last_ball':0, 'players':0, 'centre':0}
+    mode_counts = {'ball_highconf':0, 'ball':0, 'blend':0, 'last_ball':0, 'players':0, 'few_players':0, 'single_player':0, 'centre':0}
     last_players, last_ball = [], None
     t0 = time.time()
 
@@ -415,6 +431,8 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
 
         writer.stdin.write(persp.tobytes())
+        if csv_writer is not None:
+            csv_writer.writerow([f"{t:.4f}", f"{cam.yaw:.4f}"])
         frame_idx += 1
 
     proc.stdout.close()
@@ -440,9 +458,16 @@ def main():
     p.add_argument('--seg-duration', type=float, default=30.0)
     p.add_argument('--device',       default=None)
     p.add_argument('--seed',         type=int,   default=42)
+    p.add_argument('--start-times',  type=str,   default=None,
+                   help='Comma-separated start times in seconds, overrides random selection')
     p.add_argument('--debug',        action='store_true')
     p.add_argument('--yaw-gain',     type=float, default=YAW_GAIN)
     p.add_argument('--target-alpha', type=float, default=TARGET_ALPHA)
+    p.add_argument(
+        "--log-csv",
+        type=str, default=None, metavar="PATH",
+        help="Write per-frame pan log to this CSV file",
+    )
     args = p.parse_args()
 
     # Allow tuning from command line
@@ -474,9 +499,12 @@ def main():
     # Duration + segments
     duration = get_duration(args.insv)
     print(f"Clip: {duration:.0f}s")
-    rng = np.random.default_rng(args.seed)
-    max_start = max(10, duration - args.seg_duration - 5)
-    starts = sorted(rng.uniform(10, max_start, args.segments).tolist())
+    if args.start_times:
+        starts = [float(t) for t in args.start_times.split(',')]
+    else:
+        rng = np.random.default_rng(args.seed)
+        max_start = max(10, duration - args.seg_duration - 5)
+        starts = sorted(rng.uniform(10, max_start, args.segments).tolist())
     print(f"\nSegments:")
     for i, s in enumerate(starts):
         print(f"  {i+1}: {s:.0f}s – {s+args.seg_duration:.0f}s")
@@ -501,6 +529,13 @@ def main():
             print(f"Warm start: {len(players0)} players → yaw_init={yaw_init:.1f}°")
 
     # Process
+    import csv as _csv
+    _csv_file = None
+    _csv_writer = None
+    if args.log_csv:
+        _csv_file = open(args.log_csv, "w", newline="")
+        _csv_writer = _csv.writer(_csv_file)
+        _csv_writer.writerow(["timestamp_s", "predicted_pan_deg"])
     writer = open_writer(args.output, OUT_FPS)
     t0 = time.time()
     total = 0
@@ -512,9 +547,13 @@ def main():
             player_model, ball_model, device,
             writer, debug=args.debug,
             yaw_init=yaw_init,
+            csv_writer=_csv_writer,
         )
 
     writer.stdin.close()
+    if _csv_file is not None:
+        _csv_file.close()
+        print(f"[CSV] Pan log written to {args.log_csv}")
     writer.wait()
     elapsed = time.time() - t0
     print(f"\nDone: {total} frames in {elapsed:.1f}s ({total/elapsed:.1f} fps)")
