@@ -59,6 +59,7 @@ MAX_PITCH_DEV  =  5.0   # pitch stays negative (always looking down)
 
 # ── Ball gating ───────────────────────────────────────────────────
 BALL_CONFIRM_FRAMES  = 3    # frames needed to trust ball
+BALL_MAX_JUMP_PX     = 150  # max pixels between detections to trust immediately
 BALL_SHORT_FALLBACK  = 10   # frames before falling back to players
 BALL_LONG_FALLBACK   = 90   # frames before falling back to centre
 
@@ -191,7 +192,8 @@ def detect_players(frame: np.ndarray, model, device: str,
 
 
 def detect_ball(frame: np.ndarray, model, device: str,
-                mask: Optional[np.ndarray] = None) -> Optional[Tuple[float,float,float]]:
+                mask: Optional[np.ndarray] = None,
+                last_trusted_pos: Optional[Tuple[float,float]] = None) -> Optional[Tuple[float,float,float]]:
     """Returns (cx, cy, conf) of best ball detection within pitch mask, or None."""
     res = model(frame, imgsz=IMGSZ_BALL, conf=CONF_BALL,
                 device=device, verbose=False)[0]
@@ -206,6 +208,13 @@ def detect_ball(frame: np.ndarray, model, device: str,
             xi = int(np.clip(cx, 0, mask.shape[1]-1))
             yi = int(np.clip(cy, 0, mask.shape[0]-1))
             if not mask[yi, xi]: continue
+        # Spatial consistency: penalise detections far from last trusted position
+        if last_trusted_pos is not None:
+            dx = cx - last_trusted_pos[0]
+            dy = cy - last_trusted_pos[1]
+            dist = (dx*dx + dy*dy) ** 0.5
+            if dist > BALL_MAX_JUMP_PX:
+                conf *= 0.3  # heavily discount jumped detections
         if best is None or conf > best[2]:
             best = (cx, cy, conf)
     return best
@@ -380,18 +389,19 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
         persp = cv2.cvtColor(persp_rgb, cv2.COLOR_RGB2BGR)
 
         # ── Pitch mask in current view ─────────────────────────
-        if frame_idx % (DETECT_EVERY * 5) == 0:  # update mask less often
-            mask = build_pitch_mask(calib_path, cam.yaw, cam.pitch,
-                                    e2p_fov, OUT_H, OUT_W)
-        elif frame_idx == 0:
-            mask = build_pitch_mask(calib_path, cam.yaw, cam.pitch,
+        if frame_idx % (DETECT_EVERY * 5) == 0 or frame_idx == 0:
+            # Mask tracks cam.yaw clamped to ±half of MAX_YAW_DEV so
+            # overlay stays aligned and far side of pitch stays visible
+            mask_yaw = float(np.clip(cam.yaw, -MAX_YAW_DEV * 0.5, MAX_YAW_DEV * 0.5))
+            mask = build_pitch_mask(calib_path, mask_yaw, cam.pitch,
                                     e2p_fov, OUT_H, OUT_W)
 
         # ── Detection ──────────────────────────────────────────
         if frame_idx % DETECT_EVERY == 0:
             last_players = detect_players(persp, player_model, device, mask)
             if ball_model is not None:
-                last_ball = detect_ball(persp, ball_model, device, mask)
+                _last_trusted = ball_state.last_pos if ball_state.trusted and ball_state.frames_since < BALL_SHORT_FALLBACK else None
+                last_ball = detect_ball(persp, ball_model, device, mask, _last_trusted)
             else:
                 last_ball = None
             if last_ball: ball_count += 1
@@ -416,9 +426,11 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
             # Draw smoothed target
             cv2.circle(persp, (int(sm_target.sm_tx), int(sm_target.sm_ty)),
                        10, (0,255,255), 2)
-            # Draw pitch mask contour
-            if mask is not None:
-                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
+            # Draw pitch mask contour at current cam.yaw (always aligned)
+            display_mask = build_pitch_mask(calib_path, cam.yaw, cam.pitch,
+                                            e2p_fov, OUT_H, OUT_W)
+            if display_mask is not None:
+                contours, _ = cv2.findContours(display_mask, cv2.RETR_EXTERNAL,
                                                cv2.CHAIN_APPROX_SIMPLE)
                 cv2.drawContours(persp, contours, -1, (255,100,0), 1)
             # HUD
@@ -432,7 +444,8 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
 
         writer.stdin.write(persp.tobytes())
         if csv_writer is not None:
-            csv_writer.writerow([f"{t:.4f}", f"{cam.yaw:.4f}"])
+            _ball_conf = f"{last_ball[2]:.3f}" if last_ball else ""
+            csv_writer.writerow([f"{t:.4f}", f"{cam.yaw:.4f}", mode, _ball_conf])
         frame_idx += 1
 
     proc.stdout.close()
@@ -509,25 +522,6 @@ def main():
     for i, s in enumerate(starts):
         print(f"  {i+1}: {s:.0f}s – {s+args.seg_duration:.0f}s")
 
-    # Warm-start yaw from first frame player centroid
-    yaw_init = 0.0
-    warm_proc = open_stream(args.insv, starts[0], 2)
-    first_eq = read_frame(warm_proc)
-    warm_proc.stdout.close(); warm_proc.wait()
-    if first_eq is not None:
-        rgb0  = cv2.cvtColor(first_eq, cv2.COLOR_BGR2RGB)
-        # Project at yaw=0 to find initial players
-        p0 = e2p(rgb0, fov_deg=e2p_fov, u_deg=0, v_deg=e2p_tilt,
-                 out_hw=(OUT_H, OUT_W), mode='bilinear')
-        p0_bgr = cv2.cvtColor(p0, cv2.COLOR_RGB2BGR)
-        players0 = detect_players(p0_bgr, player_model, device)
-        if players0:
-            cx0 = float(np.mean([p[0] for p in players0]))
-            # Convert frame x to yaw offset
-            err_x = (cx0 - OUT_W/2) / OUT_W
-            yaw_init = err_x * e2p_fov * 0.5
-            print(f"Warm start: {len(players0)} players → yaw_init={yaw_init:.1f}°")
-
     # Process
     import csv as _csv
     _csv_file = None
@@ -535,12 +529,28 @@ def main():
     if args.log_csv:
         _csv_file = open(args.log_csv, "w", newline="")
         _csv_writer = _csv.writer(_csv_file)
-        _csv_writer.writerow(["timestamp_s", "predicted_pan_deg"])
+        _csv_writer.writerow(["timestamp_s", "predicted_pan_deg", "mode", "ball_conf"])
     writer = open_writer(args.output, OUT_FPS)
     t0 = time.time()
     total = 0
     for i, start_s in enumerate(starts):
         print(f"\n[{i+1}/{args.segments}] t={start_s:.0f}s")
+        # Warm-start yaw from first frame of this segment
+        yaw_init = 0.0
+        warm_proc = open_stream(args.insv, start_s, 2)
+        first_eq = read_frame(warm_proc)
+        warm_proc.stdout.close(); warm_proc.wait()
+        if first_eq is not None:
+            rgb0 = cv2.cvtColor(first_eq, cv2.COLOR_BGR2RGB)
+            p0 = e2p(rgb0, fov_deg=e2p_fov, u_deg=0, v_deg=e2p_tilt,
+                     out_hw=(OUT_H, OUT_W), mode='bilinear')
+            p0_bgr = cv2.cvtColor(p0, cv2.COLOR_RGB2BGR)
+            players0 = detect_players(p0_bgr, player_model, device)
+            if players0:
+                cx0 = float(np.mean([p[0] for p in players0]))
+                err_x = (cx0 - OUT_W/2) / OUT_W
+                yaw_init = err_x * e2p_fov * 0.5
+                print(f"  Warm start: {len(players0)} players → yaw_init={yaw_init:.1f}°")
         total += process_segment(
             args.insv, start_s, args.seg_duration,
             args.calib, e2p_tilt, e2p_fov,
