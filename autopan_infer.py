@@ -42,7 +42,7 @@ OUT_FPS      = 29.97
 IMGSZ_PLAYERS  = 960
 IMGSZ_BALL     = 640
 CONF_PLAYERS   = 0.20
-CONF_BALL      = 0.25
+CONF_BALL      = 0.40
 DETECT_EVERY   = 5      # detect every N frames (~0.17s at 30fps)
 
 # ── Control ───────────────────────────────────────────────────────
@@ -62,6 +62,12 @@ BALL_CONFIRM_FRAMES  = 3    # frames needed to trust ball
 BALL_MAX_JUMP_PX     = 150  # max pixels between detections to trust immediately
 BALL_SHORT_FALLBACK  = 10   # frames before falling back to players
 BALL_LONG_FALLBACK   = 90   # frames before falling back to centre
+
+# ── Kalman ball tracker ──────────────────────────────────────────────
+KALMAN_PROCESS_NOISE  = 50.0   # expected ball acceleration (px/frame²)
+KALMAN_MEASURE_NOISE  = 15.0   # pixel uncertainty in detection
+KALMAN_MAX_PREDICT    = 45     # max frames to trust prediction (~1.5s)
+KALMAN_REINIT_DIST    = 200    # px — jump distance to trigger reinit
 
 # ── Pitch polygon ─────────────────────────────────────────────────
 PITCH_COORDS_NORM = [
@@ -193,7 +199,8 @@ def detect_players(frame: np.ndarray, model, device: str,
 
 def detect_ball(frame: np.ndarray, model, device: str,
                 mask: Optional[np.ndarray] = None,
-                last_trusted_pos: Optional[Tuple[float,float]] = None) -> Optional[Tuple[float,float,float]]:
+                last_trusted_pos: Optional[Tuple[float,float]] = None,
+                mask_eroded: Optional[np.ndarray] = None) -> Optional[Tuple[float,float,float]]:
     """Returns (cx, cy, conf) of best ball detection within pitch mask, or None."""
     res = model(frame, imgsz=IMGSZ_BALL, conf=CONF_BALL,
                 device=device, verbose=False)[0]
@@ -204,10 +211,12 @@ def detect_ball(frame: np.ndarray, model, device: str,
         if area > OUT_W * OUT_H * 0.02: continue
         cx, cy = (x1+x2)/2, (y1+y2)/2
         conf = float(b.conf[0])
-        if mask is not None:
-            xi = int(np.clip(cx, 0, mask.shape[1]-1))
-            yi = int(np.clip(cy, 0, mask.shape[0]-1))
-            if not mask[yi, xi]: continue
+        # Use eroded mask for ball to reject edge detections
+        _bmask = mask_eroded if mask_eroded is not None else mask
+        if _bmask is not None:
+            xi = int(np.clip(cx, 0, _bmask.shape[1]-1))
+            yi = int(np.clip(cy, 0, _bmask.shape[0]-1))
+            if not _bmask[yi, xi]: continue
         # Spatial consistency: penalise detections far from last trusted position
         if last_trusted_pos is not None:
             dx = cx - last_trusted_pos[0]
@@ -238,6 +247,99 @@ class BallState:
     last_pos:     Optional[Tuple[float,float]] = None
 
 
+class KalmanBallTracker:
+    """Constant-velocity Kalman filter for ball tracking.
+    State: [x, y, vx, vy]. Predicts ball position when detection is lost."""
+
+    def __init__(self):
+        self._initialised = False
+        self.frames_since_detection = 999
+        self.frames_tracked = 0
+        self.last_conf = 0.0
+        # Compatibility with existing BallState references
+        self.last_pos = None
+        self.trusted = False
+        self.frames_since = 999
+        self._x = np.zeros((4, 1), dtype=np.float64)
+        self._P = np.eye(4, dtype=np.float64) * 500.0
+        self._F = np.array([[1,0,1,0],[0,1,0,1],[0,0,1,0],[0,0,0,1]], dtype=np.float64)
+        self._H = np.array([[1,0,0,0],[0,1,0,0]], dtype=np.float64)
+        q = KALMAN_PROCESS_NOISE
+        self._Q = np.array([[q/4,0,q/2,0],[0,q/4,0,q/2],[q/2,0,q,0],[0,q/2,0,q]], dtype=np.float64)
+        r = KALMAN_MEASURE_NOISE ** 2
+        self._R = np.array([[r,0],[0,r]], dtype=np.float64)
+
+    def _init_state(self, cx, cy):
+        self._x = np.array([[cx],[cy],[0.0],[0.0]], dtype=np.float64)
+        self._P = np.eye(4, dtype=np.float64) * 500.0
+        self._initialised = True
+        self.frames_tracked = 1
+        self.frames_since_detection = 0
+        self.frames_since = 0
+        self.last_pos = (cx, cy)
+        self.trusted = True
+
+    def update(self, cx, cy, conf=1.0):
+        if not self._initialised:
+            self._init_state(cx, cy)
+            self.last_conf = conf
+            return
+        pred_x, pred_y = float(self._x[0]), float(self._x[1])
+        dist = ((cx-pred_x)**2 + (cy-pred_y)**2)**0.5
+        if dist > KALMAN_REINIT_DIST and self.frames_since_detection == 0:
+            return  # consecutive jump — likely false positive
+        if dist > KALMAN_REINIT_DIST * 2:
+            self._init_state(cx, cy)  # reinitialise on extreme jump
+            self.last_conf = conf
+            return
+        self._x = self._F @ self._x
+        self._P = self._F @ self._P @ self._F.T + self._Q
+        z = np.array([[cx],[cy]], dtype=np.float64)
+        y = z - self._H @ self._x
+        S = self._H @ self._P @ self._H.T + self._R
+        K = self._P @ self._H.T @ np.linalg.inv(S)
+        self._x = self._x + K @ y
+        self._P = (np.eye(4) - K @ self._H) @ self._P
+        self.frames_since_detection = 0
+        self.frames_since = 0
+        self.frames_tracked += 1
+        self.last_conf = conf
+        self.last_pos = (float(self._x[0]), float(self._x[1]))
+        self.trusted = True
+
+    def predict_only(self):
+        if not self._initialised:
+            self.frames_since_detection += 1
+            self.frames_since += 1
+            return
+        self._x = self._F @ self._x
+        self._P = self._F @ self._P @ self._F.T + self._Q
+        self.frames_since_detection += 1
+        self.frames_since += 1
+        decay = 0.92 ** min(self.frames_since_detection, 30)
+        self._x[2] *= decay
+        self._x[3] *= decay
+        if self._initialised:
+            self.last_pos = (float(self._x[0]), float(self._x[1]))
+
+    def predicted_pos(self):
+        if not self._initialised: return None
+        return float(self._x[0]), float(self._x[1])
+
+    def velocity(self):
+        if not self._initialised: return 0.0, 0.0
+        return float(self._x[2]), float(self._x[3])
+
+    def is_valid(self):
+        return self._initialised and self.frames_since_detection < KALMAN_MAX_PREDICT
+
+    def is_fresh(self):
+        return self._initialised and self.frames_since_detection < BALL_SHORT_FALLBACK
+
+    def reset(self):
+        self.__init__()
+
+
 @dataclass
 class TargetState:
     sm_tx: float = OUT_W / 2
@@ -247,70 +349,65 @@ class TargetState:
 def choose_target(
     players: List[Tuple[float,float]],
     ball: Optional[Tuple[float,float,float]],
-    ball_state: BallState,
+    ball_state,  # KalmanBallTracker
 ) -> Tuple[float, float, str]:
-    """Choose pan target. Priority: trusted ball > players centroid > centre."""
+    """Choose pan target using Kalman ball tracker."""
 
-    # Update ball state
+    # Update Kalman tracker
     if ball is not None:
-        ball_state.confirm += 1
-        ball_conf = ball[2]
-        # High confidence ball: trust immediately, no confirmation needed
-        if ball_conf >= 0.50 or ball_state.confirm >= BALL_CONFIRM_FRAMES:
-            ball_state.trusted = True
-        ball_state.last_pos = (ball[0], ball[1])
-        ball_state.frames_since = 0
+        ball_state.update(ball[0], ball[1], ball[2])
     else:
-        ball_state.frames_since += 1
-        ball_state.confirm = 0
+        ball_state.predict_only()
 
-    # Use trusted ball — high conf ball always wins immediately
+    # 1. Fresh high-confidence detection — trust immediately
     if ball is not None and ball[2] >= 0.50:
         return ball[0], ball[1], 'ball_highconf'
-    if ball_state.trusted and ball_state.frames_since < BALL_SHORT_FALLBACK:
-        return ball_state.last_pos[0], ball_state.last_pos[1], 'ball'
 
-    # Recently saw ball — use last known position briefly
-    if ball_state.last_pos and ball_state.frames_since < BALL_LONG_FALLBACK:
-        if players:
-            cx = float(np.mean([p[0] for p in players]))
-            cy = float(np.mean([p[1] for p in players]))
-            # Blend toward last ball position
-            alpha = 1.0 - ball_state.frames_since / BALL_LONG_FALLBACK
-            tx = alpha * ball_state.last_pos[0] + (1-alpha) * cx
-            ty = alpha * ball_state.last_pos[1] + (1-alpha) * cy
-            return tx, ty, 'blend'
-        return ball_state.last_pos[0], ball_state.last_pos[1], 'last_ball'
+    # 2. Fresh detection (recently confirmed)
+    if ball_state.is_fresh() and ball_state.predicted_pos() is not None:
+        px, py = ball_state.predicted_pos()
+        return px, py, 'ball'
 
-    # Players centroid — weighted by proximity to median position
-    # This down-weights outliers (e.g. goalkeeper on far side)
+    # 3. Kalman prediction still valid — follow predicted trajectory
+    if ball_state.is_valid() and ball_state.predicted_pos() is not None:
+        px, py = ball_state.predicted_pos()
+        age_ratio = ball_state.frames_since_detection / KALMAN_MAX_PREDICT
+        kalman_weight = max(0.3, 0.9 * (1.0 - age_ratio))
+        if len(players) >= 4:
+            xs = np.array([p[0] for p in players])
+            ys = np.array([p[1] for p in players])
+            med_x, med_y = float(np.median(xs)), float(np.median(ys))
+            sigma = OUT_W * 0.25
+            w = np.exp(-((xs-med_x)**2+(ys-med_y)**2)/(2*sigma**2))
+            w /= w.sum()
+            pcx, pcy = float(np.sum(w*xs)), float(np.sum(w*ys))
+            tx = kalman_weight * px + (1-kalman_weight) * pcx
+            ty = kalman_weight * py + (1-kalman_weight) * pcy
+            return tx, ty, 'kalman_blend'
+        return px, py, 'kalman'
+
+    # 4. No valid prediction — weighted player centroid
     if len(players) >= 2:
         xs = np.array([p[0] for p in players])
         ys = np.array([p[1] for p in players])
-        # Median as action centre
-        med_x = float(np.median(xs))
-        med_y = float(np.median(ys))
-        # Gaussian weights: sigma = 25% of frame width (~320px)
+        med_x, med_y = float(np.median(xs)), float(np.median(ys))
         sigma = OUT_W * 0.25
-        dists_sq = (xs - med_x)**2 + (ys - med_y)**2
-        weights = np.exp(-dists_sq / (2 * sigma**2))
+        dists_sq = (xs-med_x)**2 + (ys-med_y)**2
+        weights = np.exp(-dists_sq/(2*sigma**2))
         weights /= weights.sum()
-        cx = float(np.sum(weights * xs))
-        cy = float(np.sum(weights * ys))
+        cx = float(np.sum(weights*xs))
+        cy = float(np.sum(weights*ys))
         if len(players) >= 4:
             return cx, cy, 'players'
         else:
-            # Few players — weak pull, mostly stay put
             tx = 0.2 * cx + 0.8 * (OUT_W/2)
             ty = 0.2 * cy + 0.8 * (OUT_H/2)
             return tx, ty, 'few_players'
     elif len(players) == 1:
-        # Single player — almost entirely ignore, drift to centre
         tx = 0.05 * players[0][0] + 0.95 * (OUT_W/2)
         ty = 0.05 * players[0][1] + 0.95 * (OUT_H/2)
         return tx, ty, 'single_player'
 
-    # Centre fallback
     return OUT_W / 2, OUT_H / 2, 'centre'
 
 
@@ -319,8 +416,10 @@ def update_camera(cam: CameraState, target_x: float, target_y: float,
                   mode: str = 'players') -> None:
     """PD control: move camera toward smoothed target."""
 
-    # Smooth target with EMA — react faster when ball is detected
-    alpha = min(TARGET_ALPHA * 3, 0.5) if 'ball' in mode else TARGET_ALPHA
+    # Smooth target with EMA — react faster when ball is detected or far from target
+    base_alpha = TARGET_ALPHA * 3 if 'ball' in mode else TARGET_ALPHA
+    error_norm = abs(sm_target.sm_tx - OUT_W/2) / (OUT_W/2)  # 0=centre, 1=edge
+    alpha = min(0.8, base_alpha * (1.0 + 5.0 * error_norm))
     sm_target.sm_tx += alpha * (target_x - sm_target.sm_tx)
     sm_target.sm_ty += alpha * (target_y - sm_target.sm_ty)
 
@@ -364,13 +463,14 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
                     csv_writer=None) -> int:
 
     cam        = CameraState(yaw=yaw_init, pitch=e2p_tilt)
-    ball_state = BallState()
+    ball_state = KalmanBallTracker()
     sm_target  = TargetState(sm_tx=OUT_W/2, sm_ty=OUT_H/2)
 
     proc = open_stream(insv_path, start_s, duration_s)
     frame_idx  = 0
     ball_count = 0
-    mode_counts = {'ball_highconf':0, 'ball':0, 'blend':0, 'last_ball':0, 'players':0, 'few_players':0, 'single_player':0, 'centre':0}
+    mode_counts = {'ball_highconf':0, 'ball':0, 'kalman':0, 'kalman_blend':0, 'blend':0, 'last_ball':0, 'players':0, 'few_players':0, 'single_player':0, 'centre':0}
+    mask_eroded = None
     last_players, last_ball = [], None
     t0 = time.time()
 
@@ -390,18 +490,24 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
 
         # ── Pitch mask in current view ─────────────────────────
         if frame_idx % (DETECT_EVERY * 5) == 0 or frame_idx == 0:
-            # Mask tracks cam.yaw clamped to ±half of MAX_YAW_DEV so
-            # overlay stays aligned and far side of pitch stays visible
-            mask_yaw = float(np.clip(cam.yaw, -MAX_YAW_DEV * 0.5, MAX_YAW_DEV * 0.5))
-            mask = build_pitch_mask(calib_path, mask_yaw, cam.pitch,
+            # Mask always tracks cam.yaw exactly — no clamping
+            # GK trap is prevented by weighted centroid, not mask manipulation
+            mask = build_pitch_mask(calib_path, cam.yaw, cam.pitch,
                                     e2p_fov, OUT_H, OUT_W)
+            # Eroded mask for ball detection — rejects near-edge false positives
+            if mask is not None:
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (40, 40))
+                mask_eroded = cv2.erode(mask, kernel)
+            else:
+                mask_eroded = None
 
         # ── Detection ──────────────────────────────────────────
         if frame_idx % DETECT_EVERY == 0:
             last_players = detect_players(persp, player_model, device, mask)
             if ball_model is not None:
-                _last_trusted = ball_state.last_pos if ball_state.trusted and ball_state.frames_since < BALL_SHORT_FALLBACK else None
-                last_ball = detect_ball(persp, ball_model, device, mask, _last_trusted)
+                # Use Kalman predicted position as spatial reference
+                _last_trusted = ball_state.predicted_pos() if ball_state.is_valid() else None
+                last_ball = detect_ball(persp, ball_model, device, mask, _last_trusted, mask_eroded)
             else:
                 last_ball = None
             if last_ball: ball_count += 1
@@ -426,11 +532,9 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
             # Draw smoothed target
             cv2.circle(persp, (int(sm_target.sm_tx), int(sm_target.sm_ty)),
                        10, (0,255,255), 2)
-            # Draw pitch mask contour at current cam.yaw (always aligned)
-            display_mask = build_pitch_mask(calib_path, cam.yaw, cam.pitch,
-                                            e2p_fov, OUT_H, OUT_W)
-            if display_mask is not None:
-                contours, _ = cv2.findContours(display_mask, cv2.RETR_EXTERNAL,
+            # Draw pitch mask contour — mask already tracks cam.yaw exactly
+            if mask is not None:
+                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
                                                cv2.CHAIN_APPROX_SIMPLE)
                 cv2.drawContours(persp, contours, -1, (255,100,0), 1)
             # HUD
