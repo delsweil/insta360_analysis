@@ -284,7 +284,7 @@ class KalmanBallTracker:
             self._init_state(cx, cy)
             self.last_conf = conf
             return
-        pred_x, pred_y = float(self._x[0]), float(self._x[1])
+        pred_x, pred_y = float(self._x[0,0]), float(self._x[1,0])
         dist = ((cx-pred_x)**2 + (cy-pred_y)**2)**0.5
         if dist > KALMAN_REINIT_DIST and self.frames_since_detection == 0:
             return  # consecutive jump — likely false positive
@@ -304,7 +304,7 @@ class KalmanBallTracker:
         self.frames_since = 0
         self.frames_tracked += 1
         self.last_conf = conf
-        self.last_pos = (float(self._x[0]), float(self._x[1]))
+        self.last_pos = (float(self._x[0,0]), float(self._x[1,0]))
         self.trusted = True
 
     def predict_only(self):
@@ -320,15 +320,15 @@ class KalmanBallTracker:
         self._x[2] *= decay
         self._x[3] *= decay
         if self._initialised:
-            self.last_pos = (float(self._x[0]), float(self._x[1]))
+            self.last_pos = (float(self._x[0,0]), float(self._x[1,0]))
 
     def predicted_pos(self):
         if not self._initialised: return None
-        return float(self._x[0]), float(self._x[1])
+        return float(self._x[0,0]), float(self._x[1,0])
 
     def velocity(self):
         if not self._initialised: return 0.0, 0.0
-        return float(self._x[2]), float(self._x[3])
+        return float(self._x[2,0]), float(self._x[3,0])
 
     def is_valid(self):
         return self._initialised and self.frames_since_detection < KALMAN_MAX_PREDICT
