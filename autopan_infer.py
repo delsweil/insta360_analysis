@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
 
 import cv2
+from sklearn.cluster import DBSCAN
 import numpy as np
 from py360convert import e2p
 from scipy.interpolate import PchipInterpolator
@@ -68,6 +69,12 @@ KALMAN_PROCESS_NOISE  = 50.0   # expected ball acceleration (px/frame²)
 KALMAN_MEASURE_NOISE  = 15.0   # pixel uncertainty in detection
 KALMAN_MAX_PREDICT    = 45     # max frames to trust prediction (~1.5s)
 KALMAN_REINIT_DIST    = 200    # px — jump distance to trigger reinit
+
+# ── DBSCAN player clustering ─────────────────────────────────────────
+DBSCAN_EPS_DEG        = 8.0    # cluster radius in equirect degrees
+DBSCAN_MIN_SAMPLES    = 2      # minimum players to form a cluster
+DBSCAN_MIN_SIZE       = 3      # min cluster size to use as target
+HOLD_THRESHOLD        = 0.55   # fraction of half-frame — only move if cluster beyond this
 
 # ── Pitch polygon ─────────────────────────────────────────────────
 PITCH_COORDS_NORM = [
@@ -346,10 +353,74 @@ class TargetState:
     sm_ty: float = OUT_H / 2
 
 
+def pixel_to_lon(px: float, yaw_deg: float,
+                 w: int = OUT_W, fov_deg: float = 100.0) -> float:
+    """Convert perspective frame pixel x to equirectangular longitude."""
+    nx = (px - w / 2) / (w / 2)
+    import math
+    half_fov = math.radians(fov_deg / 2)
+    angle_x = math.degrees(math.atan(nx * math.tan(half_fov)))
+    return angle_x + yaw_deg
+
+
+def find_action_cluster(players: List[Tuple[float, float]],
+                        cam_yaw: float,
+                        e2p_fov: float) -> Optional[Tuple[float, float]]:
+    """Find the densest player cluster in equirectangular space.
+    Returns (cluster_cx_px, cluster_cy_px) in perspective frame coords,
+    or None if no clear cluster found."""
+    if len(players) < DBSCAN_MIN_SAMPLES:
+        return None
+
+    # Convert player x positions to equirect longitudes
+    lons = np.array([pixel_to_lon(p[0], cam_yaw, OUT_W, e2p_fov)
+                     for p in players])
+    heights = np.array([p[1] for p in players])  # foot_y as proxy
+
+    # DBSCAN clustering on longitudes
+    X = lons.reshape(-1, 1)
+    db = DBSCAN(eps=DBSCAN_EPS_DEG, min_samples=DBSCAN_MIN_SAMPLES).fit(X)
+    labels = db.labels_
+
+    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+    if n_clusters == 0:
+        return None
+
+    # Score each cluster: size * mean_player_height
+    best_score = -1
+    best_cx = None
+    best_cy = None
+
+    for label in set(labels):
+        if label == -1:
+            continue
+        mask = labels == label
+        if mask.sum() < DBSCAN_MIN_SIZE:
+            continue
+        # Use mean pixel position of cluster players as target
+        cluster_players = [players[i] for i in range(len(players)) if mask[i]]
+        cx = float(np.mean([p[0] for p in cluster_players]))
+        cy = float(np.mean([p[1] for p in cluster_players]))
+        # Score by size / spread (tight dense cluster wins over loose large cluster)
+        cluster_lons = lons[mask]
+        spread = float(np.std(cluster_lons)) + 1.0  # avoid div by zero
+        score = mask.sum() / spread
+        if score > best_score:
+            best_score = score
+            best_cx = cx
+            best_cy = cy
+
+    if best_cx is None:
+        return None
+    return best_cx, best_cy
+
+
 def choose_target(
     players: List[Tuple[float,float]],
     ball: Optional[Tuple[float,float,float]],
     ball_state,  # KalmanBallTracker
+    cam_yaw: float = 0.0,
+    e2p_fov: float = 100.0,
 ) -> Tuple[float, float, str]:
     """Choose pan target using Kalman ball tracker."""
 
@@ -373,7 +444,13 @@ def choose_target(
         px, py = ball_state.predicted_pos()
         age_ratio = ball_state.frames_since_detection / KALMAN_MAX_PREDICT
         kalman_weight = max(0.3, 0.9 * (1.0 - age_ratio))
-        if len(players) >= 4:
+        # Blend Kalman prediction with DBSCAN cluster (or centroid)
+        cluster = find_action_cluster(players, cam_yaw, e2p_fov) if len(players) >= DBSCAN_MIN_SAMPLES else None
+        if cluster is not None:
+            tx = kalman_weight * px + (1-kalman_weight) * cluster[0]
+            ty = kalman_weight * py + (1-kalman_weight) * cluster[1]
+            return tx, ty, 'kalman_blend'
+        elif len(players) >= 4:
             xs = np.array([p[0] for p in players])
             ys = np.array([p[1] for p in players])
             med_x, med_y = float(np.median(xs)), float(np.median(ys))
@@ -386,7 +463,23 @@ def choose_target(
             return tx, ty, 'kalman_blend'
         return px, py, 'kalman'
 
-    # 4. No valid prediction — weighted player centroid
+    # 4. No valid ball prediction — edge-trigger hold logic
+    # Only move when the action cluster is near the frame edge,
+    # otherwise hold current position. This mimics human editing behaviour.
+    if len(players) >= DBSCAN_MIN_SAMPLES:
+        cluster = find_action_cluster(players, cam_yaw, e2p_fov)
+        if cluster is not None:
+            cx, cy = cluster
+            # Normalised distance from frame centre (0=centre, 1=edge)
+            edge_dist = abs(cx - OUT_W / 2) / (OUT_W / 2)
+            if edge_dist > HOLD_THRESHOLD:
+                # Action near edge — move to recentre it
+                return cx, cy, 'players'
+            else:
+                # Action comfortably in frame — hold current position
+                return OUT_W / 2, OUT_H / 2, 'hold'
+
+    # Few players — very weak pull toward centroid
     if len(players) >= 2:
         xs = np.array([p[0] for p in players])
         ys = np.array([p[1] for p in players])
@@ -397,12 +490,13 @@ def choose_target(
         weights /= weights.sum()
         cx = float(np.sum(weights*xs))
         cy = float(np.sum(weights*ys))
-        if len(players) >= 4:
-            return cx, cy, 'players'
-        else:
+        edge_dist = abs(cx - OUT_W / 2) / (OUT_W / 2)
+        if edge_dist > HOLD_THRESHOLD:
             tx = 0.2 * cx + 0.8 * (OUT_W/2)
             ty = 0.2 * cy + 0.8 * (OUT_H/2)
             return tx, ty, 'few_players'
+        else:
+            return OUT_W / 2, OUT_H / 2, 'hold'
     elif len(players) == 1:
         tx = 0.05 * players[0][0] + 0.95 * (OUT_W/2)
         ty = 0.05 * players[0][1] + 0.95 * (OUT_H/2)
@@ -416,10 +510,24 @@ def update_camera(cam: CameraState, target_x: float, target_y: float,
                   mode: str = 'players') -> None:
     """PD control: move camera toward smoothed target."""
 
-    # Smooth target with EMA — react faster when ball is detected or far from target
-    base_alpha = TARGET_ALPHA * 3 if 'ball' in mode else TARGET_ALPHA
-    error_norm = abs(sm_target.sm_tx - OUT_W/2) / (OUT_W/2)  # 0=centre, 1=edge
-    alpha = min(0.8, base_alpha * (1.0 + 5.0 * error_norm))
+    # Hold mode — target is current camera position (don't move)
+    if mode == 'hold':
+        # Convert cam.yaw back to pixel x to set target at current view centre
+        target_x = OUT_W / 2
+        target_y = OUT_H / 2
+        # Damp velocity to stop any existing movement
+        cam.yaw_vel *= 0.5
+        cam.pitch_vel *= 0.5
+        return
+
+    # Smooth target with EMA — react faster when ball is detected
+    # Players-only mode uses slow alpha to avoid overreacting to cluster noise
+    if 'ball' in mode:
+        base_alpha = TARGET_ALPHA * 3
+        error_norm = abs(sm_target.sm_tx - OUT_W/2) / (OUT_W/2)
+        alpha = min(0.8, base_alpha * (1.0 + 5.0 * error_norm))
+    else:
+        alpha = TARGET_ALPHA * 0.5  # slow response for player-only modes
     sm_target.sm_tx += alpha * (target_x - sm_target.sm_tx)
     sm_target.sm_ty += alpha * (target_y - sm_target.sm_ty)
 
@@ -469,7 +577,7 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
     proc = open_stream(insv_path, start_s, duration_s)
     frame_idx  = 0
     ball_count = 0
-    mode_counts = {'ball_highconf':0, 'ball':0, 'kalman':0, 'kalman_blend':0, 'blend':0, 'last_ball':0, 'players':0, 'few_players':0, 'single_player':0, 'centre':0}
+    mode_counts = {'ball_highconf':0, 'ball':0, 'kalman':0, 'kalman_blend':0, 'blend':0, 'last_ball':0, 'players':0, 'few_players':0, 'single_player':0, 'hold':0, 'centre':0}
     mask_eroded = None
     last_players, last_ball = [], None
     t0 = time.time()
@@ -513,7 +621,7 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
             if last_ball: ball_count += 1
 
         # ── Choose target + update camera ──────────────────────
-        tx, ty, mode = choose_target(last_players, last_ball, ball_state)
+        tx, ty, mode = choose_target(last_players, last_ball, ball_state, cam.yaw, e2p_fov)
         mode_counts[mode] += 1
         update_camera(cam, tx, ty, sm_target, e2p_tilt=e2p_tilt, mode=mode)
 
@@ -581,6 +689,11 @@ def main():
     p.add_argument('--yaw-gain',     type=float, default=YAW_GAIN)
     p.add_argument('--target-alpha', type=float, default=TARGET_ALPHA)
     p.add_argument(
+        "--yaw-inits",
+        type=str, default=None, metavar="DEGREES",
+        help="Comma-separated yaw_init values per segment, overrides warm-start",
+    )
+    p.add_argument(
         "--log-csv",
         type=str, default=None, metavar="PATH",
         help="Write per-frame pan log to this CSV file",
@@ -639,22 +752,28 @@ def main():
     total = 0
     for i, start_s in enumerate(starts):
         print(f"\n[{i+1}/{args.segments}] t={start_s:.0f}s")
-        # Warm-start yaw from first frame of this segment
+        # Warm-start yaw — use explicit value if provided, else detect from players
         yaw_init = 0.0
-        warm_proc = open_stream(args.insv, start_s, 2)
-        first_eq = read_frame(warm_proc)
-        warm_proc.stdout.close(); warm_proc.wait()
-        if first_eq is not None:
-            rgb0 = cv2.cvtColor(first_eq, cv2.COLOR_BGR2RGB)
-            p0 = e2p(rgb0, fov_deg=e2p_fov, u_deg=0, v_deg=e2p_tilt,
-                     out_hw=(OUT_H, OUT_W), mode='bilinear')
-            p0_bgr = cv2.cvtColor(p0, cv2.COLOR_RGB2BGR)
-            players0 = detect_players(p0_bgr, player_model, device)
-            if players0:
-                cx0 = float(np.mean([p[0] for p in players0]))
-                err_x = (cx0 - OUT_W/2) / OUT_W
-                yaw_init = err_x * e2p_fov * 0.5
-                print(f"  Warm start: {len(players0)} players → yaw_init={yaw_init:.1f}°")
+        if args.yaw_inits:
+            explicit = [float(v) for v in args.yaw_inits.split(",")]
+            if i < len(explicit):
+                yaw_init = explicit[i]
+                print(f"  Explicit yaw_init={yaw_init:.1f}°")
+        else:
+            warm_proc = open_stream(args.insv, start_s, 2)
+            first_eq = read_frame(warm_proc)
+            warm_proc.stdout.close(); warm_proc.wait()
+            if first_eq is not None:
+                rgb0 = cv2.cvtColor(first_eq, cv2.COLOR_BGR2RGB)
+                p0 = e2p(rgb0, fov_deg=e2p_fov, u_deg=0, v_deg=e2p_tilt,
+                         out_hw=(OUT_H, OUT_W), mode='bilinear')
+                p0_bgr = cv2.cvtColor(p0, cv2.COLOR_RGB2BGR)
+                players0 = detect_players(p0_bgr, player_model, device)
+                if players0:
+                    cx0 = float(np.mean([p[0] for p in players0]))
+                    err_x = (cx0 - OUT_W/2) / OUT_W
+                    yaw_init = err_x * e2p_fov * 0.5
+                    print(f"  Warm start: {len(players0)} players → yaw_init={yaw_init:.1f}°")
         total += process_segment(
             args.insv, start_s, args.seg_duration,
             args.calib, e2p_tilt, e2p_fov,
