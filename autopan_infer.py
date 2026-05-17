@@ -74,7 +74,7 @@ KALMAN_REINIT_DIST    = 200    # px — jump distance to trigger reinit
 DBSCAN_EPS_DEG        = 8.0    # cluster radius in equirect degrees
 DBSCAN_MIN_SAMPLES    = 2      # minimum players to form a cluster
 DBSCAN_MIN_SIZE       = 3      # min cluster size to use as target
-HOLD_THRESHOLD        = 0.55   # fraction of half-frame — only move if cluster beyond this
+HOLD_THRESHOLD        = 0.65   # fraction of half-frame — only move when cluster in outer 35%
 
 # ── Pitch polygon ─────────────────────────────────────────────────
 PITCH_COORDS_NORM = [
@@ -472,12 +472,12 @@ def choose_target(
             cx, cy = cluster
             # Normalised distance from frame centre (0=centre, 1=edge)
             edge_dist = abs(cx - OUT_W / 2) / (OUT_W / 2)
-            if edge_dist > HOLD_THRESHOLD:
-                # Action near edge — move to recentre it
-                return cx, cy, 'players'
-            else:
+            if edge_dist < HOLD_THRESHOLD:
                 # Action comfortably in frame — hold current position
                 return OUT_W / 2, OUT_H / 2, 'hold'
+            else:
+                # Action near edge — move to recentre
+                return cx, cy, 'players'
 
     # Few players — very weak pull toward centroid
     if len(players) >= 2:
