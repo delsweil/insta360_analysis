@@ -31,6 +31,7 @@ from typing import Optional, List, Tuple
 
 import cv2
 import pickle
+import pathlib
 from sklearn.cluster import DBSCAN
 import numpy as np
 from py360convert import e2p
@@ -366,8 +367,10 @@ def pixel_to_lon(px: float, yaw_deg: float,
 
 def find_action_cluster(players: List[Tuple[float, float]],
                         cam_yaw: float,
-                        e2p_fov: float) -> Optional[Tuple[float, float]]:
-    """Find the densest player cluster in equirectangular space.
+                        e2p_fov: float,
+                        cluster_selector=None,
+                        cluster_selector_features=None) -> Optional[Tuple[float, float]]:
+    """Find the best player cluster using DBSCAN + optional ML selector.
     Returns (cluster_cx_px, cluster_cy_px) in perspective frame coords,
     or None if no clear cluster found."""
     if len(players) < DBSCAN_MIN_SAMPLES:
@@ -794,7 +797,8 @@ def main():
                 players0 = detect_players(p0_bgr, player_model, device)
                 if len(players0) >= 4:
                     cluster = find_action_cluster(players0, 0.0, e2p_fov,
-                                                  cluster_selector, cluster_selector_features)
+                                                  cluster_selector=cluster_selector,
+                                                  cluster_selector_features=cluster_selector_features)
                     if cluster is not None:
                         cx = cluster[0]
                         err_x = (cx - OUT_W/2) / OUT_W
