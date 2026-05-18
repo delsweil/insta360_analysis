@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
 
 import cv2
+import math
 import pickle
 import pathlib
 from sklearn.cluster import DBSCAN
@@ -777,73 +778,72 @@ def main():
                 yaw_init = explicit[i]
                 print(f"  Explicit yaw_init={yaw_init:.1f}°")
         else:
-            # Multi-frame consistent cluster warm start
-            # Sample N frames over first few seconds, find stable cluster
-            WARM_N_FRAMES = 6
-            WARM_DURATION = 4.0  # seconds to sample over
-            WARM_STABILITY_THRESH = 8.0  # degrees — cluster must not move more than this
-            WARM_MIN_MOVEMENT = 0.5  # degrees — cluster must move at least this (not GK)
-            cluster_positions = []
-            for wi in range(WARM_N_FRAMES):
-                wt = start_s + wi * WARM_DURATION / WARM_N_FRAMES
-                warm_proc = open_stream(args.insv, wt, 0.5)
-                weq = read_frame(warm_proc)
-                warm_proc.stdout.close(); warm_proc.wait()
-                if weq is None: continue
-                rgb0 = cv2.cvtColor(weq, cv2.COLOR_BGR2RGB)
-                p0 = e2p(rgb0, fov_deg=e2p_fov, u_deg=0, v_deg=e2p_tilt,
-                         out_hw=(OUT_H, OUT_W), mode='bilinear')
-                p0_bgr = cv2.cvtColor(p0, cv2.COLOR_RGB2BGR)
-                players0 = detect_players(p0_bgr, player_model, device)
-                if len(players0) >= 4:
-                    cluster = find_action_cluster(players0, 0.0, e2p_fov,
-                                                  cluster_selector=cluster_selector,
-                                                  cluster_selector_features=cluster_selector_features)
-                    if cluster is not None:
-                        cx = cluster[0]
-                        err_x = (cx - OUT_W/2) / OUT_W
-                        lon = err_x * e2p_fov * 0.5
-                        cluster_positions.append(lon)
+            # Scan-based warm start:
+            # Try multiple pan angles, use ball detection to find action
+            # Fall back to tightest player cluster if ball not found
+            WARM_SCAN_YAWS = [-40, -30, -20, -10, 0, 10, 20, 30, 40]
+            warm_proc = open_stream(args.insv, start_s, 0.5)
+            warm_eq = read_frame(warm_proc)
+            warm_proc.stdout.close(); warm_proc.wait()
 
-            if len(cluster_positions) >= 3:
-                positions = np.array(cluster_positions)
-                cluster_std = float(np.std(positions))
-                cluster_range = float(np.max(positions) - np.min(positions))
-                median_pos = float(np.median(positions))
-                # Accept if cluster is stable (not too variable = not noise)
-                # and shows some movement (not completely static = not GK)
-                if cluster_std < WARM_STABILITY_THRESH:
-                    if cluster_range > WARM_MIN_MOVEMENT:
-                        yaw_init = median_pos
-                        print(f"  Multi-frame warm start: {len(cluster_positions)} frames "
-                              f"std={cluster_std:.1f}° range={cluster_range:.1f}° "
-                              f"→ yaw_init={yaw_init:.1f}°")
-                    else:
-                        # Cluster completely static — likely GK, use centre
-                        yaw_init = 0.0
-                        print(f"  Warm start: static cluster (GK?), defaulting to 0°")
+            ball_found = False
+            cluster_candidates = []
+
+            if warm_eq is not None:
+                warm_rgb = cv2.cvtColor(warm_eq, cv2.COLOR_BGR2RGB)
+                for scan_yaw in WARM_SCAN_YAWS:
+                    # Project at this yaw
+                    pv_rgb = e2p(warm_rgb, fov_deg=e2p_fov,
+                                 u_deg=-scan_yaw, v_deg=e2p_tilt,
+                                 out_hw=(OUT_H, OUT_W), mode='bilinear')
+                    pv_bgr = cv2.cvtColor(pv_rgb, cv2.COLOR_RGB2BGR)
+
+                    # Try ball detection first
+                    if ball_model is not None:
+                        ball_det = detect_ball(pv_bgr, ball_model, device)
+                        # Only trust ball if it's near frame centre (not edge false positive)
+                        _ball_edge = abs(ball_det[0] - OUT_W/2) / (OUT_W/2) if ball_det else 1.0
+                        if ball_det is not None and ball_det[2] >= 0.60 and _ball_edge < 0.6:
+                            # Ball found near centre — convert to absolute longitude
+                            nx = (ball_det[0] - OUT_W/2) / (OUT_W/2)
+                            half_fov = math.radians(e2p_fov/2)
+                            angle_x = math.degrees(math.atan(nx * math.tan(half_fov)))
+                            yaw_init = scan_yaw + angle_x
+                            print(f"  Warm start: ball detected at yaw={scan_yaw}° "
+                                  f"conf={ball_det[2]:.2f} px={ball_det[0]:.0f} "
+                                  f"→ yaw_init={yaw_init:.1f}°")
+                            ball_found = True
+                            break
+
+                    # No ball — collect player cluster candidate
+                    players_scan = detect_players(pv_bgr, player_model, device)
+                    if len(players_scan) >= 4:
+                        cluster = find_action_cluster(
+                            players_scan, scan_yaw, e2p_fov,
+                            cluster_selector=cluster_selector,
+                            cluster_selector_features=cluster_selector_features)
+                        if cluster is not None:
+                            # Score by cluster size and centredness
+                            cx = cluster[0]
+                            centredness = 1.0 - abs(cx - OUT_W/2) / (OUT_W/2)
+                            n_players = len(players_scan)
+                            score = n_players * centredness
+                            err_x = (cx - OUT_W/2) / OUT_W
+                            pred_yaw = scan_yaw + err_x * e2p_fov * 0.5
+                            cluster_candidates.append((score, pred_yaw, scan_yaw, n_players))
+
+            if not ball_found:
+                if cluster_candidates:
+                    # Use best scoring cluster
+                    cluster_candidates.sort(reverse=True)
+                    best = cluster_candidates[0]
+                    yaw_init = best[1]
+                    print(f"  Warm start: scan found {len(cluster_candidates)} clusters, "
+                          f"best at yaw={best[2]}° score={best[0]:.1f} "
+                          f"players={best[3]} → yaw_init={yaw_init:.1f}°")
                 else:
-                    # Too variable — use median anyway as best guess
-                    yaw_init = median_pos
-                    print(f"  Warm start: variable cluster std={cluster_std:.1f}° "
-                          f"→ yaw_init={yaw_init:.1f}° (best guess)")
-            else:
-                # Fallback: single frame centroid
-                warm_proc = open_stream(args.insv, start_s, 2)
-                first_eq = read_frame(warm_proc)
-                warm_proc.stdout.close(); warm_proc.wait()
-                if first_eq is not None:
-                    rgb0 = cv2.cvtColor(first_eq, cv2.COLOR_BGR2RGB)
-                    p0 = e2p(rgb0, fov_deg=e2p_fov, u_deg=0, v_deg=e2p_tilt,
-                             out_hw=(OUT_H, OUT_W), mode='bilinear')
-                    p0_bgr = cv2.cvtColor(p0, cv2.COLOR_RGB2BGR)
-                    players0 = detect_players(p0_bgr, player_model, device)
-                    if players0:
-                        cx0 = float(np.mean([p[0] for p in players0]))
-                        err_x = (cx0 - OUT_W/2) / OUT_W
-                        yaw_init = err_x * e2p_fov * 0.5
-                        print(f"  Warm start fallback: {len(players0)} players "
-                              f"→ yaw_init={yaw_init:.1f}°")
+                    yaw_init = 0.0
+                    print(f"  Warm start: no cluster found, defaulting to 0°")
         total += process_segment(
             args.insv, start_s, args.seg_duration,
             args.calib, e2p_tilt, e2p_fov,
