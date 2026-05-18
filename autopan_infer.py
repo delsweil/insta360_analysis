@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
 
 import cv2
+import pickle
 from sklearn.cluster import DBSCAN
 import numpy as np
 from py360convert import e2p
@@ -421,6 +422,8 @@ def choose_target(
     ball_state,  # KalmanBallTracker
     cam_yaw: float = 0.0,
     e2p_fov: float = 100.0,
+    cluster_selector=None,
+    cluster_selector_features=None,
 ) -> Tuple[float, float, str]:
     """Choose pan target using Kalman ball tracker."""
 
@@ -445,7 +448,7 @@ def choose_target(
         age_ratio = ball_state.frames_since_detection / KALMAN_MAX_PREDICT
         kalman_weight = max(0.3, 0.9 * (1.0 - age_ratio))
         # Blend Kalman prediction with DBSCAN cluster (or centroid)
-        cluster = find_action_cluster(players, cam_yaw, e2p_fov) if len(players) >= DBSCAN_MIN_SAMPLES else None
+        cluster = find_action_cluster(players, cam_yaw, e2p_fov, cluster_selector, cluster_selector_features) if len(players) >= DBSCAN_MIN_SAMPLES else None
         if cluster is not None:
             tx = kalman_weight * px + (1-kalman_weight) * cluster[0]
             ty = kalman_weight * py + (1-kalman_weight) * cluster[1]
@@ -467,7 +470,7 @@ def choose_target(
     # Only move when the action cluster is near the frame edge,
     # otherwise hold current position. This mimics human editing behaviour.
     if len(players) >= DBSCAN_MIN_SAMPLES:
-        cluster = find_action_cluster(players, cam_yaw, e2p_fov)
+        cluster = find_action_cluster(players, cam_yaw, e2p_fov, cluster_selector, cluster_selector_features)
         if cluster is not None:
             cx, cy = cluster
             # Normalised distance from frame centre (0=centre, 1=edge)
@@ -568,7 +571,9 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
                     player_model, ball_model, device: str,
                     writer, debug: bool = False,
                     yaw_init: float = 0.0,
-                    csv_writer=None) -> int:
+                    csv_writer=None,
+                    cluster_selector=None,
+                    cluster_selector_features=None) -> int:
 
     cam        = CameraState(yaw=yaw_init, pitch=e2p_tilt)
     ball_state = KalmanBallTracker()
@@ -621,7 +626,7 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
             if last_ball: ball_count += 1
 
         # ── Choose target + update camera ──────────────────────
-        tx, ty, mode = choose_target(last_players, last_ball, ball_state, cam.yaw, e2p_fov)
+        tx, ty, mode = choose_target(last_players, last_ball, ball_state, cam.yaw, e2p_fov, cluster_selector, cluster_selector_features)
         mode_counts[mode] += 1
         update_camera(cam, tx, ty, sm_target, e2p_tilt=e2p_tilt, mode=mode)
 
@@ -722,6 +727,15 @@ def main():
     ball_model   = YOLO(args.ball) if args.ball else None
     print("Detectors loaded")
 
+    # Load cluster selector if available
+    cluster_selector = None
+    cluster_selector_features = None
+    selector_path = pathlib.Path("models/cluster_selector.pkl")
+    if selector_path.exists():
+        with open(selector_path, "rb") as f:
+            cluster_selector, cluster_selector_features = pickle.load(f)
+        print("Cluster selector loaded")
+
     # Calibration
     print("Calibration...")
     e2p_tilt, e2p_fov = derive_tilt_fov(args.calib)
@@ -781,6 +795,8 @@ def main():
             writer, debug=args.debug,
             yaw_init=yaw_init,
             csv_writer=_csv_writer,
+            cluster_selector=cluster_selector,
+            cluster_selector_features=cluster_selector_features,
         )
 
     writer.stdin.close()
