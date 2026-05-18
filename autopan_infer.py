@@ -774,20 +774,72 @@ def main():
                 yaw_init = explicit[i]
                 print(f"  Explicit yaw_init={yaw_init:.1f}°")
         else:
-            warm_proc = open_stream(args.insv, start_s, 2)
-            first_eq = read_frame(warm_proc)
-            warm_proc.stdout.close(); warm_proc.wait()
-            if first_eq is not None:
-                rgb0 = cv2.cvtColor(first_eq, cv2.COLOR_BGR2RGB)
+            # Multi-frame consistent cluster warm start
+            # Sample N frames over first few seconds, find stable cluster
+            WARM_N_FRAMES = 6
+            WARM_DURATION = 4.0  # seconds to sample over
+            WARM_STABILITY_THRESH = 8.0  # degrees — cluster must not move more than this
+            WARM_MIN_MOVEMENT = 0.5  # degrees — cluster must move at least this (not GK)
+            cluster_positions = []
+            for wi in range(WARM_N_FRAMES):
+                wt = start_s + wi * WARM_DURATION / WARM_N_FRAMES
+                warm_proc = open_stream(args.insv, wt, 0.5)
+                weq = read_frame(warm_proc)
+                warm_proc.stdout.close(); warm_proc.wait()
+                if weq is None: continue
+                rgb0 = cv2.cvtColor(weq, cv2.COLOR_BGR2RGB)
                 p0 = e2p(rgb0, fov_deg=e2p_fov, u_deg=0, v_deg=e2p_tilt,
                          out_hw=(OUT_H, OUT_W), mode='bilinear')
                 p0_bgr = cv2.cvtColor(p0, cv2.COLOR_RGB2BGR)
                 players0 = detect_players(p0_bgr, player_model, device)
-                if players0:
-                    cx0 = float(np.mean([p[0] for p in players0]))
-                    err_x = (cx0 - OUT_W/2) / OUT_W
-                    yaw_init = err_x * e2p_fov * 0.5
-                    print(f"  Warm start: {len(players0)} players → yaw_init={yaw_init:.1f}°")
+                if len(players0) >= 4:
+                    cluster = find_action_cluster(players0, 0.0, e2p_fov,
+                                                  cluster_selector, cluster_selector_features)
+                    if cluster is not None:
+                        cx = cluster[0]
+                        err_x = (cx - OUT_W/2) / OUT_W
+                        lon = err_x * e2p_fov * 0.5
+                        cluster_positions.append(lon)
+
+            if len(cluster_positions) >= 3:
+                positions = np.array(cluster_positions)
+                cluster_std = float(np.std(positions))
+                cluster_range = float(np.max(positions) - np.min(positions))
+                median_pos = float(np.median(positions))
+                # Accept if cluster is stable (not too variable = not noise)
+                # and shows some movement (not completely static = not GK)
+                if cluster_std < WARM_STABILITY_THRESH:
+                    if cluster_range > WARM_MIN_MOVEMENT:
+                        yaw_init = median_pos
+                        print(f"  Multi-frame warm start: {len(cluster_positions)} frames "
+                              f"std={cluster_std:.1f}° range={cluster_range:.1f}° "
+                              f"→ yaw_init={yaw_init:.1f}°")
+                    else:
+                        # Cluster completely static — likely GK, use centre
+                        yaw_init = 0.0
+                        print(f"  Warm start: static cluster (GK?), defaulting to 0°")
+                else:
+                    # Too variable — use median anyway as best guess
+                    yaw_init = median_pos
+                    print(f"  Warm start: variable cluster std={cluster_std:.1f}° "
+                          f"→ yaw_init={yaw_init:.1f}° (best guess)")
+            else:
+                # Fallback: single frame centroid
+                warm_proc = open_stream(args.insv, start_s, 2)
+                first_eq = read_frame(warm_proc)
+                warm_proc.stdout.close(); warm_proc.wait()
+                if first_eq is not None:
+                    rgb0 = cv2.cvtColor(first_eq, cv2.COLOR_BGR2RGB)
+                    p0 = e2p(rgb0, fov_deg=e2p_fov, u_deg=0, v_deg=e2p_tilt,
+                             out_hw=(OUT_H, OUT_W), mode='bilinear')
+                    p0_bgr = cv2.cvtColor(p0, cv2.COLOR_RGB2BGR)
+                    players0 = detect_players(p0_bgr, player_model, device)
+                    if players0:
+                        cx0 = float(np.mean([p[0] for p in players0]))
+                        err_x = (cx0 - OUT_W/2) / OUT_W
+                        yaw_init = err_x * e2p_fov * 0.5
+                        print(f"  Warm start fallback: {len(players0)} players "
+                              f"→ yaw_init={yaw_init:.1f}°")
         total += process_segment(
             args.insv, start_s, args.seg_duration,
             args.calib, e2p_tilt, e2p_fov,
