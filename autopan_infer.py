@@ -42,7 +42,7 @@ OUT_FPS      = 29.97
 
 # ── Detection ─────────────────────────────────────────────────────
 IMGSZ_PLAYERS  = 960
-IMGSZ_BALL     = 640
+IMGSZ_BALL     = 1280
 CONF_PLAYERS   = 0.20
 CONF_BALL      = 0.40
 DETECT_EVERY   = 5       # run detection every N frames (~0.17s at 30fps)
@@ -72,6 +72,13 @@ DBSCAN_EPS_DEG    = 8.0   # cluster radius in equirect degrees
 DBSCAN_MIN_SAMPLES = 2    # minimum players to form a cluster
 DBSCAN_MIN_SIZE    = 3    # minimum cluster size to use as pan target
 HOLD_THRESHOLD     = 0.80 # only move when cluster beyond this fraction of half-frame
+REANCHOR_PAN_SPEED    = 3.0   # degrees per frame max during pan to new anchor
+REANCHOR_COOLDOWN     = 10.0  # minimum seconds between re-anchors
+REANCHOR_BACKSTOP     = 60.0  # re-anchor if nothing triggered for this long
+REANCHOR_SINGLE_FRAMES = 60   # consecutive single_player frames to trigger
+REANCHOR_CENTRE_FRAMES = 30   # consecutive centre frames to trigger
+REANCHOR_BALL_DIST     = 30.0 # degrees — confirmed ball this far triggers re-anchor
+REANCHOR_BALL_CONFIRMS = 2    # detection windows needed to confirm ball trigger
 
 
 # ── Calibration ───────────────────────────────────────────────────
@@ -598,7 +605,8 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
                     player_model, ball_model, device: str,
                     writer, debug: bool = False,
                     yaw_init: float = 0.0,
-                    csv_writer=None) -> int:
+                    csv_writer=None,
+                    seg_mode: str = 'track') -> int:
 
     cam       = CameraState(yaw=yaw_init, pitch=e2p_tilt)
     tracker   = KalmanBallTracker()
@@ -650,10 +658,79 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
             if last_ball: ball_count += 1
 
         # Choose target and update camera
-        tx, ty, mode = choose_target(
-            last_players, last_ball, tracker, cam.yaw, e2p_fov)
-        mode_counts[mode] = mode_counts.get(mode, 0) + 1
-        update_camera(cam, tx, ty, sm_target, e2p_tilt=e2p_tilt, mode=mode)
+        if seg_mode == 'reanchor':
+            t_in_seg = frame_idx / OUT_FPS
+
+            # Evaluate trigger conditions
+            since_anchor = t_in_seg - getattr(cam, '_last_anchor_t', -999)
+            cooldown_ok  = since_anchor >= REANCHOR_COOLDOWN
+            trigger = False
+            trigger_reason = ''
+
+            if frame_idx == 0:
+                trigger, trigger_reason = True, 'startup'
+            elif cooldown_ok:
+                # Backstop
+                if since_anchor >= REANCHOR_BACKSTOP:
+                    trigger, trigger_reason = True, 'backstop'
+                # Consecutive single_player
+                elif getattr(cam, '_consec_single', 0) >= REANCHOR_SINGLE_FRAMES:
+                    trigger, trigger_reason = True, 'single_player'
+                # Consecutive centre
+                elif getattr(cam, '_consec_centre', 0) >= REANCHOR_CENTRE_FRAMES:
+                    trigger, trigger_reason = True, 'centre'
+                # Confirmed ball far from current pan
+                elif getattr(cam, '_ball_trigger_count', 0) >= REANCHOR_BALL_CONFIRMS:
+                    trigger, trigger_reason = True, 'ball_far'
+
+            if trigger:
+                anchor_yaw = scan_warm_start(
+                    insv_path, start_s + t_in_seg,
+                    e2p_tilt, e2p_fov,
+                    player_model, ball_model, device, calib_path)
+                cam._target_yaw   = anchor_yaw
+                cam._last_anchor_t = t_in_seg
+                cam._consec_single = 0
+                cam._consec_centre = 0
+                cam._ball_trigger_count = 0
+                print(f"    Re-anchor [{trigger_reason}] t+{t_in_seg:.0f}s → {anchor_yaw:.1f}°")
+
+            # Smooth pan toward anchor target
+            target_yaw = getattr(cam, '_target_yaw', cam.yaw)
+            diff = target_yaw - cam.yaw
+            step = float(np.clip(diff * 0.15, -REANCHOR_PAN_SPEED, REANCHOR_PAN_SPEED))
+            cam.yaw += step
+            cam.yaw = float(np.clip(cam.yaw, -MAX_YAW_DEV, MAX_YAW_DEV))
+            frame_mode = 'hold' if abs(diff) < 1.0 else 'players'
+            mode_counts[frame_mode] = mode_counts.get(frame_mode, 0) + 1
+
+            # Update trigger counters from last detection
+            if frame_idx % DETECT_EVERY == 0:
+                last_fm = frame_mode
+                # single_player counter
+                if len(last_players) <= 1:
+                    cam._consec_single = getattr(cam, '_consec_single', 0) + DETECT_EVERY
+                else:
+                    cam._consec_single = 0
+                # centre counter
+                if len(last_players) == 0:
+                    cam._consec_centre = getattr(cam, '_consec_centre', 0) + DETECT_EVERY
+                else:
+                    cam._consec_centre = 0
+                # ball far counter
+                if last_ball is not None and last_ball[2] >= 0.60:
+                    ball_lon = pixel_to_lon(last_ball[0], cam.yaw, OUT_W, e2p_fov)
+                    if abs(ball_lon - cam.yaw) > REANCHOR_BALL_DIST:
+                        cam._ball_trigger_count = getattr(cam, '_ball_trigger_count', 0) + 1
+                    else:
+                        cam._ball_trigger_count = 0
+                else:
+                    cam._ball_trigger_count = 0
+        else:
+            tx, ty, frame_mode = choose_target(
+                last_players, last_ball, tracker, cam.yaw, e2p_fov)
+            mode_counts[frame_mode] = mode_counts.get(frame_mode, 0) + 1
+            update_camera(cam, tx, ty, sm_target, e2p_tilt=e2p_tilt, mode=frame_mode)
 
         # Debug overlay
         if debug:
@@ -673,7 +750,7 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
                 cv2.drawContours(persp, contours, -1, (255,100,0), 1)
             cv2.putText(persp,
                         f"pan={cam.yaw:+.1f}° pitch={cam.pitch:.1f}° "
-                        f"mode={mode} t={t-start_s:.1f}s",
+                        f"mode={frame_mode} t={t-start_s:.1f}s",
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
         else:
             cv2.putText(persp, f"pan={cam.yaw:+.1f}° t={t-start_s:.1f}s",
@@ -682,7 +759,7 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
         writer.stdin.write(persp.tobytes())
         if csv_writer is not None:
             ball_conf = f"{last_ball[2]:.3f}" if last_ball else ""
-            csv_writer.writerow([f"{t:.4f}", f"{cam.yaw:.4f}", mode, ball_conf])
+            csv_writer.writerow([f"{t:.4f}", f"{cam.yaw:.4f}", frame_mode, ball_conf])
         frame_idx += 1
 
     proc.stdout.close()
@@ -714,6 +791,8 @@ def main():
     p.add_argument('--yaw-inits',    type=str,   default=None, metavar='DEGREES',
                    help='Comma-separated yaw_init per segment; overrides scan warm-start')
     p.add_argument('--debug',        action='store_true')
+    p.add_argument('--mode',         default='track', choices=['track','reanchor'],
+                   help='track=continuous (default), reanchor=periodic scan+hold')
     p.add_argument('--log-csv',      type=str,   default=None, metavar='PATH',
                    help='Write per-frame pan log to CSV')
     args = p.parse_args()
@@ -784,6 +863,7 @@ def main():
             writer, debug=args.debug,
             yaw_init=yaw_init,
             csv_writer=_csv_writer,
+            seg_mode=args.mode,
         )
 
     writer.stdin.close()
