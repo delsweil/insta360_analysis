@@ -559,7 +559,7 @@ def scan_warm_start(insv_path: str, start_s: float,
             ball_det = detect_ball(pv_bgr, ball_model, device)
             if ball_det is not None and ball_det[2] >= 0.60:
                 edge = abs(ball_det[0] - OUT_W/2) / (OUT_W/2)
-                if edge < 0.6:
+                if edge < 0.4:  # tighter — only use ball near frame centre
                     nx = (ball_det[0] - OUT_W/2) / (OUT_W/2)
                     angle_x = math.degrees(math.atan(nx * math.tan(math.radians(e2p_fov/2))))
                     yaw_init = scan_yaw + angle_x

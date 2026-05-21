@@ -250,15 +250,24 @@ def main():
                         help="Path to .insv.insprj file")
     parser.add_argument("--predicted", required=True,
                         help="CSV produced by autopan_infer.py --log-csv")
-    parser.add_argument("--start-times", default="100,250,450,650,850",
-                        help="Comma-separated segment start times in seconds (default: 100,250,450,650,850)")
+    parser.add_argument("--start-times", default=None,
+                        help="Comma-separated segment start times (auto-detected from CSV if not provided)")
     parser.add_argument("--seg-duration", type=float, default=15.0,
                         help="Duration of each segment in seconds (default: 15)")
     parser.add_argument("--out", default="pan_comparison.png",
                         help="Output plot filename (default: pan_comparison.png)")
     args = parser.parse_args()
 
-    start_times = parse_start_times(args.start_times)
+    if args.start_times:
+        start_times = parse_start_times(args.start_times)
+    else:
+        import numpy as _np
+        ts = df_pred['timestamp_s'].values
+        diffs = _np.diff(ts)
+        gap_indices = _np.where(diffs > args.seg_duration * 0.5)[0]
+        start_times = [float(ts[0])] + [float(ts[i+1]) for i in gap_indices]
+        print(f'[Auto] Detected {len(start_times)} segments at: '
+              f"{', '.join(f'{t:.0f}s' for t in start_times)}")
 
     gt_interp, gt_t0, gt_t1 = load_ground_truth(args.insprj)
     df_pred = load_predicted(args.predicted)

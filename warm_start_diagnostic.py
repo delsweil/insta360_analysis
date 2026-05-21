@@ -108,8 +108,7 @@ def main():
             # Find cluster
             cluster = None
             if len(players) >= 2:
-                cluster = find_action_cluster(players, scan_yaw, e2p_fov,
-                                              cluster_selector, cluster_selector_features)
+                cluster = find_action_cluster(players, scan_yaw, e2p_fov)
 
             # Draw annotations
             vis = pv.copy()
