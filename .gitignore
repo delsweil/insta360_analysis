@@ -19,3 +19,8 @@ runs/
 .DS_Store
 Thumbs.db
 
+.worker_tmp/
+*.bak*
+results/*.mp4
+results/*.csv
+training.log

@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="2.0.0">
+    <meta creation_time="1776587594" app="Insta360 Studio 2022 4.2.2" version="4.2.2"/>
+    <file_group type="video_normal" folder="/Volumes/Untitled/DCIM/Camera01" count="2">
+        <file name="VID_20250629_120951_00_004.insv"/>
+        <file name="VID_20250629_120951_10_004.insv"/>
+    </file_group>
+    <schemes default="Project1">
+        <scheme id="Project1" last_edit_time="2026.04.19 08:54" creation="2026.04.19 08:54:23.943">
+            <preference ratio_width="16" ratio_height="9" trim_start="0" favourite="0" trim_end="5221">
+                <bullet_time distance="0.8125" fov="1.0421360963658142"/>
+                <rendering ai_raw="0" cold_shoe="0" rotate_angle="0" dewarp_mode="0" projection="64" roll="0" directional_lock="0" yaw="0" dewarp="0" stabilization="1" motion_blur="0" pitch="0" blend_angle="0" stab_type="0" accessory="0">
+                    <play_rate/>
+                </rendering>
+                <audio volume="0.5" denoise_type="0"/>
+                <optimization>
+                    <calibration offset=""/>
+                    <stitching remove_black_edge="0" remove_black_edge_value="0" audio_mode="2" color_enhancement="0" is_selfie="0" under_water_correction="0" dynamic_stitching="0" image_fusion="0" drone_suite="0" optical_flow_stitching="0"/>
+                </optimization>
+                <logo enable_logo="0" logo_size="0.30000001" selected_logo="" logo_location="0"/>
+            </preference>
+            <timeline duration_ms="5221">
+                <recording>
+                    <keyframes/>
+                    <transitions/>
+                    <deep_track_areas/>
+                </recording>
+            </timeline>
+        </scheme>
+        <scheme id="backup" last_edit_time="2026.04.19 08:54" creation="2026.04.19 08:54:26.406">
+            <preference ratio_width="16" ratio_height="9" trim_start="0" favourite="0" trim_end="5221">
+                <bullet_time distance="0.8125" fov="1.0421360963658142"/>
+                <rendering ai_raw="0" cold_shoe="0" rotate_angle="0" dewarp_mode="0" projection="64" roll="0" directional_lock="0" yaw="0" dewarp="0" stabilization="1" motion_blur="0" pitch="0" blend_angle="0" stab_type="0" accessory="0">
+                    <play_rate/>
+                </rendering>
+                <audio volume="0.5" denoise_type="0"/>
+                <optimization>
+                    <calibration offset=""/>
+                    <stitching remove_black_edge="0" remove_black_edge_value="0" audio_mode="2" color_enhancement="0" is_selfie="0" under_water_correction="0" dynamic_stitching="0" image_fusion="0" drone_suite="0" optical_flow_stitching="0"/>
+                </optimization>
+                <logo enable_logo="0" logo_size="0.30000001" selected_logo="" logo_location="0"/>
+            </preference>
+            <timeline duration_ms="5221">
+                <recording>
+                    <keyframes/>
+                    <transitions/>
+                    <deep_track_areas/>
+                </recording>
+            </timeline>
+        </scheme>
+    </schemes>
+    <bigboom>
+        <config>
+            <aspect_ratio width="16" height="9"/>
+        </config>
+        <clips/>
+    </bigboom>
+</project>

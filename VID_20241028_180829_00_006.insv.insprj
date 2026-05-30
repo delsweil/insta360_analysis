@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="2.0.0">
+    <meta app="Insta360 Studio 2022 4.2.2" version="4.2.2" creation_time="1777320550"/>
+    <file_group type="video_normal" folder="/Volumes/Untitled/DCIM/Camera01" count="2">
+        <file name="VID_20241028_180829_00_006.insv"/>
+        <file name="VID_20241028_180829_10_006.insv"/>
+    </file_group>
+    <schemes default="Project1">
+        <scheme id="Project1" last_edit_time="2026.04.26 19:23" creation="2026.04.25 21:28:53.250">
+            <preference trim_end="1418800" ratio_height="9" trim_start="0" ratio_width="16" favourite="0">
+                <bullet_time fov="1.0421360963658142" distance="0.8125"/>
+                <rendering pitch="0" cold_shoe="0" dewarp="0" projection="64" ai_raw="0" directional_lock="0" dewarp_mode="0" stabilization="1" roll="0" blend_angle="0" stab_type="0" accessory="0" motion_blur="0" yaw="0" rotate_angle="0">
+                    <play_rate/>
+                </rendering>
+                <audio denoise_type="0" volume="0.5"/>
+                <optimization>
+                    <calibration offset=""/>
+                    <stitching optical_flow_stitching="0" color_enhancement="0" image_fusion="0" under_water_correction="0" drone_suite="0" remove_black_edge_value="0" audio_mode="2" remove_black_edge="0" dynamic_stitching="0" is_selfie="0"/>
+                </optimization>
+                <logo selected_logo="" logo_size="0.30000001" logo_location="0" enable_logo="1"/>
+            </preference>
+            <timeline duration_ms="1418800">
+                <recording>
+                    <keyframes>
+                        <keyframe time="38872" roll="0" id="point0" tilt="-0.0049434574320912361" pan="-0.24995417892932892" fov="1.1273304224014282" distance="0.3002052472362518"/>
+                        <keyframe time="42409" roll="0" id="point1" tilt="-0.0049434574320912361" pan="-0.20402663946151733" fov="1.0239971876144409" distance="0.18245193524456024"/>
+                        <keyframe time="46146" roll="0" id="point2" tilt="0.0038219504058361053" pan="0.15118642151355743" fov="0.9943312406539917" distance="0.14864611787891388"/>
+                        <keyframe time="50650" roll="0" id="point3" tilt="0.0038219504058361053" pan="0.29429158568382263" fov="0.95599794387817383" distance="0.10496343089437485"/>
+                        <keyframe time="55922" roll="0" id="point4" tilt="0.0074074170552194118" pan="0.46983900666236877" fov="0.97933125495910645" distance="0.13155289156532288"/>
+                        <keyframe time="59292" roll="0" id="point5" tilt="0.0074074170552194118" pan="0.58185106515884399" fov="0.87599796056747437" distance="0.013799493891954421"/>
+                        <keyframe time="62693" roll="0" id="point6" tilt="0.0074074170552194118" pan="0.5047944188117981" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe time="68168" roll="0" id="point7" tilt="0.012451669201254845" pan="0.64477246999740601" fov="0.87266463041305542" distance="0.010002000016927718"/>
+                        <keyframe time="70403" roll="0" id="point8" tilt="0.025034913793206215" pan="0.7267414927482605" fov="0.87266463041305542" distance="0.010003000257372855"/>
+                        <keyframe time="72172" roll="0" id="point9" tilt="0.050256222486495972" pan="0.94816112518310547" fov="0.87266463041305542" distance="0.010004000497817992"/>
+                        <keyframe time="81648" roll="0" id="point10" tilt="0.050256222486495972" pan="0.94816112518310547" fov="0.87266463041305542" distance="0.010005000738263129"/>
+                        <keyframe time="92831" roll="0" id="point11" tilt="0.042723760008811951" pan="0.87434303760528564" fov="0.95599788427352905" distance="0.10496335638856888"/>
+                        <keyframe time="97063" roll="0" id="point12" tilt="-0.016968121752142906" pan="0.60572940111160278" fov="1.034331202507019" distance="0.19422805471515656"/>
+                        <keyframe time="99698" roll="0" id="point13" tilt="-0.040692642331123352" pan="0.42373871803283691" fov="1.1959977149963379" distance="0.37845502956008908"/>
+                        <keyframe time="102701" roll="0" id="point14" tilt="-0.30356618762016296" pan="-0.2018933892250061" fov="1.1959975957870483" distance="0.37845586402511594"/>
+                        <keyframe time="117382" roll="0" id="point15" tilt="-0.28728201985359192" pan="-0.57643067836761475" fov="1.1959975957870483" distance="0.37845687730407712"/>
+                        <keyframe time="122589" roll="0" id="point16" tilt="-0.25471359491348267" pan="-0.75701916217803955" fov="1.0276644229888916" distance="0.18663092119789124"/>
+                        <keyframe time="124791" roll="0" id="point17" tilt="-0.25471359491348267" pan="-0.75701916217803955" fov="1.0276644229888916" distance="0.18663191957569122"/>
+                    </keyframes>
+                    <transitions>
+                        <transition easing_func="0" connection="point0-point1"/>
+                        <transition easing_func="0" connection="point1-point2"/>
+                        <transition easing_func="0" connection="point2-point3"/>
+                        <transition easing_func="0" connection="point3-point4"/>
+                        <transition easing_func="0" connection="point4-point5"/>
+                        <transition easing_func="0" connection="point5-point6"/>
+                        <transition easing_func="0" connection="point6-point7"/>
+                        <transition easing_func="0" connection="point7-point8"/>
+                        <transition easing_func="0" connection="point8-point9"/>
+                        <transition easing_func="0" connection="point9-point10"/>
+                        <transition easing_func="0" connection="point10-point11"/>
+                        <transition easing_func="0" connection="point11-point12"/>
+                        <transition easing_func="0" connection="point12-point13"/>
+                        <transition easing_func="0" connection="point13-point14"/>
+                        <transition easing_func="0" connection="point14-point15"/>
+                        <transition easing_func="0" connection="point15-point16"/>
+                        <transition easing_func="0" connection="point16-point17"/>
+                    </transitions>
+                    <deep_track_areas/>
+                </recording>
+            </timeline>
+        </scheme>
+        <scheme id="backup" last_edit_time="2026.04.25 21:28" creation="2026.04.25 21:28:54.682">
+            <preference trim_end="1418800" ratio_height="9" trim_start="0" ratio_width="16" favourite="0">
+                <bullet_time fov="1.0421360963658142" distance="0.8125"/>
+                <rendering pitch="0" cold_shoe="0" dewarp="0" projection="64" ai_raw="0" directional_lock="0" dewarp_mode="0" stabilization="1" roll="0" blend_angle="0" stab_type="0" accessory="0" motion_blur="0" yaw="0" rotate_angle="0">
+                    <play_rate/>
+                </rendering>
+                <audio denoise_type="0" volume="0.5"/>
+                <optimization>
+                    <calibration offset=""/>
+                    <stitching optical_flow_stitching="0" color_enhancement="0" image_fusion="0" under_water_correction="0" drone_suite="0" remove_black_edge_value="0" audio_mode="2" remove_black_edge="0" dynamic_stitching="0" is_selfie="0"/>
+                </optimization>
+                <logo selected_logo="" logo_size="0.30000001" logo_location="0" enable_logo="0"/>
+            </preference>
+            <timeline duration_ms="1418800">
+                <recording>
+                    <keyframes/>
+                    <transitions/>
+                    <deep_track_areas/>
+                </recording>
+            </timeline>
+        </scheme>
+    </schemes>
+    <bigboom>
+        <config>
+            <aspect_ratio height="9" width="16"/>
+        </config>
+        <clips/>
+    </bigboom>
+</project>

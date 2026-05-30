@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="2.0.0">
+    <meta app="Insta360 Studio 5.9.4" creation_time="1777494942" version="5.9.4"/>
+    <file_group cloud_file_set_offset="1" cloud_media_id="/Volumes/Untitled/DCIM/Camera01/VID_20241028_184414_00_007.insv" count="2" folder="/Volumes/Untitled/DCIM/Camera01" image_type="0" is_cloud_file="0" type="video_normal">
+        <file name="VID_20241028_184414_00_007.insv"/>
+        <file name="VID_20241028_184414_10_007.insv"/>
+    </file_group>
+    <schemes default="Project1">
+        <scheme app_data_id="" app_data_mode="" app_data_ratio="" app_data_source="" app_data_types="" creation="2026.04.25 21:27:19.359" has_deeptrack_user_added="0" has_deeptrack_user_edited="0" has_headtrack_keyframe_user_added="0" has_headtrack_keyframe_user_edited="0" has_keyframe_user_added="0" has_keyframe_user_edited="0" id="Project1" last_edit_time="2026.04.29 22:35:42" load_hight_data="0">
+            <preference duration="515964" favourite="0" last_trim_edit_time="1777494936608" ratio_height="9" ratio_width="16" shell_corrected="0" trim_end="515964" trim_start="5038">
+                <bullet_time distance="0.8125" fov="1.0421360963658142"/>
+                <rendering accessory="0" ai_raw="0" alpha="0" blend_angle="0" camera_movement="0" cold_shoe="0" cooling_shell="0" deversion="3.5" dewarp="0" dewarp_mode="0" directional_lock="0" distance="0" fov="0" handle_pano_fpv="0" head_tracking="0" immersion_stab="0" input_data_type="0" motion_blur="0" pano_fpv="0" pano_fpv_horizontal_on="0" pitch="0" projection="64" propeller_guard_on="0" roll="0" rotate_angle="0" stab_direction="0" stab_level="0" stab_type="0" stabilization="1" stabilizer_type_edited="1" use_custom_transform_params="0" yaw="0">
+                    <play_rate/>
+                </rendering>
+                <audio denoise_type="0" volume="0.5"/>
+                <optimization>
+                    <calibration offset=""/>
+                    <stitching ai_stitch="0" audio_mixing="0" audio_mixing_weight="50" audio_mode="2" audio_tracks_default_delay="-2147483648" audio_tracks_delay="-2147483648" beauty_mode="0" color_adjust="0" color_blackpoint_strength="0" color_brightness_strength="0" color_contrast_strength="0" color_definition_strength="0" color_enhancement="0" color_exposure_strength="0" color_highlights_strength="0" color_plus_strength="100" color_saturation_strength="0" color_shadows_strength="0" color_tint_strength="0" color_vibrance_strength="0" color_warmth_strength="0" de_version="3.5" direct_focus="1" dynamic_stitching="0" fade_in_duration_s="5" fade_out_duration_s="3" horizontal_correct="0" horizontal_correct_angle="0" horizontal_correct_default_angle="0" image_fusion="0" is_selfie="0" keyframe_duration_s="5" local_tone_mapping="0" ltm_strength="100" lut="0" motion_blur_edited="0" motion_blur_strength="50" motion_blur_threshold="85" optical_flow_stitching="0" stab_input_data_type="0" templete_stitching="1" under_water_correction="0" under_water_strength="100" under_water_style="0"/>
+                </optimization>
+                <logo enable_logo="1" enable_time_logo="0" logo_corner_radius="0" logo_feather="0" logo_location="0" logo_rotate="0" logo_size="0.30000001" selected_logo="" time_logo_format="1" time_logo_transparency="100"/>
+            </preference>
+            <timeline app_import_id="" duration_ms="515964">
+                <recording>
+                    <keyframes>
+                        <keyframe distance="0.26032103760337827" fov="1.0923304557800293" frame_type="0" id="point0" is_head_track_keyframe="0" original_eulers_handled="1" original_pan="0" original_roll="0" original_tilt="0" pan="0" pan_offset="0" preview_ratio_type="8" roll="0" roll_offset="0" src_ratio_type="8" tilt="0" tilt_offset="0" time="9572" view_mode="8"/>
+                        <keyframe distance="0.098885046077728272" fov="0.95066392421722412" frame_type="0" id="point1" is_head_track_keyframe="0" original_eulers_handled="1" original_pan="0.12634226679801941" original_roll="0" original_tilt="0.036572780460119247" pan="0.12634226679801941" pan_offset="0" preview_ratio_type="8" roll="0" roll_offset="0" src_ratio_type="8" tilt="0.036572780460119247" tilt_offset="0" time="30497" view_mode="8"/>
+                    </keyframes>
+                    <transitions>
+                        <transition connection="point0-point1" easing_func="0"/>
+                    </transitions>
+                    <headtrackareas/>
+                    <deep_track_areas/>
+                </recording>
+                <camera_movement_track/>
+            </timeline>
+            <dashboard_setting cloud_media="0" cloud_style="" dashboard_datasource_visible="1" dashboard_group_id="" dashboard_group_type="0" dashboard_group_use="1" dashboard_handled="0" dashboard_visible="0"/>
+            <pano_animation>
+                <configs/>
+            </pano_animation>
+        </scheme>
+        <scheme app_data_id="" app_data_mode="" app_data_ratio="" app_data_source="" app_data_types="" creation="2026.04.25 21:27:20.794" has_deeptrack_user_added="0" has_deeptrack_user_edited="0" has_headtrack_keyframe_user_added="0" has_headtrack_keyframe_user_edited="0" has_keyframe_user_added="0" has_keyframe_user_edited="0" id="backup" last_edit_time="2026.04.25 21:27" load_hight_data="0">
+            <preference duration="515964" favourite="0" last_trim_edit_time="1777494937562" ratio_height="9" ratio_width="16" shell_corrected="0" trim_end="515964" trim_start="0">
+                <bullet_time distance="0.8125" fov="1.0421360963658142"/>
+                <rendering accessory="0" ai_raw="0" alpha="0" blend_angle="0" camera_movement="0" cold_shoe="0" cooling_shell="0" deversion="3.5" dewarp="0" dewarp_mode="0" directional_lock="0" distance="0" fov="0" handle_pano_fpv="0" head_tracking="0" immersion_stab="0" input_data_type="0" motion_blur="0" pano_fpv="0" pano_fpv_horizontal_on="0" pitch="0" projection="64" propeller_guard_on="0" roll="0" rotate_angle="0" stab_direction="0" stab_level="0" stab_type="0" stabilization="1" stabilizer_type_edited="1" use_custom_transform_params="0" yaw="0">
+                    <play_rate/>
+                </rendering>
+                <audio denoise_type="0" volume="0.5"/>
+                <optimization>
+                    <calibration offset=""/>
+                    <stitching ai_stitch="0" audio_mixing="0" audio_mixing_weight="50" audio_mode="2" audio_tracks_default_delay="-2147483648" audio_tracks_delay="-2147483648" beauty_mode="0" color_adjust="0" color_blackpoint_strength="0" color_brightness_strength="0" color_contrast_strength="0" color_definition_strength="0" color_enhancement="0" color_exposure_strength="0" color_highlights_strength="0" color_plus_strength="100" color_saturation_strength="0" color_shadows_strength="0" color_tint_strength="0" color_vibrance_strength="0" color_warmth_strength="0" de_version="3.5" direct_focus="1" dynamic_stitching="0" fade_in_duration_s="5" fade_out_duration_s="3" horizontal_correct="0" horizontal_correct_angle="0" horizontal_correct_default_angle="0" image_fusion="0" is_selfie="0" keyframe_duration_s="5" local_tone_mapping="0" ltm_strength="100" lut="0" motion_blur_edited="0" motion_blur_strength="50" motion_blur_threshold="85" optical_flow_stitching="0" stab_input_data_type="0" templete_stitching="1" under_water_correction="0" under_water_strength="100" under_water_style="0"/>
+                </optimization>
+                <logo enable_logo="0" enable_time_logo="0" logo_corner_radius="0" logo_feather="0" logo_location="0" logo_rotate="0" logo_size="0.30000001" selected_logo="" time_logo_format="1" time_logo_transparency="100"/>
+            </preference>
+            <timeline app_import_id="" duration_ms="515964">
+                <recording>
+                    <keyframes/>
+                    <transitions/>
+                    <headtrackareas/>
+                    <deep_track_areas/>
+                </recording>
+                <camera_movement_track/>
+            </timeline>
+            <dashboard_setting cloud_media="0" cloud_style="" dashboard_datasource_visible="1" dashboard_group_id="" dashboard_group_type="0" dashboard_group_use="1" dashboard_handled="0" dashboard_visible="0"/>
+            <pano_animation>
+                <configs/>
+            </pano_animation>
+        </scheme>
+    </schemes>
+    <bigboom>
+        <config>
+            <aspect_ratio height="9" width="16"/>
+        </config>
+        <clips/>
+    </bigboom>
+</project>

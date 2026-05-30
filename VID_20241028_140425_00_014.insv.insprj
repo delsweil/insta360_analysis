@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="2.0.0">
+    <meta creation_time="1777325013" version="4.2.2" app="Insta360 Studio 2022 4.2.2"/>
+    <file_group count="2" type="video_normal" folder="/Volumes/Untitled/DCIM/Camera01">
+        <file name="VID_20241028_140425_00_014.insv"/>
+        <file name="VID_20241028_140425_10_014.insv"/>
+    </file_group>
+    <schemes default="Project1">
+        <scheme id="Project1" last_edit_time="2026.04.27 23:23" creation="2026.04.18 19:46:21.379">
+            <preference ratio_height="9" trim_end="26146" favourite="0" ratio_width="16" trim_start="16036">
+                <bullet_time fov="1.0421360963658142" distance="0.8125"/>
+                <rendering projection="64" roll="0" rotate_angle="0" stabilization="1" dewarp_mode="0" pitch="0" cold_shoe="0" ai_raw="0" blend_angle="0" accessory="0" stab_type="0" directional_lock="0" motion_blur="0" yaw="0" dewarp="0">
+                    <play_rate/>
+                </rendering>
+                <audio denoise_type="0" volume="0.5"/>
+                <optimization>
+                    <calibration offset=""/>
+                    <stitching drone_suite="0" optical_flow_stitching="0" image_fusion="0" is_selfie="0" color_enhancement="0" remove_black_edge_value="0" remove_black_edge="0" audio_mode="2" under_water_correction="0" dynamic_stitching="0"/>
+                </optimization>
+                <logo enable_logo="1" logo_location="0" selected_logo="" logo_size="0.30000001"/>
+            </preference>
+            <timeline duration_ms="1370485">
+                <recording>
+                    <keyframes>
+                        <keyframe roll="0" time="0" pan="0.13167721033096313" id="point0" tilt="0.0052149388939142227" fov="0.88766461610794067" distance="0.027094224227428437"/>
+                        <keyframe roll="0" time="5972" pan="0.42397430539131165" id="point1" tilt="0.029900575056672096" fov="0.87266463041305542" distance="0.01000299977648258"/>
+                        <keyframe roll="0" time="6606" pan="0.42397430539131165" id="point2" tilt="0.029900575056672096" fov="0.87266463041305542" distance="0.010003999566495418"/>
+                        <keyframe roll="0" time="16349" pan="0.28273484110832214" id="point3" tilt="-0.0016387910582125187" fov="0.98433119058609009" distance="0.13725055916404724"/>
+                        <keyframe roll="0" time="19886" pan="-0.21305783092975616" id="point4" tilt="-0.16983547806739807" fov="1.1526644229888916" distance="0.32907457811927793"/>
+                        <keyframe roll="0" time="20387" pan="-0.47288569808006287" id="point5" tilt="-0.16117224097251892" fov="1.1526644229888916" distance="0.32907559139823911"/>
+                        <keyframe roll="0" time="64130" pan="-0.64691227674484253" id="point6" tilt="-0.16243329644203186" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="66066" pan="-0.34930136799812317" id="point7" tilt="-0.13721196353435516" fov="0.87266463041305542" distance="0.010002000016927718"/>
+                        <keyframe roll="0" time="72205" pan="0.2648368775844574" id="point8" tilt="-0.10694640129804611" fov="0.87266463041305542" distance="0.010003000257372855"/>
+                        <keyframe roll="0" time="84451" pan="0.079460792243480682" id="point9" tilt="-0.12438265234231949" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="123590" pan="-0.10340223461389542" id="point10" tilt="-0.17233401536941528" fov="0.98099786043167114" distance="0.13345207436180115"/>
+                        <keyframe roll="0" time="167967" pan="-0.64920490980148315" id="point11" tilt="-0.19451102614402771" fov="0.99933117628097534" distance="0.15434380037879944"/>
+                        <keyframe roll="0" time="177343" pan="-0.12044134736061096" id="point12" tilt="-0.14360521733760834" fov="0.92599791288375854" distance="0.070776911211967469"/>
+                        <keyframe roll="0" time="187854" pan="-0.02964489534497261" id="point13" tilt="-0.1259503960609436" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="234634" pan="-0.53897404670715332" id="point14" tilt="-0.18522027134895325" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="236603" pan="-0.97025763988494873" id="point15" tilt="-0.24070709943771362" fov="0.87266463041305542" distance="0.010002000016927718"/>
+                        <keyframe roll="0" time="248948" pan="-1.1329352855682373" id="point16" tilt="-0.22457753121852875" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="252885" pan="-0.53393036127090454" id="point17" tilt="-0.20692262053489685" fov="0.87266463041305542" distance="0.010002000016927718"/>
+                        <keyframe roll="0" time="274774" pan="0.15180082619190216" id="point18" tilt="-0.1199091374874115" fov="0.87266463041305542" distance="0.010003000257372855"/>
+                        <keyframe roll="0" time="278845" pan="0.28770503401756287" id="point19" tilt="-0.098471067845821381" fov="0.87266463041305542" distance="0.010004000497817992"/>
+                        <keyframe roll="0" time="291958" pan="0.73538380861282349" id="point20" tilt="-0.087121427059173584" fov="0.87266463041305542" distance="0.010005000738263129"/>
+                        <keyframe roll="0" time="312545" pan="0.17925566434860229" id="point21" tilt="-0.10737881809473038" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="316082" pan="-0.069173745810985565" id="point22" tilt="-0.13638328015804291" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="329829" pan="-0.58747047185897827" id="point23" tilt="-0.27888357639312744" fov="0.87266463041305542" distance="0.010002000016927718"/>
+                        <keyframe roll="0" time="359058" pan="-0.75284254550933838" id="point24" tilt="-0.28140628337860107" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="382782" pan="-0.059257537126541138" id="point25" tilt="-0.14016710221767426" fov="0.87266463041305542" distance="0.010005000257372854"/>
+                        <keyframe roll="0" time="398897" pan="-0.23202390968799591" id="point26" tilt="-0.16160525381565094" fov="0.87266463041305542" distance="0.010006000047385692"/>
+                        <keyframe roll="0" time="423356" pan="-0.69525611400604248" id="point27" tilt="-0.12125101685523987" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="455854" pan="-0.77447026968002319" id="point28" tilt="-0.35622411966323853" fov="1.1243311166763306" distance="0.29678739769554136"/>
+                        <keyframe roll="0" time="465030" pan="-0.10577398538589478" id="point29" tilt="-0.66786962747573853" fov="1.1243311166763306" distance="0.29678841097450254"/>
+                        <keyframe roll="0" time="497129" pan="0.39357984066009521" id="point30" tilt="-0.36114001274108887" fov="0.87933135032653809" distance="0.017598056925296784"/>
+                        <keyframe roll="0" time="513212" pan="0.064924545586109161" id="point31" tilt="-0.35110822319984436" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="529028" pan="-0.042265806347131729" id="point32" tilt="-0.30697101354598999" fov="0.87266463041305542" distance="0.010002000016927718"/>
+                        <keyframe roll="0" time="537703" pan="-0.18728789687156677" id="point33" tilt="-0.29688256978988647" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="543042" pan="-0.9529266357421875" id="point34" tilt="-0.39524546265602112" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="579345" pan="-0.34003892540931702" id="point35" tilt="-0.14270661771297455" fov="0.94599795341491699" distance="0.093567946685314179"/>
+                        <keyframe roll="0" time="592558" pan="-0.34003892540931702" id="point36" tilt="-0.14270661771297455" fov="0.94599795341491699" distance="0.093568945063114167"/>
+                        <keyframe roll="0" time="599398" pan="0.50569218397140503" id="point37" tilt="0.016698196530342102" fov="0.94599795341491699" distance="0.093569943440914155"/>
+                        <keyframe roll="0" time="605237" pan="0.27523577213287354" id="point38" tilt="-0.13237497210502625" fov="1.0893311500549316" distance="0.25690318806266782"/>
+                        <keyframe roll="0" time="615681" pan="-0.13824185729026794" id="point39" tilt="-0.2061409056186676" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="637837" pan="-0.097323596477508545" id="point40" tilt="-0.090519063174724579" fov="0.88099795579910278" distance="0.019497235996484757"/>
+                        <keyframe roll="0" time="675875" pan="-0.3604273796081543" id="point41" tilt="-0.089305251836776733" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="680880" pan="-0.63660025596618652" id="point42" tilt="-0.096871629357337952" fov="0.87266463041305542" distance="0.010002000016927718"/>
+                        <keyframe roll="0" time="708340" pan="0.11373282968997955" id="point43" tilt="0.0027524607721716166" fov="0.87266463041305542" distance="0.010003000257372855"/>
+                        <keyframe roll="0" time="721620" pan="-0.11956427991390228" id="point44" tilt="-0.059035547077655792" fov="0.91766458749771118" distance="0.061280676854610444"/>
+                        <keyframe roll="0" time="723289" pan="-0.46943429112434387" id="point45" tilt="-0.072946228086948395" fov="0.91766458749771118" distance="0.061281675232410432"/>
+                        <keyframe roll="0" time="791390" pan="-0.87840896844863892" id="point46" tilt="-0.15780140459537506" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="794927" pan="-0.4824351966381073" id="point47" tilt="-0.12879696488380432" fov="0.87266463041305542" distance="0.010002000016927718"/>
+                        <keyframe roll="0" time="798798" pan="0.021990459412336349" id="point48" tilt="-0.087181851267814636" fov="0.87266463041305542" distance="0.010003000257372855"/>
+                        <keyframe roll="0" time="803335" pan="0.41922605037689209" id="point49" tilt="-0.055655203759670258" fov="1.0543311834335327" distance="0.21701902313327789"/>
+                        <keyframe roll="0" time="806672" pan="0.29159203171730042" id="point50" tilt="-0.10715664178133011" fov="1.1726644039154053" distance="0.35186557633972165"/>
+                        <keyframe roll="0" time="807506" pan="-0.26148897409439087" id="point51" tilt="-0.38627544045448303" fov="1.1726644039154053" distance="0.35186658961868283"/>
+                        <keyframe roll="0" time="820553" pan="-0.26148897409439087" id="point52" tilt="-0.38627544045448303" fov="1.0276645421981812" distance="0.18663105530834198"/>
+                        <keyframe roll="0" time="890289" pan="-0.15226286649703979" id="point53" tilt="-0.41901463270187378" fov="1.0276645421981812" distance="0.18663205368614197"/>
+                        <keyframe roll="0" time="891624" pan="0.61405438184738159" id="point54" tilt="-0.38087213039398193" fov="1.0276645421981812" distance="0.18663305206394196"/>
+                        <keyframe roll="0" time="901100" pan="0.15577726066112518" id="point55" tilt="-0.45715713500976563" fov="1.0276645421981812" distance="0.18663405044174194"/>
+                        <keyframe roll="0" time="921820" pan="0.30661368370056152" id="point56" tilt="-0.42594963312149048" fov="1.0276645421981812" distance="0.18663504881954193"/>
+                        <keyframe roll="0" time="942942" pan="0.11997253447771072" id="point57" tilt="-0.39445483684539795" fov="0.9759979248046875" distance="0.12775439186191559"/>
+                        <keyframe roll="0" time="944877" pan="-0.31461766362190247" id="point58" tilt="-0.37067541480064392" fov="0.87266463041305542" distance="0.010000999776482581"/>
+                        <keyframe roll="0" time="962027" pan="-0.57187426090240479" id="point59" tilt="-0.29879468679428101" fov="0.87266463041305542" distance="0.010002000016927718"/>
+                        <keyframe roll="0" time="968600" pan="-0.96028202772140503" id="point60" tilt="-0.26222386956214905" fov="0.87266463041305542" distance="0.010003000257372855"/>
+                        <keyframe roll="0" time="985316" pan="-0.51512593030929565" id="point61" tilt="-0.16133862733840942" fov="0.87266463041305542" distance="0.010004000497817992"/>
+                        <keyframe roll="0" time="990395" pan="0.54038655757904053" id="point62" tilt="-0.1852564811706543" fov="0.87266463041305542" distance="0.010005000738263129"/>
+                        <keyframe roll="0" time="995127" pan="0.54038655757904053" id="point63" tilt="-0.1852564811706543" fov="0.87266463041305542" distance="0.010006000978708266"/>
+                        <keyframe roll="0" time="1001065" pan="0.68793082237243652" id="point64" tilt="-0.17516791820526123" fov="0.87266463041305542" distance="0.010007001219153404"/>
+                    </keyframes>
+                    <transitions>
+                        <transition connection="point0-point1" easing_func="0"/>
+                        <transition connection="point1-point2" easing_func="0"/>
+                        <transition connection="point2-point3" easing_func="0"/>
+                        <transition connection="point3-point4" easing_func="0"/>
+                        <transition connection="point4-point5" easing_func="0"/>
+                        <transition connection="point5-point6" easing_func="0"/>
+                        <transition connection="point6-point7" easing_func="0"/>
+                        <transition connection="point7-point8" easing_func="0"/>
+                        <transition connection="point8-point9" easing_func="0"/>
+                        <transition connection="point9-point10" easing_func="0"/>
+                        <transition connection="point10-point11" easing_func="0"/>
+                        <transition connection="point11-point12" easing_func="0"/>
+                        <transition connection="point12-point13" easing_func="0"/>
+                        <transition connection="point13-point14" easing_func="0"/>
+                        <transition connection="point14-point15" easing_func="0"/>
+                        <transition connection="point15-point16" easing_func="0"/>
+                        <transition connection="point16-point17" easing_func="0"/>
+                        <transition connection="point17-point18" easing_func="0"/>
+                        <transition connection="point18-point19" easing_func="0"/>
+                        <transition connection="point19-point20" easing_func="0"/>
+                        <transition connection="point20-point21" easing_func="0"/>
+                        <transition connection="point21-point22" easing_func="0"/>
+                        <transition connection="point22-point23" easing_func="0"/>
+                        <transition connection="point23-point24" easing_func="0"/>
+                        <transition connection="point24-point25" easing_func="0"/>
+                        <transition connection="point25-point26" easing_func="0"/>
+                        <transition connection="point26-point27" easing_func="0"/>
+                        <transition connection="point27-point28" easing_func="0"/>
+                        <transition connection="point28-point29" easing_func="0"/>
+                        <transition connection="point29-point30" easing_func="0"/>
+                        <transition connection="point30-point31" easing_func="0"/>
+                        <transition connection="point31-point32" easing_func="0"/>
+                        <transition connection="point32-point33" easing_func="0"/>
+                        <transition connection="point33-point34" easing_func="0"/>
+                        <transition connection="point34-point35" easing_func="0"/>
+                        <transition connection="point35-point36" easing_func="0"/>
+                        <transition connection="point36-point37" easing_func="0"/>
+                        <transition connection="point37-point38" easing_func="0"/>
+                        <transition connection="point38-point39" easing_func="0"/>
+                        <transition connection="point39-point40" easing_func="0"/>
+                        <transition connection="point40-point41" easing_func="0"/>
+                        <transition connection="point41-point42" easing_func="0"/>
+                        <transition connection="point42-point43" easing_func="0"/>
+                        <transition connection="point43-point44" easing_func="0"/>
+                        <transition connection="point44-point45" easing_func="0"/>
+                        <transition connection="point45-point46" easing_func="0"/>
+                        <transition connection="point46-point47" easing_func="0"/>
+                        <transition connection="point47-point48" easing_func="0"/>
+                        <transition connection="point48-point49" easing_func="0"/>
+                        <transition connection="point49-point50" easing_func="0"/>
+                        <transition connection="point50-point51" easing_func="0"/>
+                        <transition connection="point51-point52" easing_func="0"/>
+                        <transition connection="point52-point53" easing_func="0"/>
+                        <transition connection="point53-point54" easing_func="0"/>
+                        <transition connection="point54-point55" easing_func="0"/>
+                        <transition connection="point55-point56" easing_func="0"/>
+                        <transition connection="point56-point57" easing_func="0"/>
+                        <transition connection="point57-point58" easing_func="0"/>
+                        <transition connection="point58-point59" easing_func="0"/>
+                        <transition connection="point59-point60" easing_func="0"/>
+                        <transition connection="point60-point61" easing_func="0"/>
+                        <transition connection="point61-point62" easing_func="0"/>
+                        <transition connection="point62-point63" easing_func="0"/>
+                        <transition connection="point63-point64" easing_func="0"/>
+                    </transitions>
+                    <deep_track_areas/>
+                </recording>
+            </timeline>
+        </scheme>
+        <scheme id="backup" last_edit_time="2026.04.18 19:46" creation="2026.04.18 19:46:22.480">
+            <preference ratio_height="9" trim_end="1370485" favourite="0" ratio_width="16" trim_start="0">
+                <bullet_time fov="1.0421360963658142" distance="0.8125"/>
+                <rendering projection="64" roll="0" rotate_angle="0" stabilization="1" dewarp_mode="0" pitch="0" cold_shoe="0" ai_raw="0" blend_angle="0" accessory="0" stab_type="0" directional_lock="0" motion_blur="0" yaw="0" dewarp="0">
+                    <play_rate/>
+                </rendering>
+                <audio denoise_type="0" volume="0.5"/>
+                <optimization>
+                    <calibration offset=""/>
+                    <stitching drone_suite="0" optical_flow_stitching="0" image_fusion="0" is_selfie="0" color_enhancement="0" remove_black_edge_value="0" remove_black_edge="0" audio_mode="2" under_water_correction="0" dynamic_stitching="0"/>
+                </optimization>
+                <logo enable_logo="0" logo_location="0" selected_logo="" logo_size="0.30000001"/>
+            </preference>
+            <timeline duration_ms="1370485">
+                <recording>
+                    <keyframes/>
+                    <transitions/>
+                    <deep_track_areas/>
+                </recording>
+            </timeline>
+        </scheme>
+    </schemes>
+    <bigboom>
+        <config>
+            <aspect_ratio height="9" width="16"/>
+        </config>
+        <clips/>
+    </bigboom>
+</project>

@@ -258,6 +258,9 @@ def main():
                         help="Output plot filename (default: pan_comparison.png)")
     args = parser.parse_args()
 
+    gt_interp, gt_t0, gt_t1 = load_ground_truth(args.insprj)
+    df_pred = load_predicted(args.predicted)
+
     if args.start_times:
         start_times = parse_start_times(args.start_times)
     else:
@@ -268,9 +271,6 @@ def main():
         start_times = [float(ts[0])] + [float(ts[i+1]) for i in gap_indices]
         print(f'[Auto] Detected {len(start_times)} segments at: '
               f"{', '.join(f'{t:.0f}s' for t in start_times)}")
-
-    gt_interp, gt_t0, gt_t1 = load_ground_truth(args.insprj)
-    df_pred = load_predicted(args.predicted)
 
     # Warn if predicted timestamps fall outside GT range
     pred_t0 = df_pred.timestamp_s.min()
