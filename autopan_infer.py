@@ -72,6 +72,7 @@ DBSCAN_EPS_DEG    = 8.0   # cluster radius in equirect degrees
 DBSCAN_MIN_SAMPLES = 2    # minimum players to form a cluster
 DBSCAN_MIN_SIZE    = 3    # minimum cluster size to use as pan target
 HOLD_THRESHOLD     = 0.80 # only move when cluster beyond this fraction of half-frame
+OUTPUT_FOV         = 80.0  # FOV for output frames (narrower = more zoom)
 REANCHOR_PAN_SPEED    = 3.0   # degrees per frame max during pan to new anchor
 REANCHOR_COOLDOWN     = 10.0  # minimum seconds between re-anchors
 REANCHOR_BACKSTOP     = 60.0  # re-anchor if nothing triggered for this long
@@ -420,8 +421,13 @@ def choose_target(
     # 3+4. Kalman prediction still valid — blend with player cluster
     if tracker.is_valid() and tracker.predicted_pos() is not None:
         px, py = tracker.predicted_pos()
-        age_ratio = tracker.frames_since_detection / KALMAN_MAX_PREDICT
-        kalman_weight = max(0.85, 0.9 * (1.0 - age_ratio))
+        # Reset Kalman if predicted position is outside the frame
+        if px < 0 or px > OUT_W or py < 0 or py > OUT_H:
+            tracker.reset()
+        if tracker.is_valid() and tracker.predicted_pos() is not None:
+            px, py = tracker.predicted_pos()
+            age_ratio = tracker.frames_since_detection / KALMAN_MAX_PREDICT
+            kalman_weight = max(0.85, 0.9 * (1.0 - age_ratio))
 
         cluster = find_action_cluster(players, cam_yaw, e2p_fov) \
             if len(players) >= DBSCAN_MIN_SAMPLES else None
@@ -606,7 +612,9 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
                     writer, debug: bool = False,
                     yaw_init: float = 0.0,
                     csv_writer=None,
-                    seg_mode: str = 'track') -> int:
+                    seg_mode: str = 'track',
+                    output_fov: float = None,
+                    detect_fov: float = None) -> int:
 
     cam       = CameraState(yaw=yaw_init, pitch=e2p_tilt)
     tracker   = KalmanBallTracker()
@@ -631,15 +639,20 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
         rgb = cv2.cvtColor(eq, cv2.COLOR_BGR2RGB)
 
         # Project to perspective at current pan/tilt
-        persp_rgb = e2p(rgb, fov_deg=e2p_fov,
+        # Use output_fov for the rendered frame (can be narrower for zoom effect)
+        _out_fov = output_fov if output_fov is not None else e2p_fov
+        persp_rgb = e2p(rgb, fov_deg=_out_fov,
                         u_deg=-cam.yaw, v_deg=cam.pitch,
                         out_hw=(OUT_H, OUT_W), mode='bilinear')
         persp = cv2.cvtColor(persp_rgb, cv2.COLOR_RGB2BGR)
 
         # Rebuild pitch mask periodically
+        # Use detect_fov for mask if set
+        _det_fov = detect_fov if detect_fov is not None else \
+                   (output_fov if output_fov is not None else e2p_fov)
         if frame_idx % (DETECT_EVERY * 5) == 0 or frame_idx == 0:
             mask = build_pitch_mask(calib_path, cam.yaw, cam.pitch,
-                                    e2p_fov, OUT_H, OUT_W)
+                                    _det_fov, OUT_H, OUT_W)
             if mask is not None:
                 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (40, 40))
                 mask_eroded = cv2.erode(mask, kernel)
@@ -648,11 +661,29 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
 
         # Detection every DETECT_EVERY frames
         if frame_idx % DETECT_EVERY == 0:
-            last_players = detect_players(persp, player_model, device, mask)
+            # Use detect_fov for detection if different from output
+            _dfov = detect_fov if detect_fov is not None else \
+                    (output_fov if output_fov is not None else e2p_fov)
+            _ofov = output_fov if output_fov is not None else e2p_fov
+            if _dfov != _ofov:
+                det_rgb = e2p(rgb, fov_deg=_dfov,
+                              u_deg=-cam.yaw, v_deg=cam.pitch,
+                              out_hw=(OUT_H, OUT_W), mode='bilinear')
+                det_frame = cv2.cvtColor(det_rgb, cv2.COLOR_RGB2BGR)
+            else:
+                det_frame = persp
+            last_players = detect_players(det_frame, player_model, device, mask)
             if ball_model is not None:
                 last_trusted = tracker.predicted_pos() if tracker.is_valid() else None
-                last_ball = detect_ball(persp, ball_model, device,
-                                        mask, last_trusted, mask_eroded)
+                # Ball mask: keep bottom boundary (exclude near-side spare balls)
+                # but open top third so aerial balls are detected
+                if mask_eroded is not None:
+                    ball_mask = mask_eroded.copy()
+                    ball_mask[:OUT_H//3, :] = 1  # allow top third for aerial balls
+                else:
+                    ball_mask = None
+                last_ball = detect_ball(det_frame, ball_model, device,
+                                        ball_mask, last_trusted, None)
             else:
                 last_ball = None
             if last_ball: ball_count += 1
@@ -791,6 +822,11 @@ def main():
     p.add_argument('--yaw-inits',    type=str,   default=None, metavar='DEGREES',
                    help='Comma-separated yaw_init per segment; overrides scan warm-start')
     p.add_argument('--debug',        action='store_true')
+    p.add_argument('--output-fov',   type=float, default=None,
+                   help='FOV for output frames in degrees (default: same as e2p_fov). '
+                        'Smaller = more zoom, better ball detection. Try 70-80.')
+    p.add_argument('--detect-fov',   type=float, default=None,
+                   help='FOV for detection (default: same as output-fov). Smaller = larger ball.')
     p.add_argument('--mode',         default='track', choices=['track','reanchor'],
                    help='track=continuous (default), reanchor=periodic scan+hold')
     p.add_argument('--log-csv',      type=str,   default=None, metavar='PATH',
@@ -864,6 +900,8 @@ def main():
             yaw_init=yaw_init,
             csv_writer=_csv_writer,
             seg_mode=args.mode,
+            output_fov=args.output_fov,
+            detect_fov=args.detect_fov,
         )
 
     writer.stdin.close()
