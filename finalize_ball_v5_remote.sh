@@ -48,6 +48,7 @@ fi
 BEST_PT="$RUN_DIR/weights/best.pt"
 STABLE_PT="models/ball_v5_stable.pt"
 STABLE_JSON="results/ball_v5_stable_eval.json"
+STABLE_DOMAIN_JSON="results/ball_v5_stable_domain_eval.json"
 STATUS_JSON="results/ball_v5_finalize_status.json"
 
 if [[ ! -s "$BEST_PT" ]]; then
@@ -78,7 +79,9 @@ echo "[finalize copy] $BEST_PT -> $STABLE_PT"
   --batch "$BATCH" \
   --workers "$WORKERS" \
   --device "$DEVICE" \
-  --metrics-json "$STABLE_JSON"
+  --metrics-json "$STABLE_JSON" \
+  --eval-domains \
+  --domain-metrics-json "$STABLE_DOMAIN_JSON"
 
 "$PYTHON_BIN" - <<'PY'
 import json
@@ -87,22 +90,47 @@ import shutil
 from pathlib import Path
 
 metrics_path = Path("results/ball_v5_stable_eval.json")
+domain_metrics_path = Path("results/ball_v5_stable_domain_eval.json")
 metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
 map50 = float(metrics.get("map50", metrics.get("mAP50", 0.0)))
 map5095 = float(metrics.get("map50_95", metrics.get("mAP50-95", metrics.get("map", 0.0))))
-passed = map50 >= 0.90 and map5095 >= 0.60
+target_map50 = float(os.environ.get("TARGET_MAP50", "0.90"))
+target_map5095 = float(os.environ.get("TARGET_MAP50_95", "0.60"))
+target_domain_recall = float(os.environ.get("TARGET_INSTA360_RECALL", "0.75"))
+domain = os.environ.get("TARGET_DOMAIN", "insta360_style")
+domain_recall = None
+if domain_metrics_path.is_file():
+    domain_metrics = json.loads(domain_metrics_path.read_text(encoding="utf-8"))
+    for row in domain_metrics.get("domains", []):
+        if row.get("domain") == domain:
+            domain_recall = float(row.get("recall", row.get("metrics/recall(B)", 0.0)))
+            break
+
+metric_passed = map50 >= target_map50 and map5095 >= target_map5095
+domain_passed = domain_recall is not None and domain_recall >= target_domain_recall
+passed = metric_passed and domain_passed
+if not metric_passed:
+    status_name = "failed_metric_gate"
+elif not domain_passed:
+    status_name = "failed_domain_gate"
+else:
+    status_name = "passed"
 status = {
-    "status": "passed" if passed else "failed_metric_gate",
+    "status": status_name,
     "map50": map50,
     "map50_95": map5095,
-    "target_map50": 0.90,
-    "target_map50_95": 0.60,
+    "target_map50": target_map50,
+    "target_map50_95": target_map5095,
+    "domain": domain,
+    "domain_recall": domain_recall,
+    "target_domain_recall": target_domain_recall,
     "promoted": False,
 }
-print(f"[finalize metrics] map50={map50:.4f} map50_95={map5095:.4f}")
+print(f"[finalize metrics] map50={map50:.4f} map50_95={map5095:.4f} {domain}_recall={domain_recall}")
 if os.environ.get("PROMOTE_ON_PASS", "1") != "0" and passed:
     shutil.copy2("models/ball_v5_stable.pt", "models/ball_v5.pt")
     shutil.copy2(metrics_path, "results/ball_v5_eval.json")
+    shutil.copy2(domain_metrics_path, "results/ball_v5_domain_eval.json")
     status["promoted"] = True
     print("[finalize promote] copied stable artifacts to final ball_v5 paths")
 else:

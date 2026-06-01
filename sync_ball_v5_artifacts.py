@@ -90,7 +90,8 @@ def read_json_if_exists(path: Path) -> dict[str, Any] | None:
 
 
 def local_candidate_entry(name: str, model: str, eval_json: str | None = None,
-                          status_json: str | None = None, results_csv: str | None = None) -> dict[str, Any]:
+                          status_json: str | None = None, results_csv: str | None = None,
+                          domain_eval_json: str | None = None) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "name": name,
         "model": {
@@ -110,6 +111,12 @@ def local_candidate_entry(name: str, model: str, eval_json: str | None = None,
             **local_file_info(ROOT / status_json, include_mtime=False),
             "status": read_json_if_exists(ROOT / status_json),
         }
+    if domain_eval_json:
+        entry["domain_eval_json"] = {
+            "path": domain_eval_json,
+            **local_file_info(ROOT / domain_eval_json, include_mtime=False),
+            "metrics": read_json_if_exists(ROOT / domain_eval_json),
+        }
     if results_csv:
         entry["results_csv"] = {
             "path": results_csv,
@@ -120,8 +127,20 @@ def local_candidate_entry(name: str, model: str, eval_json: str | None = None,
 
 def write_candidate_manifest(live: dict | None = None) -> None:
     entries = [
-        local_candidate_entry("formal_final", "models/ball_v5.pt", "results/ball_v5_eval.json", "results/ball_v5_finalize_status.json"),
-        local_candidate_entry("stable_yolo11s_1280", "models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json", "results/ball_v5_finalize_status.json"),
+        local_candidate_entry(
+            "formal_final",
+            "models/ball_v5.pt",
+            "results/ball_v5_eval.json",
+            "results/ball_v5_finalize_status.json",
+            domain_eval_json="results/ball_v5_domain_eval.json",
+        ),
+        local_candidate_entry(
+            "stable_yolo11s_1280",
+            "models/ball_v5_stable.pt",
+            "results/ball_v5_stable_eval.json",
+            "results/ball_v5_finalize_status.json",
+            domain_eval_json="results/ball_v5_stable_domain_eval.json",
+        ),
         local_candidate_entry(
             "yolo11s_1280_candidate",
             "models/ball_v5_yolo11s_1280_candidate.pt",
@@ -151,6 +170,8 @@ def remote_files(args) -> list[RemoteFile]:
         RemoteFile("data_yaml", f"{ws}/data/ball_v5/data.yaml", data_yaml_target),
         RemoteFile("eval_json", f"{ws}/results/ball_v5_eval.json", ROOT / "results" / "ball_v5_eval.json"),
         RemoteFile("stable_eval_json", f"{ws}/results/ball_v5_stable_eval.json", ROOT / "results" / "ball_v5_stable_eval.json"),
+        RemoteFile("domain_eval_json", f"{ws}/results/ball_v5_domain_eval.json", ROOT / "results" / "ball_v5_domain_eval.json"),
+        RemoteFile("stable_domain_eval_json", f"{ws}/results/ball_v5_stable_domain_eval.json", ROOT / "results" / "ball_v5_stable_domain_eval.json"),
         RemoteFile("finalize_status", f"{ws}/results/ball_v5_finalize_status.json", ROOT / "results" / "ball_v5_finalize_status.json"),
     ]
 

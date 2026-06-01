@@ -126,6 +126,9 @@ status/log/result sync while a large checkpoint is still changing; the command
 writes `results/ball_v5_live_manifest.json` with the active run name, paths, and
 latest metrics. Fetch commands also write `results/ball_v5_candidates.json`, a
 local manifest of final, stable, preserved candidate, and live-cache artifacts.
+Completed finalizers fetch `results/ball_v5_stable_domain_eval.json` and, on
+promotion, `results/ball_v5_domain_eval.json` alongside the aggregate eval
+files.
 
 Runs that miss the formal target can still be useful. Preserve those checkpoints
 under explicit candidate names, for example

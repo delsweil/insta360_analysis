@@ -37,3 +37,4 @@
 - Do not trust aggregate detector metrics when the dataset mixes camera domains. The audit must expose source-domain composition and duplicate label rows so Veo-style performance cannot mask weak Insta360 recall.
 - Detector candidate comparisons should include `train_ball_v5.py --eval-domains` output. Use aggregate metrics for continuity with older runs, but gate practical progress on the Insta360-style subset.
 - Keep the formal domain eval artifact at `results/ball_v5_domain_eval.json` so `verify_plan.py` can gate the final detector on Insta360-style recall.
+- Remote detector finalizers should produce stable and promoted domain eval JSON in the same pass as aggregate eval, otherwise the formal detector gate can pass while the Insta360-specific gate stays unverified.
