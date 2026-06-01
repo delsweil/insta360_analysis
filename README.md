@@ -100,13 +100,14 @@ python train_ball_v5.py \
   --split test \
   --eval-domains \
   --metrics-json results/ball_v5_candidate_eval.json \
-  --domain-metrics-json results/ball_v5_candidate_domain_eval.json
+  --domain-metrics-json results/ball_v5_domain_eval.json
 ```
 
 `--eval-domains` builds hardlinked/copied YOLO subset datasets under
 `runs/ball_v5/domain_subsets/` and evaluates `insta360_style` and `veo_style`
 separately. Treat the Insta360 subset as the critical detector signal for the
-autopan pipeline.
+autopan pipeline. `verify_plan.py` reads `results/ball_v5_domain_eval.json`
+and requires at least `0.75` recall on `insta360_style` by default.
 
 Check the remote GPU training job and fetch artifacts:
 

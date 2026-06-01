@@ -114,7 +114,7 @@ So the earlier mixed-class/mixed-segmentation corruption appears addressed, but 
 ## Recommendations
 
 1. Do not promote the detector based on aggregate mAP. Gate promotion on `valid_insta360` or `test_insta360` recall/mAP50.
-2. Split reporting by source domain in every training/eval run: Veo-style, Insta360-style, and aggregate. Use `train_ball_v5.py --eval-domains` for repeatable subset metrics.
+2. Split reporting by source domain in every training/eval run: Veo-style, Insta360-style, and aggregate. Use `train_ball_v5.py --eval-domains --domain-metrics-json results/ball_v5_domain_eval.json` for repeatable subset metrics.
 3. Remove duplicate label rows before the final detector training pass and keep duplicate-row detection in `audit_ball_dataset.py`.
 4. If `ball_dataset_v5_clean` is the intended canonical dataset, point training scripts at that exact artifact and record its fingerprint in eval JSON.
 5. Add a minimum Insta360 recall gate. A reasonable first gate would be `recall >= 0.75` on an Insta360-only validation/test subset, then raise it once the dataset is expanded.

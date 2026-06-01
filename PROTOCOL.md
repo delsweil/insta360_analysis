@@ -36,3 +36,4 @@
 - When generating PowerShell wrapper scripts with interpolated paths, precompute `.Replace('\\','/')` path strings before the here-string. Inline `-replace '\'` interpolation can erase arguments and make background jobs appear to finish while doing no useful work.
 - Do not trust aggregate detector metrics when the dataset mixes camera domains. The audit must expose source-domain composition and duplicate label rows so Veo-style performance cannot mask weak Insta360 recall.
 - Detector candidate comparisons should include `train_ball_v5.py --eval-domains` output. Use aggregate metrics for continuity with older runs, but gate practical progress on the Insta360-style subset.
+- Keep the formal domain eval artifact at `results/ball_v5_domain_eval.json` so `verify_plan.py` can gate the final detector on Insta360-style recall.
