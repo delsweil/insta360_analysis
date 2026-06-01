@@ -105,9 +105,10 @@ local manifest of final, stable, preserved candidate, and live-cache artifacts.
 Runs that miss the formal target can still be useful. Preserve those checkpoints
 under explicit candidate names, for example
 `models/ball_v5_yolo11s_1280_candidate.pt` with
-`results/ball_v5_yolo11s_1280_candidate_eval.json`. The worker and
-`autopan_infer.py --ball auto` choose the best evaluated local detector
-candidate rather than blindly preferring a stale final filename.
+`results/ball_v5_yolo11s_1280_candidate_eval.json`. The worker,
+`autopan_infer.py --ball auto`, and the `evaluate.py --approach track_v2`
+preset choose the best evaluated local detector candidate rather than blindly
+preferring a stale final filename.
 
 Run the implementation verifier:
 
@@ -117,7 +118,9 @@ python verify_plan.py --allow-blocked --run-python-compile --run-cli-smoke --run
 
 The detector metric gate requires `mAP50 >= 0.90` and `mAP50-95 >= 0.60`.
 End-to-end pan/ball recall gates also require accessible `.insv` footage and
-ball ground-truth files.
+independently annotated ball ground-truth files. Detector-derived predictor
+CSVs are useful as pseudo-label evidence, but they should not be used to pass
+the ground-truth recall/RMSE gates.
 
 ---
 

@@ -31,3 +31,4 @@
 - Avoid inline SSH one-liners for launching background training jobs from PowerShell. Put the launch logic in a script file, upload it, then run `bash script.sh` so `$ts`, log paths, and PID files are created on the remote host predictably.
 - Live training sync should name the active Ultralytics run and write a manifest. Generic files like `ball_v5_live_best.pt` are convenient caches, but they are ambiguous once multiple follow-up runs exist.
 - When preserving intermediate checkpoints in git, enable Git LFS first and force-add only the intended ignored `*.pt` files. Keep live follow-up cache checkpoints out of the commit unless explicitly requested, because they can be large and ambiguous.
+- Do not convert detector-derived training/predictor CSVs into "ground truth" just to unblock metric gates. They can be useful fixtures or pseudo-label evidence, but recall/RMSE gates need independently annotated ball positions or clearly labeled pseudo-metrics.

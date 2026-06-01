@@ -63,15 +63,16 @@ def run(cmd: list[str], timeout_s: int = 60) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
 
 
-def local_file_info(path: Path) -> dict:
+def local_file_info(path: Path, include_mtime: bool = True) -> dict:
     if not path.exists():
         return {"exists": False}
-    stat = path.stat()
-    return {
+    info = {
         "exists": True,
-        "size": stat.st_size,
-        "mtime": stat.st_mtime,
+        "size": path.stat().st_size,
     }
+    if include_mtime:
+        info["mtime"] = path.stat().st_mtime
+    return info
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -94,25 +95,25 @@ def local_candidate_entry(name: str, model: str, eval_json: str | None = None,
         "name": name,
         "model": {
             "path": model,
-            **local_file_info(ROOT / model),
+            **local_file_info(ROOT / model, include_mtime=False),
         },
     }
     if eval_json:
         entry["eval_json"] = {
             "path": eval_json,
-            **local_file_info(ROOT / eval_json),
+            **local_file_info(ROOT / eval_json, include_mtime=False),
             "metrics": read_json_if_exists(ROOT / eval_json),
         }
     if status_json:
         entry["status_json"] = {
             "path": status_json,
-            **local_file_info(ROOT / status_json),
+            **local_file_info(ROOT / status_json, include_mtime=False),
             "status": read_json_if_exists(ROOT / status_json),
         }
     if results_csv:
         entry["results_csv"] = {
             "path": results_csv,
-            **local_file_info(ROOT / results_csv),
+            **local_file_info(ROOT / results_csv, include_mtime=False),
         }
     return entry
 

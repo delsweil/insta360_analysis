@@ -5,14 +5,12 @@
       "model": {
         "path": "models/ball_v5.pt",
         "exists": true,
-        "size": 76057825,
-        "mtime": 1780317883.822682
+        "size": 76057825
       },
       "eval_json": {
         "path": "results/ball_v5_eval.json",
         "exists": true,
         "size": 401,
-        "mtime": 1780318059.4724464,
         "metrics": {
           "map50": 0.4809161169880827,
           "map50_95": 0.19241388102664198,
@@ -33,7 +31,6 @@
         "path": "results/ball_v5_finalize_status.json",
         "exists": true,
         "size": 169,
-        "mtime": 1780331021.2833962,
         "status": {
           "status": "failed_metric_gate",
           "map50": 0.82031755817434,
@@ -49,14 +46,12 @@
       "model": {
         "path": "models/ball_v5_stable.pt",
         "exists": true,
-        "size": 19254106,
-        "mtime": 1780329626.2235818
+        "size": 19254106
       },
       "eval_json": {
         "path": "results/ball_v5_stable_eval.json",
         "exists": true,
         "size": 948,
-        "mtime": 1780329631.1789162,
         "metrics": {
           "map50": 0.82031755817434,
           "map50_95": 0.4380733215838644,
@@ -93,7 +88,6 @@
         "path": "results/ball_v5_finalize_status.json",
         "exists": true,
         "size": 169,
-        "mtime": 1780331021.2833962,
         "status": {
           "status": "failed_metric_gate",
           "map50": 0.82031755817434,
@@ -109,14 +103,12 @@
       "model": {
         "path": "models/ball_v5_yolo11s_1280_candidate.pt",
         "exists": true,
-        "size": 19254106,
-        "mtime": 1780329626.2235818
+        "size": 19254106
       },
       "eval_json": {
         "path": "results/ball_v5_yolo11s_1280_candidate_eval.json",
         "exists": true,
         "size": 948,
-        "mtime": 1780329631.1789162,
         "metrics": {
           "map50": 0.82031755817434,
           "map50_95": 0.4380733215838644,
@@ -153,7 +145,6 @@
         "path": "results/ball_v5_yolo11s_1280_candidate_status.json",
         "exists": true,
         "size": 169,
-        "mtime": 1780329633.6413634,
         "status": {
           "status": "failed_metric_gate",
           "map50": 0.82031755817434,
@@ -166,8 +157,7 @@
       "results_csv": {
         "path": "results/ball_v5_yolo11s_1280_candidate_results.csv",
         "exists": true,
-        "size": 19732,
-        "mtime": 1780329468.8331437
+        "size": 19732
       }
     },
     {
@@ -175,14 +165,12 @@
       "model": {
         "path": "models/ball_v5_live_best.pt",
         "exists": true,
-        "size": 76070625,
-        "mtime": 1780329476.5068665
+        "size": 76070625
       },
       "eval_json": {
         "path": "results/ball_v5_live_eval.json",
         "exists": true,
         "size": 412,
-        "mtime": 1780326799.4895504,
         "metrics": {
           "map50": 0.8228302623986636,
           "map50_95": 0.44008050119918113,
@@ -202,8 +190,7 @@
       "results_csv": {
         "path": "results/ball_v5_live_results.csv",
         "exists": true,
-        "size": 1054,
-        "mtime": 1780331006.3122444
+        "size": 2053
       }
     }
   ],

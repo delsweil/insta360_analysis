@@ -77,6 +77,26 @@ def _best_device() -> str:
     return 'cpu'
 
 
+def _repo_path(value: str) -> str:
+    path = Path(value)
+    if path.is_absolute():
+        return str(path)
+    candidate = ROOT / path
+    if candidate.exists() or value.startswith('models/'):
+        return str(candidate)
+    return value
+
+
+def preferred_track_v2_ball_model() -> str:
+    """Use the same preserved-candidate policy as production inference."""
+    try:
+        from autopan_infer import preferred_ball_model
+
+        return preferred_ball_model()
+    except Exception:
+        return BALL_V2 if (ROOT / BALL_V2).exists() else BALL
+
+
 def load_gt(insprj_path: str):
     tree = ET.parse(insprj_path)
     kfs  = tree.getroot().findall(".//recording/keyframes/keyframe")
@@ -282,8 +302,8 @@ def build_cmd(approach: str, clip: dict, csv_path: str,
     """Build autopan_infer.py command for a given approach."""
     is_track_v2 = approach == 'track_v2'
     ball_model = args.ball
-    if is_track_v2 and args.ball == BALL and Path(BALL_V2).exists():
-        ball_model = BALL_V2
+    if is_track_v2 and args.ball == BALL:
+        ball_model = preferred_track_v2_ball_model()
     scan_every = args.scan_every
     if is_track_v2 and scan_every <= 0:
         scan_every = 15
@@ -291,10 +311,10 @@ def build_cmd(approach: str, clip: dict, csv_path: str,
     field_opt = args.field_opt or is_track_v2
 
     base = [
-        sys.executable, 'autopan_infer.py',
+        sys.executable, str(ROOT / 'autopan_infer.py'),
         '--insv',        clip['insv'],
         '--calib',       clip['calib'],
-        '--players',     args.players,
+        '--players',     _repo_path(args.players),
         '--ball',        ball_model,
         '--segments',    str(args.segments),
         '--seg-duration', str(args.seg_duration),
@@ -422,10 +442,10 @@ def main():
     if args.clips_file:
         print(f"Loaded {len(CLIPS)} clips from {args.clips_file}")
     if args.approach == 'track_v2':
-        if args.ball == BALL and Path(BALL_V2).exists():
-            print(f"track_v2 preset: using {BALL_V2}")
-        elif args.ball == BALL:
-            print(f"[WARN] track_v2 preset requested but {BALL_V2} is missing; falling back to {BALL}")
+        if args.ball == BALL:
+            print(f"track_v2 preset: using {preferred_track_v2_ball_model()}")
+        else:
+            print(f"track_v2 preset: using override {args.ball}")
         print("track_v2 preset: SAHI on, scan_every=15 unless overridden, field optimizer on")
 
     results_dir = Path(args.results_dir)

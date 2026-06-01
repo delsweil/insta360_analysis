@@ -447,6 +447,8 @@ def component_smoke_check() -> Check:
         candidate_model = ROOT / "models" / "ball_v5_yolo11s_1280_candidate.pt"
         if candidate_model.exists():
             import autopan_infer
+            import argparse
+            import evaluate
             import worker_server
 
             def score(path: Path) -> float:
@@ -464,6 +466,31 @@ def component_smoke_check() -> Check:
                     failures.append(f"autopan auto model={autopan_infer.preferred_ball_model()} expected {expected}")
                 if worker_server.preferred_ball_model() != expected:
                     failures.append(f"worker auto model={worker_server.preferred_ball_model()} expected {expected}")
+                if evaluate.preferred_track_v2_ball_model() != expected:
+                    failures.append(f"evaluate track_v2 model={evaluate.preferred_track_v2_ball_model()} expected {expected}")
+                cmd = evaluate.build_cmd(
+                    "track_v2",
+                    {"insv": "clip.insv", "calib": "calib.json"},
+                    "out.csv",
+                    "out.mp4",
+                    [],
+                    argparse.Namespace(
+                        ball=evaluate.BALL,
+                        players=evaluate.PLAYERS,
+                        scan_every=0,
+                        ball_sahi=False,
+                        field_opt=False,
+                        segments=1,
+                        seg_duration=1.0,
+                        seed=1,
+                        device="cpu",
+                        player_detect_every=3,
+                        ball_detect_every=2,
+                        ball_sahi_every=6,
+                    ),
+                )
+                if expected not in cmd:
+                    failures.append(f"evaluate track_v2 command does not use {expected}: {cmd}")
 
         return Check(
             "automated",
