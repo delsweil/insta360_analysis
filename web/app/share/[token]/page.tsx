@@ -43,8 +43,6 @@ export default function SharePage({ params }: Props) {
   const [autoPlay, setAutoPlay] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const autoPlayRef = useRef(autoPlay)
-  autoPlayRef.current = autoPlay
 
   useEffect(() => {
     async function load() {
@@ -127,6 +125,15 @@ export default function SharePage({ params }: Props) {
     return () => clearInterval(interval)
   }, [])
 
+  const seekTo = useCallback((sec: number) => {
+    playerRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'seekTo', args: [sec, true] }), '*'
+    )
+    playerRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*'
+    )
+  }, [])
+
   // Auto-advance: when current annotation's end time is reached, jump to next
   useEffect(() => {
     if (!autoPlay || annotations.length === 0) return
@@ -137,23 +144,16 @@ export default function SharePage({ params }: Props) {
     if (currentTime >= endTime) {
       const nextIdx = currentIdx + 1
       if (nextIdx < annotations.length) {
-        setCurrentIdx(nextIdx)
-        seekTo(annotations[nextIdx].timestamp_sec)
+        setTimeout(() => {
+          setCurrentIdx(nextIdx)
+          seekTo(annotations[nextIdx].timestamp_sec)
+        }, 0)
       } else {
         // End of highlights
-        setAutoPlay(false)
+        setTimeout(() => setAutoPlay(false), 0)
       }
     }
-  }, [currentTime, autoPlay, currentIdx, annotations])
-
-  const seekTo = useCallback((sec: number) => {
-    playerRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: 'seekTo', args: [sec, true] }), '*'
-    )
-    playerRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*'
-    )
-  }, [])
+  }, [currentTime, autoPlay, currentIdx, annotations, seekTo])
 
   const handleSelectAnnotation = (idx: number) => {
     setCurrentIdx(idx)

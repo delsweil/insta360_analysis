@@ -13,6 +13,9 @@ type UserWithRole = {
   created_at: string
   role: 'admin' | 'coach' | 'player' | null
 }
+type UserRole = NonNullable<UserWithRole['role']>
+type ProfileRow = { id: string; email: string | null }
+type RoleRow = { user_id: string; role: UserRole | null }
 
 const ROLE_LABELS = {
   admin:  { label: 'Admin',  color: '#ef4444', bg: '#fef2f2' },
@@ -52,23 +55,23 @@ export default function AdminUsersPage() {
         .from('profiles')
         .select('id, email')
 
-      const roleMap: Record<string, string> = {}
-      roles?.forEach(r => { roleMap[r.user_id] = r.role })
+      const roleMap: Record<string, UserRole | null> = {}
+      ;(roles as RoleRow[] | null)?.forEach(r => { roleMap[r.user_id] = r.role })
 
       if (profiles && profiles.length > 0) {
-        const combined: UserWithRole[] = profiles.map((p: any) => ({
+        const combined: UserWithRole[] = (profiles as ProfileRow[]).map(p => ({
           id: p.id,
-          email: p.email,
+          email: p.email ?? p.id,
           created_at: '',
-          role: (roleMap[p.id] ?? null) as any,
+          role: roleMap[p.id] ?? null,
         }))
         setUsers(combined)
       } else {
-        const combined: UserWithRole[] = (roles ?? []).map(r => ({
+        const combined: UserWithRole[] = ((roles ?? []) as RoleRow[]).map(r => ({
           id: r.user_id,
           email: r.user_id,
           created_at: '',
-          role: r.role as any,
+          role: r.role,
         }))
         setUsers(combined)
       }

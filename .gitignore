@@ -14,6 +14,9 @@ __pycache__/
 # YOLO runs and artifacts
 runs/
 *.pt
+data/ball_v5/
+data/*_metadata_backup/
+.codex_runs/
 
 # OS cruft
 .DS_Store
@@ -24,3 +27,7 @@ Thumbs.db
 results/*.mp4
 results/*.csv
 training.log
+*.stackdump
+logs/*.pid
+logs/*.log
+logs/*.stderr.log

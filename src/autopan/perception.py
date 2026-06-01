@@ -209,16 +209,34 @@ def filter_by_y_adaptive_area(
 # ----------------------------
 
 class Detector:
-    def __init__(self, player_model_path: str, ball_model_path: str):
-        self.player_model = YOLO(player_model_path)
-        self.ball_model = YOLO(ball_model_path)
+    def __init__(
+        self,
+        player_model_path: Optional[str] = None,
+        ball_model_path: Optional[str] = None,
+        *,
+        player_model=None,
+        ball_model=None,
+        device: Optional[str] = None,
+    ):
+        self.player_model = player_model if player_model is not None else (
+            YOLO(player_model_path) if player_model_path is not None else None
+        )
+        self.ball_model = ball_model if ball_model is not None else (
+            YOLO(ball_model_path) if ball_model_path is not None else None
+        )
+        if self.player_model is None and self.ball_model is None:
+            raise ValueError("At least one player or ball model is required")
+        self.device = device
 
         # Cache names dicts (Ultralytics)
         self.player_names = getattr(self.player_model, "names", {})
         self.ball_names = getattr(self.ball_model, "names", {})
 
     def _infer(self, model: YOLO, img_bgr: np.ndarray, imgsz: int, conf: float):
-        return model(img_bgr, imgsz=imgsz, conf=conf, verbose=False)[0]
+        kwargs = {"imgsz": imgsz, "conf": conf, "verbose": False}
+        if self.device:
+            kwargs["device"] = self.device
+        return model(img_bgr, **kwargs)[0]
 
     def _infer_batch(
         self,
@@ -240,7 +258,10 @@ class Detector:
             batch = len(imgs_bgr)
         for i in range(0, len(imgs_bgr), batch):
             chunk = imgs_bgr[i : i + batch]
-            outs.extend(model(chunk, imgsz=imgsz, conf=conf, verbose=False))
+            kwargs = {"imgsz": imgsz, "conf": conf, "verbose": False}
+            if self.device:
+                kwargs["device"] = self.device
+            outs.extend(model(chunk, **kwargs))
         return outs
 
     # ------------------------
@@ -248,6 +269,8 @@ class Detector:
     # ------------------------
 
     def detect_players(self, img_bgr: np.ndarray, imgsz: int = 960, conf: float = 0.35) -> List[DetBox]:
+        if self.player_model is None:
+            raise RuntimeError("Detector has no player model")
         res = self._infer(self.player_model, img_bgr, imgsz=imgsz, conf=conf)
         boxes: List[DetBox] = []
         for b in res.boxes:
@@ -262,6 +285,8 @@ class Detector:
         return boxes
 
     def detect_ball(self, img_bgr: np.ndarray, imgsz: int = 640, conf: float = 0.20) -> List[DetBox]:
+        if self.ball_model is None:
+            raise RuntimeError("Detector has no ball model")
         res = self._infer(self.ball_model, img_bgr, imgsz=imgsz, conf=conf)
         boxes: List[DetBox] = []
         for b in res.boxes:
@@ -270,6 +295,72 @@ class Detector:
             cf = float(b.conf[0])
             boxes.append(DetBox(x1, y1, x2, y2, conf=cf, cls_id=cls_id))
         return boxes
+
+    def detect_ball_sahi(
+        self,
+        img_bgr: np.ndarray,
+        imgsz: int = 640,
+        conf: float = 0.20,
+        tile_w: int = 640,
+        tile_h: int = 640,
+        overlap: float = 0.25,
+        nms_iou: float = 0.45,
+        tile_batch: int = 8,
+        mask_bin: Optional[np.ndarray] = None,
+        tile_pitch_min_coverage: float = 0.02,
+    ) -> List[DetBox]:
+        """Run sliced ball detection and merge tile detections in image coords.
+
+        This is a lightweight SAHI-style pass for tiny balls. It intentionally
+        stays dependency-free so the repo does not require the external SAHI
+        package for basic inference.
+        """
+        if self.ball_model is None:
+            raise RuntimeError("Detector has no ball model")
+        h, w = img_bgr.shape[:2]
+        tiles = _tile_grid(w, h, tile_w, tile_h, overlap)
+
+        tile_imgs: List[np.ndarray] = []
+        tile_rects: List[Tuple[int, int, int, int]] = []
+        for (x1, y1, x2, y2) in tiles:
+            if mask_bin is not None:
+                mh, mw = mask_bin.shape[:2]
+                if (mw == w) and (mh == h):
+                    cov = float(mask_bin[y1:y2, x1:x2].mean())
+                    if cov < tile_pitch_min_coverage:
+                        continue
+            tile = img_bgr[y1:y2, x1:x2]
+            if tile.size == 0:
+                continue
+            tile_imgs.append(tile)
+            tile_rects.append((x1, y1, x2, y2))
+
+        tile_results = self._infer_batch(
+            self.ball_model,
+            tile_imgs,
+            imgsz=imgsz,
+            conf=conf,
+            batch=tile_batch,
+        )
+
+        boxes: List[DetBox] = []
+        for res, (tx1, ty1, _, _) in zip(tile_results, tile_rects):
+            for b in res.boxes:
+                cls_id = int(b.cls[0])
+                x1, y1, x2, y2 = map(float, b.xyxy[0].tolist())
+                cf = float(b.conf[0])
+                boxes.append(
+                    DetBox(
+                        x1=x1 + tx1,
+                        y1=y1 + ty1,
+                        x2=x2 + tx1,
+                        y2=y2 + ty1,
+                        conf=cf,
+                        cls_id=cls_id,
+                    )
+                )
+
+        return nms_boxes_xyxy(boxes, iou_thresh=nms_iou)
 
     # ------------------------
     # Two-pass small-player detection

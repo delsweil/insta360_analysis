@@ -3,7 +3,7 @@
 // components/ClipRecorder.tsx
 // Mobile clip recording with auto-save, extend/shorten controls
 
-import { useEffect, useState, useRef } from 'react'
+import { useCallback, useEffect, useState, useRef } from 'react'
 
 const AUTO_SAVE_SEC = 30      // auto-save after this many seconds
 const WARNING_SEC = 5         // show countdown in last N seconds
@@ -17,15 +17,25 @@ interface Props {
 }
 
 export default function ClipRecorder({ currentTime, onSave, onCancel, saving, saved }: Props) {
-  const [markIn, setMarkIn] = useState<number>(currentTime)
+  const [markIn] = useState<number>(currentTime)
   const [offset, setOffset] = useState(0)          // manual +/- adjustment in seconds
   const [elapsed, setElapsed] = useState(0)         // seconds since mark in
-  const startWallTime = useRef(Date.now())
+  const startWallTime = useRef<number | null>(null)
+
+  const clipDuration = elapsed + offset
+  const endTime = markIn + clipDuration
+
+  const handleSave = useCallback(() => {
+    onSave(markIn, Math.max(markIn + 1, endTime))
+  }, [onSave, markIn, endTime])
 
   // Count up elapsed wall-clock time
   useEffect(() => {
+    startWallTime.current = Date.now()
     const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startWallTime.current) / 1000))
+      if (startWallTime.current !== null) {
+        setElapsed(Math.floor((Date.now() - startWallTime.current) / 1000))
+      }
     }, 250)
     return () => clearInterval(interval)
   }, [])
@@ -35,16 +45,10 @@ export default function ClipRecorder({ currentTime, onSave, onCancel, saving, sa
     if (elapsed >= AUTO_SAVE_SEC && !saving && !saved) {
       handleSave()
     }
-  }, [elapsed])
+  }, [elapsed, saving, saved, handleSave])
 
-  const clipDuration = elapsed + offset
-  const endTime = markIn + clipDuration
   const timeLeft = AUTO_SAVE_SEC - elapsed
   const isWarning = timeLeft <= WARNING_SEC && timeLeft > 0
-
-  const handleSave = () => {
-    onSave(markIn, Math.max(markIn + 1, endTime))
-  }
 
   const formatDur = (sec: number) => {
     const s = Math.max(0, Math.round(sec))

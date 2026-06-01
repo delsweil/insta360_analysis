@@ -1,0 +1,8 @@
+{
+  "status": "failed_metric_gate",
+  "map50": 0.82031755817434,
+  "map50_95": 0.4380733215838644,
+  "target_map50": 0.9,
+  "target_map50_95": 0.6,
+  "promoted": false
+}

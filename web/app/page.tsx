@@ -3,13 +3,14 @@
 export const dynamic = 'force-dynamic'
 
 import { useEffect, useState } from 'react'
+import type { User } from '@supabase/supabase-js'
 import { supabase, type Game, getCurrentUserRole, isCoachOrAdmin } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import Topbar from '@/components/Topbar'
 
 export default function HomePage() {
   const [games, setGames] = useState<Game[]>([])
-  const [user, setUser] = useState<any>(null)
+  const [user, setUser] = useState<User | null>(null)
   const [canDelete, setCanDelete] = useState(false)
   const [loading, setLoading] = useState(true)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)

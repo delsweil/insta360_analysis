@@ -38,7 +38,7 @@ cd insta360_analysis
 # 5. Python virtual environment
 python3.11 -m venv .venv
 source .venv/bin/activate
-pip install fastapi uvicorn python-multipart pillow numpy opencv-python
+pip install -r requirements.txt
 
 # 6. Node dependencies
 cd web
@@ -51,6 +51,73 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key_here" > web/.env.local
 ```
 
 Get the `NEXT_PUBLIC_SUPABASE_ANON_KEY` from **Supabase dashboard → Project Settings → API → anon public**.
+
+---
+
+## Windows/Linux setup
+
+Install Node.js, Python 3.11, and FFmpeg, then from the repo root:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+cd web
+npm install
+cd ..
+```
+
+For CUDA training or inference, install the PyTorch build that matches the machine's NVIDIA driver before installing the remaining requirements.
+
+---
+
+## Ball tracking v5 workflow
+
+The upgraded ball pipeline is implemented around `autopan_infer.py`, `train_ball_v5.py`,
+`equirect_ball_scanner.py`, `ball_tracker_equirect.py`, `pitch_model.py`, and
+`team_classifier.py`.
+
+Prepare or refresh the merged Roboflow YOLO dataset:
+
+```bash
+python train_ball_v5.py --zip ../ball_detector_merged.v3i.yolov8.zip --extract-dir data/ball_v5 --prepare-only
+python audit_ball_dataset.py --data data/ball_v5/data.yaml --json-out results/ball_v5_dataset_audit.json
+```
+
+Check the remote GPU training job and fetch artifacts:
+
+```bash
+python sync_ball_v5_artifacts.py --status
+python sync_ball_v5_artifacts.py --fetch-live --skip-live-best
+python sync_ball_v5_artifacts.py --fetch
+```
+
+`--status` reports remote and local artifact state separately. Final detector
+artifacts are only current once the remote finalizer has produced
+`models/ball_v5.pt`, `models/ball_v5_stable.pt`, and the matching eval JSON
+files. Live checkpoints are fetched to `ball_v5_live_*` filenames and should not
+be treated as promoted production weights. Use `--skip-live-best` for lightweight
+status/log/result sync while a large checkpoint is still changing; the command
+writes `results/ball_v5_live_manifest.json` with the active run name, paths, and
+latest metrics. Fetch commands also write `results/ball_v5_candidates.json`, a
+local manifest of final, stable, preserved candidate, and live-cache artifacts.
+
+Runs that miss the formal target can still be useful. Preserve those checkpoints
+under explicit candidate names, for example
+`models/ball_v5_yolo11s_1280_candidate.pt` with
+`results/ball_v5_yolo11s_1280_candidate_eval.json`. The worker and
+`autopan_infer.py --ball auto` choose the best evaluated local detector
+candidate rather than blindly preferring a stale final filename.
+
+Run the implementation verifier:
+
+```bash
+python verify_plan.py --allow-blocked --run-python-compile --run-cli-smoke --run-metric-smoke --run-component-smoke --run-eval-smoke
+```
+
+The detector metric gate requires `mAP50 >= 0.90` and `mAP50-95 >= 0.60`.
+End-to-end pan/ball recall gates also require accessible `.insv` footage and
+ball ground-truth files.
 
 ---
 

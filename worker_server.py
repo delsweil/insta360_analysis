@@ -6,22 +6,28 @@ Run from repo root in your venv:
 
 Endpoints:
     GET  /health                  Health check
-    GET  /scan-volumes            Auto-detect SD card mounts under /Volumes
+    GET  /scan-volumes            Auto-detect SD card mounts (macOS /Volumes, Windows D:-Z: drives)
     GET  /scan-folder?path=...    Scan folder for INSV recordings grouped by sequence
     POST /extract-frame           Extract equirect keyframe in-place (no file copy)
     POST /auto-calibrate          Run calibrate_auto.py on an extracted frame
-    POST /autopan                 Stub — not yet implemented
+    POST /autopan                 Start an autopan background job
+    GET  /autopan/{job_id}        Inspect autopan job status and log tail
+    WS   /autopan/{job_id}/events Stream autopan job status updates
 """
 
 import json
+import platform
+import string
+import sys
 import time
 import re
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -66,6 +72,18 @@ class CalibrateRequest(BaseModel):
 class AutopanRequest(BaseModel):
     insv_path: str
     polygon: list
+    output_path: Optional[str] = None
+    players_model: str = "models/yolo11s.pt"
+    ball_model: str = "auto"
+    mode: str = "track"
+    segments: int = 1
+    seg_duration: float = 45.0
+    device: Optional[str] = None
+    scan_every: int = 0
+    ball_sahi: bool = False
+
+
+AUTOPAN_JOBS: dict[str, dict] = {}
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -75,6 +93,42 @@ def job_dir(insv_path: str) -> Path:
     d = WORK_DIR / slug
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def preferred_ball_model() -> str:
+    candidates = [
+        ("models/ball_v5.pt", "results/ball_v5_eval.json"),
+        ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json"),
+        ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json"),
+        ("models/ball_v4.pt", ""),
+    ]
+    available = []
+    for idx, (model_path, metrics_path) in enumerate(candidates):
+        path = REPO_ROOT / model_path
+        if not path.exists():
+            continue
+        score = (-0.5, -0.5)
+        if metrics_path:
+            try:
+                data = json.loads((REPO_ROOT / metrics_path).read_text(encoding="utf-8"))
+                score = (
+                    float(data.get("map50_95", data.get("mAP50-95", data.get("map", 0.0)))),
+                    float(data.get("map50", data.get("mAP50", 0.0))),
+                )
+            except Exception:
+                score = (-1.0, -1.0)
+        available.append((score[0], score[1], -idx, model_path))
+    if available:
+        available.sort(reverse=True)
+        return available[0][3]
+    return "models/ball_v5.pt"
+
+
+def resolve_model_path(value: str, default_auto: Optional[str] = None) -> str:
+    if value == "auto":
+        value = default_auto or value
+    path = Path(value)
+    return str(path if path.is_absolute() else REPO_ROOT / path)
 
 
 def pitch_in_lower_half(frame_path: str) -> bool:
@@ -144,6 +198,85 @@ def format_duration(size_bytes: int) -> str:
     return f"~{int(mins)}min"
 
 
+def tail_text(path: Path, max_bytes: int = 12000) -> str:
+    if not path.exists():
+        return ""
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(max(0, size - max_bytes), 0)
+        return f.read().decode("utf-8", errors="replace")
+
+
+def normalize_polygon_for_calib(polygon: list) -> tuple[list, list]:
+    norm = []
+    pixel = []
+    for p in polygon:
+        if isinstance(p, dict):
+            x = float(p.get("x", 0))
+            y = float(p.get("y", 0))
+        else:
+            x = float(p[0])
+            y = float(p[1])
+        if x <= 1.0 and y <= 1.0:
+            nx, ny = x, y
+            px, py = round(x * 2880), round(y * 1440)
+        else:
+            px, py = round(x), round(y)
+            nx, ny = x / 2880, y / 1440
+        norm.append({"x": round(nx, 6), "y": round(ny, 6)})
+        pixel.append([int(px), int(py)])
+    return norm, pixel
+
+
+def job_status(job_id: str) -> dict:
+    job = AUTOPAN_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, f"Unknown autopan job: {job_id}")
+    proc: subprocess.Popen = job["process"]
+    returncode = proc.poll()
+    if returncode is None:
+        status = "running"
+    elif returncode == 0:
+        status = "complete"
+    else:
+        status = "failed"
+    if returncode is not None and job.get("log_file") is not None:
+        try:
+            job["log_file"].close()
+        except Exception:
+            pass
+        job["log_file"] = None
+    job["status"] = status
+    job["returncode"] = returncode
+    output_path = Path(job["output_path"])
+    output_url = None
+    if output_path.exists():
+        try:
+            rel = output_path.resolve().relative_to(WORK_DIR)
+            output_url = f"http://localhost:8765/files/{rel.as_posix()}?v={int(output_path.stat().st_mtime)}"
+        except ValueError:
+            output_url = None
+    log_url = None
+    try:
+        rel_log = Path(job["log_path"]).resolve().relative_to(WORK_DIR)
+        log_url = f"http://localhost:8765/files/{rel_log.as_posix()}?v={int(time.time())}"
+    except ValueError:
+        pass
+    return {
+        "job_id": job_id,
+        "status": status,
+        "pid": job["pid"],
+        "returncode": returncode,
+        "output_path": job["output_path"],
+        "output_url": output_url,
+        "log_path": str(job["log_path"]),
+        "log_url": log_url,
+        "log_tail": tail_text(job["log_path"]),
+        "started_at": job["started_at"],
+    }
+
+
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -158,9 +291,18 @@ def health():
 @app.get("/scan-volumes")
 def scan_volumes():
     """
-    Auto-detect likely SD card or camera mount points under /Volumes.
+    Auto-detect likely SD card or camera mount points.
+    macOS: scans /Volumes for mounts containing .insv files.
+    Windows: scans drives D:-Z: for removable/SD media with DCIM or .insv files.
     Returns volumes that contain at least one .insv file somewhere inside.
     """
+    if platform.system() == "Windows":
+        return _scan_volumes_windows()
+    return _scan_volumes_macos()
+
+
+def _scan_volumes_macos():
+    """macOS: scan /Volumes for mounted SD cards containing .insv files."""
     volumes = Path("/Volumes")
     if not volumes.exists():
         return {"volumes": [], "warning": "/Volumes not found"}
@@ -182,6 +324,46 @@ def scan_volumes():
         except (PermissionError, OSError):
             continue
 
+    return {"volumes": candidates}
+
+
+def _scan_volumes_windows():
+    """Windows: scan drive letters D:-Z: for SD cards with Insta360 footage."""
+    candidates = []
+    for letter in string.ascii_uppercase[3:]:  # D through Z
+        drive = Path(f"{letter}:\\")
+        if not drive.exists():
+            continue
+
+        # Fast heuristic: look for standard Insta360 DCIM/Camera01 structure
+        dcim = drive / "DCIM" / "Camera01"
+        if dcim.is_dir():
+            try:
+                found = next(dcim.rglob("*.insv"), None)
+                if found:
+                    candidates.append({
+                        "volume": f"{letter}:",
+                        "path": str(found.parent),
+                        "mount": str(drive),
+                    })
+                    continue  # already matched this drive
+            except (PermissionError, OSError):
+                pass
+
+        # Fallback: search root for any .insv file (slower, depth-limited)
+        try:
+            for insv in drive.rglob("*.insv"):
+                candidates.append({
+                    "volume": f"{letter}:",
+                    "path": str(insv.parent),
+                    "mount": str(drive),
+                })
+                break  # one match per drive is enough
+        except (PermissionError, OSError):
+            continue
+
+    if not candidates:
+        return {"volumes": [], "warning": "No drives with .insv files found (checked D:-Z:)"}
     return {"volumes": candidates}
 
 
@@ -367,8 +549,92 @@ def auto_calibrate(req: CalibrateRequest):
 
 @app.post("/autopan")
 def autopan(req: AutopanRequest):
-    return {
-        "status": "not_yet_implemented",
-        "message": "Autopan pipeline is under development. Polygon has been saved.",
-        "insv_path": req.insv_path,
+    insv = Path(req.insv_path)
+    if not insv.exists():
+        raise HTTPException(404, f"File not found: {req.insv_path}")
+    if len(req.polygon) < 4:
+        raise HTTPException(400, "Need at least four pitch polygon points")
+
+    autopan_script = REPO_ROOT / "autopan_infer.py"
+    if not autopan_script.exists():
+        raise HTTPException(500, "autopan_infer.py not found in repo root")
+
+    job_id = uuid.uuid4().hex[:12]
+    jd = job_dir(f"{req.insv_path}_{job_id}")
+    norm_poly, pixel_poly = normalize_polygon_for_calib(req.polygon)
+    calib_path = jd / "autopan_pitch.json"
+    calib_path.write_text(json.dumps({
+        "version": 1,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "source_frame": {"width": 2880, "height": 1440},
+        "auto_polygon": norm_poly,
+        "pixel_polygon": pixel_poly,
+    }, indent=2), encoding="utf-8")
+
+    output_path = Path(req.output_path) if req.output_path else jd / f"{insv.stem}_autopan.mp4"
+    log_path = jd / "autopan.log"
+    csv_path = jd / "pan_log.csv"
+
+    cmd = [
+        sys.executable,
+        str(autopan_script),
+        "--insv", str(insv),
+        "--calib", str(calib_path),
+        "--output", str(output_path),
+        "--players", resolve_model_path(req.players_model),
+        "--ball", resolve_model_path(req.ball_model, default_auto=preferred_ball_model()),
+        "--mode", req.mode,
+        "--segments", str(req.segments),
+        "--seg-duration", str(req.seg_duration),
+        "--log-csv", str(csv_path),
+        "--scan-every", str(max(0, req.scan_every)),
+    ]
+    if req.device:
+        cmd.extend(["--device", req.device])
+    if req.ball_sahi:
+        cmd.append("--ball-sahi")
+
+    log_f = open(log_path, "ab", buffering=0)
+    log_f.write(("COMMAND: " + " ".join(cmd) + "\n").encode("utf-8", errors="replace"))
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(REPO_ROOT),
+        stdout=log_f,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+    )
+
+    AUTOPAN_JOBS[job_id] = {
+        "process": proc,
+        "pid": proc.pid,
+        "status": "running",
+        "returncode": None,
+        "output_path": str(output_path),
+        "log_path": log_path,
+        "csv_path": str(csv_path),
+        "calib_path": str(calib_path),
+        "started_at": time.time(),
+        "log_file": log_f,
     }
+
+    return job_status(job_id)
+
+
+@app.get("/autopan/{job_id}")
+def get_autopan_job(job_id: str):
+    return job_status(job_id)
+
+
+@app.websocket("/autopan/{job_id}/events")
+async def autopan_events(websocket: WebSocket, job_id: str):
+    await websocket.accept()
+    try:
+        while True:
+            status = job_status(job_id)
+            await websocket.send_json(status)
+            if status["status"] != "running":
+                break
+            import asyncio
+            await asyncio.sleep(1.0)
+    except WebSocketDisconnect:
+        return

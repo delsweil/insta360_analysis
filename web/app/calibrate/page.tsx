@@ -41,9 +41,11 @@ interface Recording {
   estimated_duration: string
   files: InsvFile[]
   selected_file?: string   // path of chosen file
+  _excluded?: boolean
 }
 
 type ItemStatus = 'queued' | 'extracting' | 'calibrating' | 'review' | 'accepted' | 'skipped' | 'error'
+type AutopanJobStatus = 'running' | 'complete' | 'failed'
 
 interface QueueItem {
   id: string
@@ -60,12 +62,24 @@ interface QueueItem {
 }
 
 interface Venue { id: string; name: string }
+interface VolumeCandidate { volume: string; path: string }
+interface AutopanJob {
+  job_id: string
+  status: AutopanJobStatus
+  pid: number
+  output_path: string
+  output_url?: string | null
+  log_path: string
+  log_url?: string | null
+  log_tail?: string
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────
 const normToPixel = (pts: { x: number; y: number }[]): Point[] =>
   pts.map(p => [Math.round(p.x * IMAGE_W), Math.round(p.y * IMAGE_H)])
 const pixelToNorm = (pts: Point[]) =>
   pts.map(([x, y]) => ({ x: +(x / IMAGE_W).toFixed(4), y: +(y / IMAGE_H).toFixed(4) }))
+const errorMessage = (err: unknown) => err instanceof Error ? err.message : String(err)
 
 function ConfidencePill({ value }: { value: number }) {
   const s = value >= 0.75 ? { bg: '#dcfce7', color: '#166534' }
@@ -130,8 +144,18 @@ export default function CalibratePage() {
   const [closed, setClosed] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
+  const [autopanJobs, setAutopanJobs] = useState<Record<string, AutopanJob>>({})
+  const [autopanError, setAutopanError] = useState('')
+  const autopanSockets = useRef<Record<string, WebSocket>>({})
 
   const current = queue[currentIdx] ?? null
+
+  useEffect(() => {
+    const sockets = autopanSockets.current
+    return () => {
+      Object.values(sockets).forEach(ws => ws.close())
+    }
+  }, [])
 
   // ── Auth ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -156,11 +180,12 @@ export default function CalibratePage() {
         setWorkerOk(true)
         // Auto-detect SD card
         const vr = await fetch(`${WORKER}/scan-volumes`)
-        const vdata = await vr.json()
-        if (vdata.volumes?.length > 0) {
+        const vdata = await vr.json() as { volumes?: VolumeCandidate[] }
+        const volumes = vdata.volumes ?? []
+        if (volumes.length > 0) {
           // Prefer SD card (non-Macintosh HD) over local footage
-          const sdCard = vdata.volumes.find((v: any) => v.volume !== 'Macintosh HD')
-          setFolderPath((sdCard ?? vdata.volumes[0]).path)
+          const sdCard = volumes.find(v => v.volume !== 'Macintosh HD')
+          setFolderPath((sdCard ?? volumes[0]).path)
         }
       } catch {
         setWorkerOk(false)
@@ -205,8 +230,8 @@ export default function CalibratePage() {
       }))
       setRecordings(withSelection)
       if (data.recordings.length === 0) setScanError(data.warning ?? 'No recordings found')
-    } catch (err: any) {
-      setScanError(err.message)
+    } catch (err: unknown) {
+      setScanError(errorMessage(err))
     } finally {
       setScanning(false)
     }
@@ -249,8 +274,8 @@ export default function CalibratePage() {
       const polygon = normToPixel(cal.polygon)
       update({ status: 'review', polygon, confidence: cal.confidence })
       setPoints(polygon); setClosed(true)
-    } catch (err: any) {
-      update({ status: 'error', error: err.message })
+    } catch (err: unknown) {
+      update({ status: 'error', error: errorMessage(err) })
     }
   }, [])
 
@@ -261,7 +286,7 @@ export default function CalibratePage() {
     if (!date)             { setFormError('Bitte Datum wählen'); return }
     if (!venueId && !newVenueName.trim()) { setFormError('Bitte Spielstätte wählen'); return }
 
-    const selected = recordings.filter(r => r.selected_file && !(r as any)._excluded)
+    const selected = recordings.filter(r => r.selected_file && !r._excluded)
     if (selected.length === 0) { setFormError('Bitte mindestens eine Aufnahme auswählen'); return }
 
     let finalVenueId = venueId === '__new__' ? '' : venueId
@@ -355,8 +380,8 @@ export default function CalibratePage() {
       const polygon = normToPixel(cal.polygon)
       update({ status: 'review', polygon, confidence: cal.confidence })
       setPoints(polygon); setClosed(true)
-    } catch (err: any) {
-      update({ status: 'error', error: err.message })
+    } catch (err: unknown) {
+      update({ status: 'error', error: errorMessage(err) })
     }
   }
 
@@ -406,8 +431,8 @@ export default function CalibratePage() {
       setQueue(prev => prev.map((q, i) => i === currentIdx ? { ...q, status: 'accepted' } : q))
       setSaveMsg('Gespeichert ✓')
       setTimeout(() => goTo(currentIdx + 1), 700)
-    } catch (err: any) {
-      setSaveMsg(`Fehler: ${err.message}`)
+    } catch (err: unknown) {
+      setSaveMsg(`Fehler: ${errorMessage(err)}`)
     } finally {
       setSaving(false)
     }
@@ -431,8 +456,58 @@ export default function CalibratePage() {
     a.click()
   }
 
+  const watchAutopanJob = (itemId: string, jobId: string) => {
+    autopanSockets.current[itemId]?.close()
+    const ws = new WebSocket(`${WORKER.replace('http', 'ws')}/autopan/${jobId}/events`)
+    autopanSockets.current[itemId] = ws
+    ws.onmessage = evt => {
+      const job = JSON.parse(evt.data) as AutopanJob
+      setAutopanJobs(prev => ({ ...prev, [itemId]: job }))
+      if (job.status === 'complete' && gameId) {
+        supabase.from('games').update({
+          status: 'autopanned',
+          updated_at: new Date().toISOString(),
+        }).eq('id', gameId)
+      }
+    }
+    ws.onerror = () => setAutopanError('Autopan-Status konnte nicht gelesen werden')
+  }
+
+  const startAutopan = async (item: QueueItem) => {
+    const poly = item.polygon ?? (item.id === current?.id ? points : [])
+    if (!poly || poly.length < 4) return
+    setAutopanError('')
+    try {
+      const r = await fetch(`${WORKER}/autopan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          insv_path: item.file.path,
+          polygon: pixelToNorm(poly),
+          mode: 'track',
+          segments: 1,
+          seg_duration: 45,
+          scan_every: 15,
+          ball_sahi: true,
+        }),
+      })
+      if (!r.ok) throw new Error((await r.json()).detail ?? 'Autopan konnte nicht gestartet werden')
+      const job = await r.json() as AutopanJob
+      setAutopanJobs(prev => ({ ...prev, [item.id]: job }))
+      watchAutopanJob(item.id, job.job_id)
+    } catch (err: unknown) {
+      setAutopanError(errorMessage(err))
+    }
+  }
+
+  const startAllAutopan = () => {
+    queue.filter(q => q.status === 'accepted' && !autopanJobs[q.id]).forEach(q => startAutopan(q))
+  }
+
   const acceptedCount = queue.filter(q => q.status === 'accepted').length
   const venue = venues.find(v => v.id === venueId)
+  const pendingAutopanCount = queue.filter(q => q.status === 'accepted' && !autopanJobs[q.id]).length
+  const currentAutopanJob = current ? autopanJobs[current.id] : undefined
 
   // ─────────────────────────────────────────────────────────────────
   return (
@@ -500,10 +575,10 @@ export default function CalibratePage() {
               {/* Recordings list */}
               {recordings.length > 0 && (
                 <div>
-                  <label style={labelStyle}>Aufnahmen ({recordings.filter(r => !(r as any)._excluded).length} ausgewählt)</label>
+                  <label style={labelStyle}>Aufnahmen ({recordings.filter(r => !r._excluded).length} ausgewählt)</label>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {recordings.map(rec => {
-                      const excluded = (rec as any)._excluded
+                      const excluded = rec._excluded
                       return (
                         <div
                           key={rec.sequence}
@@ -519,7 +594,7 @@ export default function CalibratePage() {
                               type="checkbox"
                               checked={!excluded}
                               onChange={() => setRecordings(prev => prev.map(r =>
-                                r.sequence === rec.sequence ? { ...r, _excluded: !excluded } as any : r
+                                r.sequence === rec.sequence ? { ...r, _excluded: !excluded } : r
                               ))}
                               style={{ width: 16, height: 16, cursor: 'pointer' }}
                             />
@@ -662,10 +737,34 @@ export default function CalibratePage() {
                 </div>
               </div>
               <div style={{ flex: 1 }} />
+              {acceptedCount > 0 && (
+                <button
+                  onClick={startAllAutopan}
+                  disabled={pendingAutopanCount === 0}
+                  style={{
+                    background: pendingAutopanCount === 0 ? '#E4E6EE' : orange,
+                    color: pendingAutopanCount === 0 ? muted : '#fff',
+                    border: 'none',
+                    borderRadius: 8,
+                    padding: '8px 16px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: pendingAutopanCount === 0 ? 'default' : 'pointer',
+                    fontFamily: 'DM Sans, sans-serif',
+                  }}
+                >
+                  Autopan starten
+                </button>
+              )}
               <button onClick={() => setStep('form')} style={{ background: '#fff', color: navy, border: `2px solid ${navy}`, borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'DM Sans, sans-serif' }}>
                 ← Neue Session
               </button>
             </div>
+            {autopanError && (
+              <div style={{ fontSize: 12, color: '#991b1b', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 12px', marginBottom: 12 }}>
+                {autopanError}
+              </div>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 16, alignItems: 'start' }}>
 
@@ -705,6 +804,45 @@ export default function CalibratePage() {
                         {current.confidence !== undefined && <ConfidencePill value={current.confidence} />}
                         <span style={{ fontSize: 11, color: muted }}>{currentIdx + 1}/{queue.length}</span>
                       </div>
+
+                      {current.status === 'accepted' && (
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, padding: '8px 10px', borderRadius: 8, background: '#F8F8F6', border: `1px solid ${border}` }}>
+                          <button
+                            onClick={() => startAutopan(current)}
+                            disabled={!!currentAutopanJob && currentAutopanJob.status === 'running'}
+                            style={smallBtn(
+                              currentAutopanJob?.status === 'running' ? '#E4E6EE' : orange,
+                              currentAutopanJob?.status === 'running' ? muted : '#fff'
+                            )}
+                          >
+                            {currentAutopanJob?.status === 'running' ? 'Autopan läuft…' : currentAutopanJob?.status === 'complete' ? 'Autopan neu starten' : 'Autopan starten'}
+                          </button>
+                          {currentAutopanJob && (
+                            <>
+                              <span style={{ fontSize: 12, fontWeight: 600, color: currentAutopanJob.status === 'failed' ? '#991b1b' : currentAutopanJob.status === 'complete' ? '#166534' : navy }}>
+                                {currentAutopanJob.status}
+                              </span>
+                              <span style={{ fontSize: 11, color: muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                PID {currentAutopanJob.pid} · {currentAutopanJob.output_path}
+                              </span>
+                              {currentAutopanJob.log_url && (
+                                <a href={currentAutopanJob.log_url} target="_blank" style={{ fontSize: 11, color: navy, fontWeight: 600 }}>
+                                  Log
+                                </a>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      {currentAutopanJob?.output_url && (
+                        <video
+                          src={currentAutopanJob.output_url}
+                          controls
+                          muted
+                          style={{ width: '100%', maxHeight: 280, borderRadius: 8, background: '#000', marginBottom: 10 }}
+                        />
+                      )}
 
                       {/* Lens + rotation controls */}
                       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', borderTop: `1px solid ${border}`, paddingTop: 10 }}>

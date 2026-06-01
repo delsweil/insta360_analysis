@@ -36,7 +36,11 @@ export default function GamePage({ params }: Props) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [isMobile, setIsMobile] = useState(false)
+  const [isMobile] = useState(() => {
+    if (typeof screen === 'undefined') return false
+    const w = screen.width < screen.height ? screen.width : screen.height
+    return w < 768
+  })
   const [showAnnotations, setShowAnnotations] = useState(false)
   const [showShare, setShowShare] = useState(false)
   const [markIn, setMarkIn] = useState<number | null>(null)
@@ -53,15 +57,6 @@ export default function GamePage({ params }: Props) {
     setpiece: annotations.filter(a => a.label.startsWith('setpiece')).length,
     tactical: annotations.filter(a => a.label === 'tactical').length,
   }
-
-  // Detect mobile once on mount — don't switch on rotation
-  // to prevent YouTube iframe from reloading
-  useEffect(() => {
-    // Use screen width (physical device width) not window width
-    // This doesn't change when rotating
-    const w = screen.width < screen.height ? screen.width : screen.height
-    setIsMobile(w < 768)
-  }, [])
 
   // Load game + user + annotations
   useEffect(() => {
@@ -227,12 +222,12 @@ export default function GamePage({ params }: Props) {
   // Label picker — available labels based on role
   const availableLabels = LABEL_DEFS.filter(l => isCoach || !l.coachOnly)
 
-  const LabelPicker = ({ size = 'normal' }: { size?: 'normal' | 'large' }) => (
+  const renderLabelPicker = (size: 'normal' | 'large' = 'normal') => (
     <div style={{
       display: 'flex', gap: 6, flexWrap: 'wrap',
       overflowX: size === 'large' ? 'auto' : undefined,
     }}>
-      {LABEL_DEFS.map(l => {
+      {availableLabels.map(l => {
         const isSelected = selectedLabel === l.key
         const isDisabled = l.coachOnly && !isCoach
         const color = labelColor(l.key)
@@ -274,7 +269,7 @@ export default function GamePage({ params }: Props) {
   )
 
   // Timeline with shapes
-  const Timeline = ({ height = 24, mobileSize = false }: { height?: number, mobileSize?: boolean }) => (
+  const renderTimeline = (height = 24, mobileSize = false) => (
     <div
       style={{
         position: 'relative', height,
@@ -335,7 +330,7 @@ export default function GamePage({ params }: Props) {
   )
 
   // Annotation row
-  const AnnRow = ({ ann, compact = false }: { ann: Annotation, compact?: boolean }) => (
+  const renderAnnRow = (ann: Annotation, compact = false) => (
     <div
       style={{
         padding: compact ? '8px 10px' : '7px 0',
@@ -461,7 +456,7 @@ export default function GamePage({ params }: Props) {
                 No annotations yet.
               </div>
             ) : filteredAnnotations.map(ann => (
-              <AnnRow key={ann.id} ann={ann} compact />
+              <React.Fragment key={ann.id}>{renderAnnRow(ann, true)}</React.Fragment>
             ))}
           </div>
         ) : (
@@ -506,12 +501,12 @@ export default function GamePage({ params }: Props) {
                   Annotations ({annotations.length})
                 </button>
               </div>
-              <Timeline height={20} mobileSize />
+              {renderTimeline(20, true)}
             </div>
 
             {/* Label picker */}
             <div style={{ padding: '6px 14px', flexShrink: 0, overflowX: 'auto' }}>
-              <LabelPicker size="large" />
+              {renderLabelPicker('large')}
             </div>
 
             {/* Coach note */}
@@ -700,7 +695,7 @@ export default function GamePage({ params }: Props) {
 
               {/* Timeline */}
               <div style={{ marginBottom: 5 }}>
-                <Timeline height={26} />
+                {renderTimeline(26)}
               </div>
 
               {/* Time labels */}
@@ -726,7 +721,7 @@ export default function GamePage({ params }: Props) {
 
               {/* Label picker */}
               <div style={{ marginBottom: 10 }}>
-                <LabelPicker />
+                {renderLabelPicker()}
               </div>
 
               {/* Mark in/out (coach) or quick save (player) */}
@@ -852,7 +847,7 @@ export default function GamePage({ params }: Props) {
               )}
 
               {filteredAnnotations.map(ann => (
-                <AnnRow key={ann.id} ann={ann} />
+                <React.Fragment key={ann.id}>{renderAnnRow(ann)}</React.Fragment>
               ))}
             </div>
 

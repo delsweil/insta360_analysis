@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import platform
 import subprocess
 import time
 import xml.etree.ElementTree as ET
@@ -11,6 +12,33 @@ import cv2
 import numpy as np
 from py360convert import e2p
 from scipy.interpolate import PchipInterpolator
+
+
+_ENCODER_CACHE = None
+
+
+def pick_encoder():
+    global _ENCODER_CACHE
+    if _ENCODER_CACHE is not None:
+        return _ENCODER_CACHE
+    try:
+        r = subprocess.run(['ffmpeg', '-hide_banner', '-encoders'],
+                           capture_output=True, text=True, timeout=5)
+        available = set(r.stdout.split())
+    except Exception:
+        available = set()
+    candidates = []
+    if platform.system() == 'Darwin' and 'h264_videotoolbox' in available:
+        candidates.append('h264_videotoolbox')
+    try:
+        has_nvidia = subprocess.run(['nvidia-smi'], capture_output=True, timeout=2).returncode == 0
+    except Exception:
+        has_nvidia = False
+    if has_nvidia and 'h264_nvenc' in available:
+        candidates.append('h264_nvenc')
+    candidates.append('libx264')
+    _ENCODER_CACHE = next((c for c in candidates if c == 'libx264' or c in available), 'libx264')
+    return _ENCODER_CACHE
 
 
 @dataclass
@@ -68,7 +96,7 @@ def open_writer(output_path, fps, out_w, out_h):
         '-f', 'rawvideo', '-pix_fmt', 'bgr24',
         '-s', f'{out_w}x{out_h}', '-r', str(fps),
         '-i', 'pipe:0',
-        '-c:v', 'h264_videotoolbox', '-b:v', '8000k',
+        '-c:v', pick_encoder(), '-b:v', '8000k',
         '-pix_fmt', 'yuv420p', output_path,
     ]
     return subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)

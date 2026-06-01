@@ -431,6 +431,60 @@ def update_camera(
 # FFmpeg output pipe
 # ──────────────────────────────────────────────────────────────────
 
+_ENCODER_CACHE: Optional[str] = None
+_FFMPEG_ENCODERS: Optional[set[str]] = None
+
+def _available_ffmpeg_encoders() -> set[str]:
+    global _FFMPEG_ENCODERS
+    if _FFMPEG_ENCODERS is not None:
+        return _FFMPEG_ENCODERS
+    try:
+        r = subprocess.run(
+            ['ffmpeg', '-hide_banner', '-encoders'],
+            capture_output=True, text=True, timeout=5)
+        _FFMPEG_ENCODERS = set(r.stdout.split())
+    except Exception:
+        _FFMPEG_ENCODERS = set()
+    return _FFMPEG_ENCODERS
+
+
+def _nvidia_runtime_available() -> bool:
+    try:
+        r = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=2)
+        if r.returncode == 0:
+            return True
+    except Exception:
+        pass
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+def _pick_encoder() -> str:
+    """Auto-detect the best available H.264 encoder."""
+    global _ENCODER_CACHE
+    if _ENCODER_CACHE is not None:
+        return _ENCODER_CACHE
+    # Try platform-specific hardware encoders, then fall back to libx264
+    candidates = []
+    import platform
+    available = _available_ffmpeg_encoders()
+    if platform.system() == 'Darwin' and 'h264_videotoolbox' in available:
+        candidates.append('h264_videotoolbox')
+    if 'h264_nvenc' in available and _nvidia_runtime_available():
+        candidates.append('h264_nvenc')
+    candidates.append('libx264')
+    for enc in candidates:
+        if enc == 'libx264' or enc in available:
+            _ENCODER_CACHE = enc
+            print(f"  FFmpeg encoder: {enc}")
+            return enc
+    _ENCODER_CACHE = 'libx264'
+    print(f"  FFmpeg encoder: libx264 (fallback)")
+    return _ENCODER_CACHE
+
+
 def open_ffmpeg_writer(
     output_path: str,
     fps: float,
@@ -446,12 +500,13 @@ def open_ffmpeg_writer(
         "-s", f"{out_w}x{out_h}",
         "-r", str(fps),
         "-i", "pipe:0",
-        "-c:v", "h264_videotoolbox",   # hardware encode on Apple Silicon / Intel Mac
+        "-c:v", _pick_encoder(),
         "-b:v", bitrate,
         "-pix_fmt", "yuv420p",
         output_path,
     ]
     return subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
 
 
 # ──────────────────────────────────────────────────────────────────

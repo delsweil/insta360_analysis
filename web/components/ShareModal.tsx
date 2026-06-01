@@ -61,7 +61,7 @@ export default function ShareModal({ gameId, annotations, initialFilter, onClose
     if (selected.size === 0) return
     setGenerating(true)
 
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('share_links')
       .insert({
         game_id: gameId,

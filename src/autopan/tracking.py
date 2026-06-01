@@ -51,7 +51,7 @@ class TrackManager:
         max_missed: int = 10,
         vote_window: int = 15,
         vote_ratio: float = 0.7,
-            min_votes: int = 4,
+        min_votes: int = 4,
     ):
         self.iou_thresh = iou_thresh
         self.max_missed = max_missed
