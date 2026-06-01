@@ -388,6 +388,7 @@ def component_smoke_check() -> Check:
         from game_state import GameStatePredictor
         from pitch_model import PitchAwareBallGate, PitchHomographyModel
         from team_classifier import TeamClassifier
+        from train_ball_v5 import write_domain_subset_yaml
 
         failures: list[str] = []
 
@@ -436,6 +437,35 @@ def component_smoke_check() -> Check:
             failures.append(f"scanner detection summary failed: {summary}")
         if abs(summary.get("on_pitch_detection_rate", 0.0) - 0.8) > 1e-9:
             failures.append(f"scanner GT summary failed: {summary}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            data_root = tmpdir / "data"
+            for name in ("frame_001.jpg", "Veo-match-001.jpg"):
+                (data_root / "valid" / "images").mkdir(parents=True, exist_ok=True)
+                (data_root / "valid" / "labels").mkdir(parents=True, exist_ok=True)
+                (data_root / "valid" / "images" / name).write_bytes(b"fake")
+                (data_root / "valid" / "labels" / f"{Path(name).stem}.txt").write_text(
+                    "0 0.5 0.5 0.1 0.1\n",
+                    encoding="utf-8",
+                )
+            data_yaml = data_root / "data.yaml"
+            data_yaml.write_text(
+                "\n".join([
+                    f"path: {data_root.as_posix()}",
+                    "train: valid/images",
+                    "val: valid/images",
+                    "test: valid/images",
+                    "nc: 1",
+                    "names:",
+                    "  0: ball",
+                    "",
+                ]),
+                encoding="utf-8",
+            )
+            subset_yaml, manifest = write_domain_subset_yaml(data_yaml, "val", "insta360_style", tmpdir / "subsets")
+            if manifest["images"] != 1 or manifest["labels"] != 1 or not subset_yaml.exists():
+                failures.append(f"domain subset generation failed: {manifest}")
 
         with tempfile.TemporaryDirectory() as tmp:
             calib = Path(tmp) / "pitch.json"
@@ -783,9 +813,9 @@ def static_checks() -> list[Check]:
         ),
         check_markers(
             "train_ball_v5.py",
-            ["--make-split", "--zip", "yolo11s.pt", "--imgsz", "--sweep", "--tracking", "copy_paste", "mosaic", "scale"],
+            ["--make-split", "--zip", "yolo11s.pt", "--imgsz", "--sweep", "--tracking", "copy_paste", "mosaic", "scale", "--eval-domains", "insta360_style"],
             "phase1_detector",
-            "ball_v5 training script supports splits/ZIP datasets, YOLO11s/1280, augmentations, sweeps, and tracking",
+            "ball_v5 training script supports splits/ZIP datasets, YOLO11s/1280, augmentations, sweeps, tracking, and source-domain eval",
         ),
         check_markers(
             "equirect_ball_scanner.py",

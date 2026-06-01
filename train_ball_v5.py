@@ -211,6 +211,108 @@ def write_normalized_data_yaml(dataset_dir: Path, merge_classes: bool = True) ->
     return yaml_path
 
 
+def parse_simple_yaml(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        values[key.strip()] = value.strip().strip("'\"")
+    return values
+
+
+def resolve_split_dirs(data_yaml: Path, split: str) -> tuple[Path, Path]:
+    values = parse_simple_yaml(data_yaml)
+    yaml_key = "val" if split in {"val", "valid"} else split
+    if yaml_key not in values:
+        raise ValueError(f"{data_yaml} has no {yaml_key!r} split")
+    base = Path(values.get("path", data_yaml.parent))
+    if not base.is_absolute():
+        base = data_yaml.parent / base
+    images_dir = Path(values[yaml_key])
+    if not images_dir.is_absolute():
+        images_dir = base / images_dir
+    labels_dir = Path(str(images_dir).replace(f"{Path('images')}", f"{Path('labels')}"))
+    if images_dir.name == "images":
+        labels_dir = images_dir.parent / "labels"
+    return images_dir, labels_dir
+
+
+def classify_source_domain_from_name(image_path: Path) -> str:
+    name = image_path.name.lower()
+    if name.startswith(("frame_", "vid_")):
+        return "insta360_style"
+    if name.startswith(("fortuna-", "veo-", "video-from-veo", "video5")):
+        return "veo_style"
+    return "unknown"
+
+
+def link_or_copy_file(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        return
+    try:
+        dst.hardlink_to(src)
+    except OSError:
+        shutil.copy2(src, dst)
+
+
+def write_domain_subset_yaml(
+    data_yaml: str | Path,
+    split: str,
+    domain: str,
+    output_root: str | Path,
+) -> tuple[Path, dict]:
+    """Create a YOLO data.yaml containing only one source-domain subset."""
+    data_yaml = Path(data_yaml)
+    images_dir, labels_dir = resolve_split_dirs(data_yaml, split)
+    out_dir = Path(output_root) / f"{split}_{domain}"
+    subset_images = out_dir / split / "images"
+    subset_labels = out_dir / split / "labels"
+    image_paths = sorted(p for p in images_dir.glob("*") if p.suffix.lower() in IMAGE_EXTS)
+    selected = [p for p in image_paths if classify_source_domain_from_name(p) == domain]
+    if not selected:
+        raise ValueError(f"No {domain} images found for split {split} in {images_dir}")
+    missing_labels = 0
+    linked_labels = 0
+    for image_path in selected:
+        link_or_copy_file(image_path, subset_images / image_path.name)
+        label_path = labels_dir / f"{image_path.stem}.txt"
+        if label_path.exists():
+            link_or_copy_file(label_path, subset_labels / label_path.name)
+            linked_labels += 1
+        else:
+            missing_labels += 1
+    yaml_path = out_dir / "data.yaml"
+    yaml_path.write_text(
+        "\n".join([
+            f"path: {out_dir.resolve().as_posix()}",
+            f"train: {split}/images",
+            f"val: {split}/images",
+            f"test: {split}/images",
+            "nc: 1",
+            "names:",
+            "  0: ball",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    manifest = {
+        "source_data": str(data_yaml),
+        "source_images": str(images_dir),
+        "source_labels": str(labels_dir),
+        "split": split,
+        "domain": domain,
+        "images": len(selected),
+        "labels": linked_labels,
+        "missing_labels": missing_labels,
+        "data_yaml": str(yaml_path),
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return yaml_path, manifest
+
+
 def prepare_zip_dataset(zip_path: Path, extract_dir: Path, merge_classes: bool = True) -> Path:
     """Extract a YOLO ZIP dataset and return a normalized data.yaml path."""
     if not zip_path.exists():
@@ -361,6 +463,60 @@ def write_metrics_json(metrics, path: str | None, extra: dict | None = None) -> 
     print(f"Metrics JSON written to {out_path}")
 
 
+def default_domain_metrics_path(metrics_json: str | None) -> str | None:
+    if not metrics_json:
+        return None
+    path = Path(metrics_json)
+    return str(path.with_name(f"{path.stem}_domains{path.suffix or '.json'}"))
+
+
+def write_domain_metrics_json(rows: list[dict], path: str | None, extra: dict | None = None) -> None:
+    if not path:
+        return
+    payload = {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "domains": rows,
+    }
+    if extra:
+        payload.update(extra)
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"Domain metrics JSON written to {out_path}")
+
+
+def evaluate_domain_subsets(args, model, project: str) -> list[dict]:
+    domains = args.eval_domain or ["insta360_style", "veo_style"]
+    rows: list[dict] = []
+    subset_root = Path(args.domain_subsets_dir)
+    for domain in domains:
+        subset_yaml, manifest = write_domain_subset_yaml(args.data, args.split, domain, subset_root)
+        with tracking_run(args, name_suffix=f"_{args.split}_{domain}"):
+            metrics = model.val(
+                data=str(subset_yaml),
+                imgsz=args.imgsz,
+                batch=args.batch,
+                device=args.device,
+                split="val",
+                conf=args.conf,
+                iou=args.iou,
+                project=project,
+                name=f"{args.name}_{args.split}_{domain}",
+                exist_ok=True,
+            )
+        row = yolo_metrics_dict(metrics)
+        row.update({
+            "source_split": args.split,
+            "eval_split": "val",
+            "domain": domain,
+            "subset": manifest,
+            "subset_data": str(subset_yaml),
+        })
+        rows.append(row)
+        print(json.dumps(row, indent=2))
+    return rows
+
+
 def train(args) -> None:
     from ultralytics import YOLO
 
@@ -426,6 +582,15 @@ def evaluate(args) -> None:
         "weights_fingerprint": artifact_fingerprint(args.weights, hash_contents=True),
         "data_fingerprint": artifact_fingerprint(args.data, hash_contents=True),
     })
+    if args.eval_domains:
+        domain_rows = evaluate_domain_subsets(args, model, project)
+        write_domain_metrics_json(domain_rows, args.domain_metrics_json or default_domain_metrics_path(args.metrics_json), extra={
+            "split": args.split,
+            "weights": args.weights,
+            "data": args.data,
+            "weights_fingerprint": artifact_fingerprint(args.weights, hash_contents=True),
+            "data_fingerprint": artifact_fingerprint(args.data, hash_contents=True),
+        })
     print(metrics)
 
 
@@ -514,6 +679,14 @@ def main() -> None:
     parser.add_argument("--conf", type=float, default=0.001)
     parser.add_argument("--iou", type=float, default=0.60)
     parser.add_argument("--metrics-json", default=None, help="Optional JSON output for eval-only metrics")
+    parser.add_argument("--eval-domains", action="store_true",
+                        help="With --eval-only, also evaluate source-domain subsets such as insta360_style and veo_style")
+    parser.add_argument("--eval-domain", action="append", choices=["insta360_style", "veo_style", "unknown"],
+                        help="Source-domain subset to evaluate; repeat to choose multiple domains")
+    parser.add_argument("--domain-subsets-dir", default="runs/ball_v5/domain_subsets",
+                        help="Where to create hardlinked/copied YOLO subset datasets for --eval-domains")
+    parser.add_argument("--domain-metrics-json", default=None,
+                        help="Optional JSON output for --eval-domains metrics")
     parser.add_argument("--sweep-conf", default="0.05,0.10,0.15,0.20,0.25,0.30,0.35,0.40")
     parser.add_argument("--sweep-iou", default="0.45,0.50,0.55,0.60,0.65")
 

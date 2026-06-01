@@ -89,6 +89,25 @@ composition per split. Use those split-specific counts when judging detector
 metrics; aggregate validation/test scores are currently dominated by Veo-style
 frames.
 
+Evaluate detector checkpoints with source-domain subsets whenever comparing
+candidates:
+
+```bash
+python train_ball_v5.py \
+  --eval-only \
+  --data data/ball_v5/data.yaml \
+  --weights models/ball_v5_yolo11s_1280_candidate.pt \
+  --split test \
+  --eval-domains \
+  --metrics-json results/ball_v5_candidate_eval.json \
+  --domain-metrics-json results/ball_v5_candidate_domain_eval.json
+```
+
+`--eval-domains` builds hardlinked/copied YOLO subset datasets under
+`runs/ball_v5/domain_subsets/` and evaluates `insta360_style` and `veo_style`
+separately. Treat the Insta360 subset as the critical detector signal for the
+autopan pipeline.
+
 Check the remote GPU training job and fetch artifacts:
 
 ```bash
