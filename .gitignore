@@ -26,6 +26,7 @@ Thumbs.db
 *.bak*
 results/*.mp4
 results/*.csv
+results/ball_v5_subset_*.json
 training.log
 *.stackdump
 logs/*.pid

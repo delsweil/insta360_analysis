@@ -84,6 +84,11 @@ python train_ball_v5.py --zip ../ball_detector_merged.v3i.yolov8.zip --extract-d
 python audit_ball_dataset.py --data data/ball_v5/data.yaml --json-out results/ball_v5_dataset_audit.json
 ```
 
+The audit reports duplicate label rows plus `insta360_style`/`veo_style`
+composition per split. Use those split-specific counts when judging detector
+metrics; aggregate validation/test scores are currently dominated by Veo-style
+frames.
+
 Check the remote GPU training job and fetch artifacts:
 
 ```bash
@@ -121,6 +126,23 @@ End-to-end pan/ball recall gates also require accessible `.insv` footage and
 independently annotated ball ground-truth files. Detector-derived predictor
 CSVs are useful as pseudo-label evidence, but they should not be used to pass
 the ground-truth recall/RMSE gates.
+
+When evaluation footage and ball GT are mounted, produce the scanner gate
+artifact directly from the full-pitch scanner:
+
+```bash
+python equirect_ball_scanner.py \
+  --insv /path/to/clip.insv \
+  --calib calibration/pitch_clip.json \
+  --ball auto \
+  --out-jsonl results/equirect_ball_scanner_detections.jsonl \
+  --summary-json results/equirect_ball_scanner_summary.json \
+  --ball-groundtruth annotations/clip_ball_gt.csv
+```
+
+Without `--ball-groundtruth`, the scanner summary records only a proxy
+`detection_rate`; the verifier requires GT-matched `on_pitch_detection_rate`
+for the formal >80% gate.
 
 ---
 

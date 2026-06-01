@@ -9,6 +9,8 @@
       "empty_labels": 324,
       "orphan_labels": 0,
       "boxes": 2092,
+      "unique_boxes": 2092,
+      "duplicate_label_rows": 0,
       "boxes_per_image": 0.872393661384487,
       "classes": {
         "0": 2092
@@ -16,6 +18,38 @@
       "image_dimensions": {
         "1920x1080": 1424,
         "1280x720": 974
+      },
+      "source_domains": {
+        "insta360_style": {
+          "images": 974,
+          "labels": 974,
+          "missing_labels": 0,
+          "empty_labels": 323,
+          "boxes": 654,
+          "unique_boxes": 654,
+          "duplicate_label_rows": 0,
+          "classes": {
+            "0": 654
+          },
+          "image_dimensions": {
+            "1280x720": 974
+          }
+        },
+        "veo_style": {
+          "images": 1424,
+          "labels": 1424,
+          "missing_labels": 0,
+          "empty_labels": 1,
+          "boxes": 1438,
+          "unique_boxes": 1438,
+          "duplicate_label_rows": 0,
+          "classes": {
+            "0": 1438
+          },
+          "image_dimensions": {
+            "1920x1080": 1424
+          }
+        }
       },
       "bbox_width_px": {
         "count": 2092,
@@ -82,6 +116,8 @@
       "empty_labels": 64,
       "orphan_labels": 0,
       "boxes": 627,
+      "unique_boxes": 626,
+      "duplicate_label_rows": 1,
       "boxes_per_image": 0.9153284671532846,
       "classes": {
         "0": 627
@@ -89,6 +125,38 @@
       "image_dimensions": {
         "1920x1080": 541,
         "1280x720": 144
+      },
+      "source_domains": {
+        "insta360_style": {
+          "images": 144,
+          "labels": 144,
+          "missing_labels": 0,
+          "empty_labels": 64,
+          "boxes": 84,
+          "unique_boxes": 83,
+          "duplicate_label_rows": 1,
+          "classes": {
+            "0": 84
+          },
+          "image_dimensions": {
+            "1280x720": 144
+          }
+        },
+        "veo_style": {
+          "images": 541,
+          "labels": 541,
+          "missing_labels": 0,
+          "empty_labels": 0,
+          "boxes": 543,
+          "unique_boxes": 543,
+          "duplicate_label_rows": 0,
+          "classes": {
+            "0": 543
+          },
+          "image_dimensions": {
+            "1920x1080": 541
+          }
+        }
       },
       "bbox_width_px": {
         "count": 627,
@@ -145,8 +213,16 @@
         "p95": 0.016118518518518504,
         "max": 0.03766666666666667
       },
-      "anomaly_count": 0,
-      "anomaly_samples": []
+      "anomaly_count": 1,
+      "anomaly_samples": [
+        {
+          "label": "C:\\Workspace\\2026\\David-Ball-Tracking\\insta360_analysis\\data\\ball_v5\\valid\\labels\\frame_00875_jpg.rf.261a3ecc1e9988cae483f6c4d8b557cf.txt",
+          "row": 2,
+          "issue": "duplicate_label_row",
+          "duplicate_of": 1,
+          "row_text": "0 0.167578 0.690278 0.011719 0.011111"
+        }
+      ]
     },
     "test": {
       "images": 342,
@@ -155,6 +231,8 @@
       "empty_labels": 33,
       "orphan_labels": 0,
       "boxes": 311,
+      "unique_boxes": 311,
+      "duplicate_label_rows": 0,
       "boxes_per_image": 0.9093567251461988,
       "classes": {
         "0": 311
@@ -162,6 +240,38 @@
       "image_dimensions": {
         "1920x1080": 272,
         "1280x720": 70
+      },
+      "source_domains": {
+        "insta360_style": {
+          "images": 70,
+          "labels": 70,
+          "missing_labels": 0,
+          "empty_labels": 32,
+          "boxes": 39,
+          "unique_boxes": 39,
+          "duplicate_label_rows": 0,
+          "classes": {
+            "0": 39
+          },
+          "image_dimensions": {
+            "1280x720": 70
+          }
+        },
+        "veo_style": {
+          "images": 272,
+          "labels": 272,
+          "missing_labels": 0,
+          "empty_labels": 1,
+          "boxes": 272,
+          "unique_boxes": 272,
+          "duplicate_label_rows": 0,
+          "classes": {
+            "0": 272
+          },
+          "image_dimensions": {
+            "1920x1080": 272
+          }
+        }
       },
       "bbox_width_px": {
         "count": 311,

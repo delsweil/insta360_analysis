@@ -383,6 +383,7 @@ def component_smoke_check() -> Check:
             lon_lat_to_perspective_pixel,
             merge_scan_detections,
             perspective_pixel_to_lon_lat,
+            scan_summary_payload,
         )
         from game_state import GameStatePredictor
         from pitch_model import PitchAwareBallGate, PitchHomographyModel
@@ -412,6 +413,29 @@ def component_smoke_check() -> Check:
         ], merge_dist_deg=2.0)
         if len(merged) != 2 or abs(shortest_lon_delta(merged[0].lon, 180.0)) > 1.0:
             failures.append(f"scan merge failed: {merged}")
+        summary = scan_summary_payload(
+            scanned_frames=10,
+            detection_hits=8,
+            gt_frames=5,
+            gt_hits=4,
+            gt_errors=[1.0, 2.0, 3.0, 4.0],
+            args=type("Args", (), {
+                "every": 15,
+                "start": 0.0,
+                "duration": 30.0,
+                "conf": 0.2,
+                "imgsz": 640,
+                "no_sliced": False,
+                "ball": "models/ball_v5.pt",
+                "gt_match_deg": 3.0,
+                "gt_max_dt": 0.25,
+            })(),
+            scan_yaws=[-45, 0, 45],
+        )
+        if abs(summary.get("detection_rate", 0.0) - 0.8) > 1e-9:
+            failures.append(f"scanner detection summary failed: {summary}")
+        if abs(summary.get("on_pitch_detection_rate", 0.0) - 0.8) > 1e-9:
+            failures.append(f"scanner GT summary failed: {summary}")
 
         with tempfile.TemporaryDirectory() as tmp:
             calib = Path(tmp) / "pitch.json"
@@ -646,15 +670,23 @@ def scanner_gate(path: Path, threshold: float) -> Check:
     if not path.exists():
         return Check("verification", "Full-pitch scanner detects ball in >80% on-pitch frames", "blocked_external", f"{rel(path)} missing")
     data = json.loads(path.read_text(encoding="utf-8"))
-    value = data.get("on_pitch_detection_rate", data.get("detection_rate"))
+    value = data.get("on_pitch_detection_rate")
     if value is None:
-        return Check("verification", "Full-pitch scanner detects ball in >80% on-pitch frames", "fail", f"{rel(path)} missing detection_rate")
+        proxy = data.get("detection_rate")
+        if proxy is not None:
+            return Check(
+                "verification",
+                "Full-pitch scanner detects ball in >80% on-pitch frames",
+                "blocked_external",
+                f"{rel(path)} only has proxy detection_rate={float(proxy):.3f}; provide ball GT to compute on_pitch_detection_rate",
+            )
+        return Check("verification", "Full-pitch scanner detects ball in >80% on-pitch frames", "fail", f"{rel(path)} missing on_pitch_detection_rate")
     value = float(value)
     return Check(
         "verification",
         "Full-pitch scanner detects ball in >80% on-pitch frames",
         "pass" if value >= threshold else "fail",
-        f"{rel(path)} detection_rate={value:.3f}, threshold={threshold:.3f}",
+        f"{rel(path)} on_pitch_detection_rate={value:.3f}, threshold={threshold:.3f}",
     )
 
 
@@ -757,7 +789,7 @@ def static_checks() -> list[Check]:
         ),
         check_markers(
             "equirect_ball_scanner.py",
-            ["scan_equirect_frame", "parse_scan_yaws", "merge_scan_detections", "MultiHypothesisEquirectTracker", "--no-sliced"],
+            ["scan_equirect_frame", "parse_scan_yaws", "merge_scan_detections", "MultiHypothesisEquirectTracker", "--no-sliced", "--summary-json", "--ball-groundtruth"],
             "phase2_scanner",
             "full-pitch equirectangular scanner exists with multi-yaw scanning and SAHI option",
         ),

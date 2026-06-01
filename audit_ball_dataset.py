@@ -68,6 +68,43 @@ def resolve_split_dir(data_yaml: Path, values: dict[str, str], key: str) -> tupl
     return images_dir, labels_dir
 
 
+def classify_source_domain(image_path: Path, dims: tuple[int, int]) -> str:
+    name = image_path.name.lower()
+    if name.startswith(("frame_", "vid_")):
+        return "insta360_style"
+    if name.startswith(("fortuna-", "veo-", "video-from-veo", "video5")):
+        return "veo_style"
+    if dims == (1280, 720):
+        return "insta360_style"
+    if dims == (1920, 1080):
+        return "veo_style"
+    return "unknown"
+
+
+def domain_template() -> dict:
+    return {
+        "images": 0,
+        "labels": 0,
+        "missing_labels": 0,
+        "empty_labels": 0,
+        "boxes": 0,
+        "unique_boxes": 0,
+        "duplicate_label_rows": 0,
+        "classes": Counter(),
+        "image_dimensions": Counter(),
+    }
+
+
+def serialise_domain_stats(domains: dict[str, dict]) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for domain, stats in sorted(domains.items()):
+        item = dict(stats)
+        item["classes"] = dict(item["classes"])
+        item["image_dimensions"] = dict(item["image_dimensions"])
+        out[domain] = item
+    return out
+
+
 def image_dimensions(path: Path) -> tuple[int, int] | None:
     try:
         with Image.open(path) as img:
@@ -89,9 +126,12 @@ def audit_split(images_dir: Path, labels_dir: Path) -> dict:
     box_width_norm: list[float] = []
     box_height_norm: list[float] = []
     anomalies: list[dict] = []
+    source_domains: dict[str, dict] = {}
     empty_labels = 0
     missing_labels = 0
     total_boxes = 0
+    duplicate_label_rows = 0
+    duplicate_valid_boxes = 0
 
     for image_path in images:
         dims = image_dimensions(image_path)
@@ -99,15 +139,37 @@ def audit_split(images_dir: Path, labels_dir: Path) -> dict:
             anomalies.append({"image": str(image_path), "issue": "unreadable_image"})
             continue
         width, height = dims
+        source_domain = classify_source_domain(image_path, dims)
+        domain_stats = source_domains.setdefault(source_domain, domain_template())
+        domain_stats["images"] += 1
+        domain_stats["image_dimensions"][f"{width}x{height}"] += 1
         dim_counts[f"{width}x{height}"] += 1
         label_path = labels_by_stem.get(image_path.stem)
         if label_path is None:
             missing_labels += 1
+            domain_stats["missing_labels"] += 1
             continue
+        domain_stats["labels"] += 1
         rows = [line.split() for line in label_path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
         if not rows:
             empty_labels += 1
+            domain_stats["empty_labels"] += 1
+        seen_rows: dict[tuple[str, ...], int] = {}
         for row_index, parts in enumerate(rows, start=1):
+            normalized_row = tuple(parts)
+            duplicate_of = seen_rows.get(normalized_row)
+            if duplicate_of is not None:
+                duplicate_label_rows += 1
+                domain_stats["duplicate_label_rows"] += 1
+                anomalies.append({
+                    "label": str(label_path),
+                    "row": row_index,
+                    "issue": "duplicate_label_row",
+                    "duplicate_of": duplicate_of,
+                    "row_text": " ".join(parts),
+                })
+            else:
+                seen_rows[normalized_row] = row_index
             if len(parts) != 5:
                 anomalies.append({
                     "label": str(label_path),
@@ -126,7 +188,13 @@ def audit_split(images_dir: Path, labels_dir: Path) -> dict:
                 anomalies.append({"label": str(label_path), "row": row_index, "issue": "non_numeric_row"})
                 continue
             classes[cls] += 1
+            domain_stats["classes"][cls] += 1
             total_boxes += 1
+            domain_stats["boxes"] += 1
+            if duplicate_of is not None:
+                duplicate_valid_boxes += 1
+            else:
+                domain_stats["unique_boxes"] += 1
             box_width_norm.append(bw_f)
             box_height_norm.append(bh_f)
             box_width_px.append(bw_f * width)
@@ -146,9 +214,12 @@ def audit_split(images_dir: Path, labels_dir: Path) -> dict:
         "empty_labels": empty_labels,
         "orphan_labels": len(orphan_labels),
         "boxes": total_boxes,
+        "unique_boxes": total_boxes - duplicate_valid_boxes,
+        "duplicate_label_rows": duplicate_label_rows,
         "boxes_per_image": total_boxes / len(images) if images else 0.0,
         "classes": dict(classes),
         "image_dimensions": dict(dim_counts),
+        "source_domains": serialise_domain_stats(source_domains),
         "bbox_width_px": summarize(box_width_px),
         "bbox_height_px": summarize(box_height_px),
         "bbox_area_px": summarize(box_area_px),

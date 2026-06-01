@@ -9,6 +9,8 @@ results back into longitude/latitude coordinates.
 from __future__ import annotations
 
 import argparse
+import bisect
+import csv
 import json
 import math
 import os
@@ -29,6 +31,8 @@ if str(SRC_DIR) not in sys.path:
 from autopan.perception import DetBox, nms_boxes_xyxy, pick_best_ball
 from ball_tracker_equirect import BallMeasurement, MultiHypothesisEquirectTracker, shortest_lon_delta, wrap_lon
 
+ROOT = Path(__file__).resolve().parent
+
 
 @dataclass
 class ScanDetection:
@@ -41,12 +45,146 @@ class ScanDetection:
     bbox: Tuple[float, float, float, float]
 
 
+@dataclass
+class BallGroundTruth:
+    time_s: float
+    lon: float
+    lat: float
+    on_pitch: bool = True
+
+
 def parse_scan_yaws(value: str) -> List[float]:
     return [float(v.strip()) for v in value.split(",") if v.strip()]
 
 
+def _metric_score(path: Path) -> Tuple[float, float]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return (
+            float(data.get("map50_95", data.get("mAP50-95", data.get("map", 0.0)))),
+            float(data.get("map50", data.get("mAP50", 0.0))),
+        )
+    except Exception:
+        return (-1.0, -1.0)
+
+
+def preferred_ball_model() -> str:
+    candidates = [
+        ("models/ball_v5.pt", "results/ball_v5_eval.json"),
+        ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json"),
+        ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json"),
+        ("models/ball_v4.pt", ""),
+    ]
+    available = []
+    for idx, (model_path, metrics_path) in enumerate(candidates):
+        path = ROOT / model_path
+        if not path.exists():
+            continue
+        score = _metric_score(ROOT / metrics_path) if metrics_path else (-0.5, -0.5)
+        available.append((score[0], score[1], -idx, model_path))
+    if available:
+        available.sort(reverse=True)
+        return available[0][3]
+    return "models/ball_v5.pt"
+
+
+def resolve_model_path(value: str) -> str:
+    if value == "auto":
+        value = preferred_ball_model()
+    path = Path(value)
+    return str(path if path.is_absolute() else ROOT / path)
+
+
 def angular_dist_deg(a: ScanDetection, b: ScanDetection) -> float:
     return math.hypot(shortest_lon_delta(a.lon, b.lon), a.lat - b.lat)
+
+
+def angular_error_to_point(det: ScanDetection, lon: float, lat: float) -> float:
+    return math.hypot(shortest_lon_delta(det.lon, lon), det.lat - lat)
+
+
+def load_ball_groundtruth(path: str) -> List[BallGroundTruth]:
+    """Load independently annotated ball GT for scanner recall evaluation."""
+    p = Path(path)
+    if p.suffix.lower() == ".csv":
+        with p.open(newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+    elif p.suffix.lower() == ".jsonl":
+        rows = [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
+    else:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        rows = raw.get("frames") or raw.get("annotations") or raw.get("points") if isinstance(raw, dict) else raw
+    gt: List[BallGroundTruth] = []
+    for row in rows:
+        if "timestamp_s" in row:
+            time_s = float(row["timestamp_s"])
+        elif "time_s" in row:
+            time_s = float(row["time_s"])
+        else:
+            continue
+        if "lon" not in row or "lat" not in row:
+            continue
+        on_pitch_value = row.get("on_pitch", True)
+        on_pitch = bool(on_pitch_value)
+        if isinstance(on_pitch_value, str):
+            on_pitch = on_pitch_value.strip().lower() not in {"0", "false", "no", "off", ""}
+        gt.append(BallGroundTruth(time_s=time_s, lon=float(row["lon"]), lat=float(row["lat"]), on_pitch=on_pitch))
+    return sorted(gt, key=lambda item: item.time_s)
+
+
+def nearest_groundtruth(gt: Sequence[BallGroundTruth], times: Sequence[float], time_s: float, max_dt: float) -> Optional[BallGroundTruth]:
+    if not gt:
+        return None
+    idx = bisect.bisect_left(times, time_s)
+    candidates = []
+    if idx < len(gt):
+        candidates.append(gt[idx])
+    if idx > 0:
+        candidates.append(gt[idx - 1])
+    if not candidates:
+        return None
+    best = min(candidates, key=lambda item: abs(item.time_s - time_s))
+    return best if abs(best.time_s - time_s) <= max_dt else None
+
+
+def scan_summary_payload(
+    *,
+    scanned_frames: int,
+    detection_hits: int,
+    gt_frames: int,
+    gt_hits: int,
+    gt_errors: Sequence[float],
+    args,
+    scan_yaws: Sequence[float],
+) -> dict:
+    detection_rate = detection_hits / max(1, scanned_frames)
+    payload = {
+        "scanned_frames": int(scanned_frames),
+        "detection_hits": int(detection_hits),
+        "detection_rate": float(detection_rate),
+        "detection_rate_is_proxy": True,
+        "requires_ball_groundtruth_for_on_pitch_rate": gt_frames == 0,
+        "scan_yaws": [float(v) for v in scan_yaws],
+        "every": int(args.every),
+        "start_s": float(args.start),
+        "duration_s": float(args.duration),
+        "conf": float(args.conf),
+        "imgsz": int(args.imgsz),
+        "use_sliced": not bool(args.no_sliced),
+        "ball_model": str(args.ball),
+    }
+    if gt_frames:
+        errors = np.asarray(gt_errors, dtype=np.float64)
+        payload.update({
+            "on_pitch_frames": int(gt_frames),
+            "on_pitch_hits": int(gt_hits),
+            "on_pitch_detection_rate": float(gt_hits / gt_frames),
+            "gt_match_threshold_deg": float(args.gt_match_deg),
+            "gt_max_time_delta_s": float(args.gt_max_dt),
+            "ball_gt_rmse_deg": float(np.sqrt(np.mean(errors ** 2))) if errors.size else float("nan"),
+            "ball_gt_mae_deg": float(np.mean(np.abs(errors))) if errors.size else float("nan"),
+        })
+    return payload
 
 
 def merge_scan_detections(detections: Sequence[ScanDetection], merge_dist_deg: float = 1.5) -> List[ScanDetection]:
@@ -310,7 +448,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--insv", required=True, help="Input .insv file")
     parser.add_argument("--calib", required=True, help="Calibration JSON")
-    parser.add_argument("--ball", default="models/ball_v4.pt", help="Ball model path")
+    parser.add_argument("--ball", default="auto", help="Ball model path or auto for best local candidate")
     parser.add_argument("--device", default=None, help="cpu, cuda, or mps")
     parser.add_argument("--start", type=float, default=0.0)
     parser.add_argument("--duration", type=float, default=30.0)
@@ -323,12 +461,17 @@ def main() -> None:
     parser.add_argument("--merge-dist-deg", type=float, default=1.5)
     parser.add_argument("--no-sliced", action="store_true", help="Disable SAHI-style tiled inference")
     parser.add_argument("--out-jsonl", default=None, help="Optional JSONL detections output")
+    parser.add_argument("--summary-json", default=None, help="Optional summary JSON output for verifier gates")
+    parser.add_argument("--ball-groundtruth", default=None, help="Optional CSV/JSON/JSONL ball GT with timestamp_s,lon,lat")
+    parser.add_argument("--gt-max-dt", type=float, default=0.25, help="Max seconds between scan time and GT row")
+    parser.add_argument("--gt-match-deg", type=float, default=3.0, help="Angular match threshold for GT recall")
     args = parser.parse_args()
 
     if not Path(args.insv).exists():
         raise FileNotFoundError(args.insv)
     if not Path(args.calib).exists():
         raise FileNotFoundError(args.calib)
+    args.ball = resolve_model_path(args.ball)
     if not Path(args.ball).exists():
         raise FileNotFoundError(args.ball)
 
@@ -342,10 +485,15 @@ def main() -> None:
     tracker = MultiHypothesisEquirectTracker()
     proc = open_equirect_stream(args.insv, args.start, args.duration)
     out_f = open(args.out_jsonl, "w", encoding="utf-8") if args.out_jsonl else None
+    gt = load_ball_groundtruth(args.ball_groundtruth) if args.ball_groundtruth else []
+    gt_times = [item.time_s for item in gt]
 
     frame_idx = 0
     scanned = 0
     hits = 0
+    gt_frames = 0
+    gt_hits = 0
+    gt_errors: List[float] = []
     try:
         while True:
             frame = read_equirect_frame(proc)
@@ -375,11 +523,26 @@ def main() -> None:
                 snap = tracker.snapshot()
                 if dets:
                     hits += 1
+                time_s = args.start + frame_idx / 29.97
+                gt_row = nearest_groundtruth(gt, gt_times, time_s, args.gt_max_dt)
+                gt_error = None
+                gt_match = None
+                if gt_row is not None and gt_row.on_pitch:
+                    gt_frames += 1
+                    if dets:
+                        gt_error = min(angular_error_to_point(d, gt_row.lon, gt_row.lat) for d in dets)
+                        gt_errors.append(float(gt_error))
+                        gt_match = gt_error <= args.gt_match_deg
+                        if gt_match:
+                            gt_hits += 1
                 row = {
                     "frame_idx": frame_idx,
-                    "time_s": args.start + frame_idx / 29.97,
+                    "time_s": time_s,
                     "detections": [asdict(d) for d in dets],
                     "tracker": asdict(snap) if snap else None,
+                    "groundtruth": asdict(gt_row) if gt_row is not None else None,
+                    "gt_error_deg": gt_error,
+                    "gt_match": gt_match,
                 }
                 if out_f:
                     out_f.write(json.dumps(row) + "\n")
@@ -401,6 +564,20 @@ def main() -> None:
 
     rate = 100.0 * hits / max(1, scanned)
     print(f"Scanned {scanned} frames, detections in {hits} ({rate:.1f}%).")
+    if args.summary_json:
+        summary = scan_summary_payload(
+            scanned_frames=scanned,
+            detection_hits=hits,
+            gt_frames=gt_frames,
+            gt_hits=gt_hits,
+            gt_errors=gt_errors,
+            args=args,
+            scan_yaws=scan_yaws,
+        )
+        summary_path = Path(args.summary_json)
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        print(f"Summary written to {summary_path}")
 
 
 if __name__ == "__main__":

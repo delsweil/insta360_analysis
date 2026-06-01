@@ -5,36 +5,36 @@
     "name": "ball_v5_yolo11m_1280_after_highres"
   },
   "last_metrics": {
-    "epoch": "15",
-    "time": "1918.16",
-    "train/box_loss": "2.36396",
-    "train/cls_loss": "1.31321",
-    "train/dfl_loss": "0.74382",
-    "metrics/precision(B)": "0.81708",
-    "metrics/recall(B)": "0.68502",
-    "metrics/mAP50(B)": "0.74837",
-    "metrics/mAP50-95(B)": "0.32472",
-    "val/box_loss": "2.10383",
-    "val/cls_loss": "1.26406",
-    "val/dfl_loss": "0.75605",
-    "lr/pg0": "0.000594085",
-    "lr/pg1": "0.000594085",
-    "lr/pg2": "0.000594085"
+    "epoch": "33",
+    "time": "4168.36",
+    "train/box_loss": "2.27755",
+    "train/cls_loss": "1.1166",
+    "train/dfl_loss": "0.73428",
+    "metrics/precision(B)": "0.84759",
+    "metrics/recall(B)": "0.71956",
+    "metrics/mAP50(B)": "0.79019",
+    "metrics/mAP50-95(B)": "0.3837",
+    "val/box_loss": "1.97866",
+    "val/cls_loss": "1.14354",
+    "val/dfl_loss": "0.76005",
+    "lr/pg0": "0.000569527",
+    "lr/pg1": "0.000569527",
+    "lr/pg2": "0.000569527"
   },
   "artifacts": {
     "live_results": {
       "remote": "/root/insta360_ball_v5_20260601/runs/ball_v5_followup_after_highres/ball_v5_yolo11m_1280_after_highres/results.csv",
-      "size": 2053,
+      "size": 4317,
       "exists": true
     },
     "live_best": {
       "remote": "/root/insta360_ball_v5_20260601/runs/ball_v5_followup_after_highres/ball_v5_yolo11m_1280_after_highres/weights/best.pt",
-      "size": 161224426,
+      "size": 161226986,
       "exists": true
     },
     "live_last": {
       "remote": "/root/insta360_ball_v5_20260601/runs/ball_v5_followup_after_highres/ball_v5_yolo11m_1280_after_highres/weights/last.pt",
-      "size": 161224938,
+      "size": 161227242,
       "exists": true
     }
   },
@@ -49,11 +49,11 @@
     },
     "followup": {
       "remote": "/root/insta360_ball_v5_20260601/logs/followup_after_highres_recovered.log",
-      "size": 790995
+      "size": 1743837
     },
     "highres": {
       "remote": "/root/insta360_ball_v5_20260601/logs/highres_after_yolo11m_20260601-161229.log",
-      "size": 451
+      "size": 864
     }
   },
   "states": {
