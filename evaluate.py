@@ -54,7 +54,7 @@ CLIPS = {
 }
 
 PLAYERS  = 'models/yolo11s.pt'
-BALL     = 'models/ball_v4.pt'
+BALL     = 'models/ball_v5_yolo11s_1280_candidate.pt'
 SEG_DUR  = 45
 N_SEGS   = 6
 SEED     = 99
@@ -129,6 +129,8 @@ def build_cmd(approach: str, clip: dict, csv_path: str,
         '--output',      mp4_path,
         '--device',      'mps',
     ]
+    if 'reanchor' in approach:
+        base += ['--mode', 'reanchor']
 
     if approach == 'track':
         base += ['--mode', 'track']
