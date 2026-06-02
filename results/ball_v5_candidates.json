@@ -5,45 +5,155 @@
       "model": {
         "path": "models/ball_v5.pt",
         "exists": true,
-        "size": 76057825
+        "size": 40576300
       },
       "eval_json": {
         "path": "results/ball_v5_eval.json",
         "exists": true,
-        "size": 401,
+        "size": 971,
         "metrics": {
-          "map50": 0.4809161169880827,
-          "map50_95": 0.19241388102664198,
-          "precision": 0.7430175787771659,
-          "recall": 0.40644823003257013,
-          "fitness": 0.19241388102664198,
+          "map50": 0.8219164816177114,
+          "map50_95": 0.4518181832621472,
+          "precision": 0.8897429629459962,
+          "recall": 0.7524818054403384,
+          "fitness": 0.4518181832621472,
           "speed": {
-            "preprocess": 2.2830800002060125,
-            "inference": 442.8783439415045,
-            "loss": 0.0002541607347772504,
-            "postprocess": 3.1738505109865898
+            "preprocess": 2.8406401704016484,
+            "inference": 12.163192954197614,
+            "loss": 0.00034647378308034083,
+            "postprocess": 0.4144908359263375
           },
-          "split": "val",
-          "weights": "models/ball_v5.pt"
+          "generated_at_utc": "2026-06-02T13:32:00.526240Z",
+          "split": "test",
+          "weights": "models/ball_v5.pt",
+          "data": "data/ball_v5/data.yaml",
+          "weights_fingerprint": {
+            "path": "models/ball_v5.pt",
+            "exists": true,
+            "size_bytes": 40576300,
+            "mtime_epoch": 1780407108.1181302,
+            "sha256": "8276f3a4bd0e9af2226f4b54464a53d17336a50968640f7891b761f29561e9a2"
+          },
+          "data_fingerprint": {
+            "path": "data/ball_v5/data.yaml",
+            "exists": true,
+            "size_bytes": 139,
+            "mtime_epoch": 1780401842.0016687,
+            "sha256": "669e3e703c2434a4734865d6236ef91bb3c42c027fc74c5fb798cf622d518b98"
+          }
         }
       },
       "status_json": {
         "path": "results/ball_v5_finalize_status.json",
         "exists": true,
-        "size": 169,
+        "size": 1162,
         "status": {
-          "status": "failed_metric_gate",
-          "map50": 0.82031755817434,
-          "map50_95": 0.4380733215838644,
+          "status": "promoted_manual",
+          "run_name": "ball_v5_yolo11m_1280_domain_balanced_from_stopped_best_b24",
+          "batch": 24,
+          "initial_model": "models/ball_v5_yolo11m_1280_stopped_best.pt",
+          "weights": "models/ball_v5.pt",
+          "eval_json": "results/ball_v5_eval.json",
+          "domain_eval_json": "results/ball_v5_domain_eval.json",
+          "balanced_manifest": "runs/ball_v5/domain_balanced_train/train_balanced_insta360_style-veo_style_1424_b9ef3d2f34/manifest.json",
+          "map50": 0.8219164816177114,
+          "map50_95": 0.4518181832621472,
           "target_map50": 0.9,
           "target_map50_95": 0.6,
-          "promoted": false
+          "domain": "insta360_style",
+          "domain_recall": 0.6430541155769182,
+          "target_domain_recall": 0.75,
+          "promoted": true,
+          "generated_at_utc": "2026-06-02T13:32:13.831182Z",
+          "promotion_source_weights": "models/ball_v5_yolo11m_1280_domain_balanced_best.pt",
+          "promotion_source_status": "results/ball_v5_yolo11m_1280_domain_balanced_status.json",
+          "quality_gate": "manual_override",
+          "promotion_reason": "User accepted the completed domain-balanced YOLO11m run and disbanded additional quality-gate training.",
+          "promoted_at_utc": "2026-06-02T13:49:10.350793Z"
         }
       },
       "domain_eval_json": {
         "path": "results/ball_v5_domain_eval.json",
-        "exists": false,
-        "metrics": null
+        "exists": true,
+        "size": 2766,
+        "metrics": {
+          "generated_at_utc": "2026-06-02T13:32:13.067221Z",
+          "domains": [
+            {
+              "map50": 0.5981977805028014,
+              "map50_95": 0.2732020740915731,
+              "precision": 0.6763508720412501,
+              "recall": 0.6430541155769182,
+              "fitness": 0.2732020740915731,
+              "speed": {
+                "preprocess": 6.601285934448242,
+                "inference": 12.519369567079204,
+                "loss": 0.0004325328128678458,
+                "postprocess": 2.142215839454106
+              },
+              "source_split": "test",
+              "eval_split": "val",
+              "domain": "insta360_style",
+              "subset": {
+                "source_data": "data/ball_v5/data.yaml",
+                "source_images": "/root/insta360_ball_v5_continue_20260602/data/ball_v5/test/images",
+                "source_labels": "/root/insta360_ball_v5_continue_20260602/data/ball_v5/test/labels",
+                "split": "test",
+                "domain": "insta360_style",
+                "images": 70,
+                "labels": 70,
+                "missing_labels": 0,
+                "data_yaml": "runs/ball_v5/domain_subsets/test_insta360_style/data.yaml"
+              },
+              "subset_data": "runs/ball_v5/domain_subsets/test_insta360_style/data.yaml"
+            },
+            {
+              "map50": 0.8522811652422759,
+              "map50_95": 0.47965145662404646,
+              "precision": 0.9074579572410467,
+              "recall": 0.7867647058823529,
+              "fitness": 0.47965145662404646,
+              "speed": {
+                "preprocess": 3.271961057394305,
+                "inference": 12.127001023413065,
+                "loss": 0.00032212119549512863,
+                "postprocess": 0.44792045510428796
+              },
+              "source_split": "test",
+              "eval_split": "val",
+              "domain": "veo_style",
+              "subset": {
+                "source_data": "data/ball_v5/data.yaml",
+                "source_images": "/root/insta360_ball_v5_continue_20260602/data/ball_v5/test/images",
+                "source_labels": "/root/insta360_ball_v5_continue_20260602/data/ball_v5/test/labels",
+                "split": "test",
+                "domain": "veo_style",
+                "images": 272,
+                "labels": 272,
+                "missing_labels": 0,
+                "data_yaml": "runs/ball_v5/domain_subsets/test_veo_style/data.yaml"
+              },
+              "subset_data": "runs/ball_v5/domain_subsets/test_veo_style/data.yaml"
+            }
+          ],
+          "split": "test",
+          "weights": "models/ball_v5.pt",
+          "data": "data/ball_v5/data.yaml",
+          "weights_fingerprint": {
+            "path": "models/ball_v5.pt",
+            "exists": true,
+            "size_bytes": 40576300,
+            "mtime_epoch": 1780407108.1181302,
+            "sha256": "8276f3a4bd0e9af2226f4b54464a53d17336a50968640f7891b761f29561e9a2"
+          },
+          "data_fingerprint": {
+            "path": "data/ball_v5/data.yaml",
+            "exists": true,
+            "size_bytes": 139,
+            "mtime_epoch": 1780401842.0016687,
+            "sha256": "669e3e703c2434a4734865d6236ef91bb3c42c027fc74c5fb798cf622d518b98"
+          }
+        }
       }
     },
     {
@@ -92,14 +202,30 @@
       "status_json": {
         "path": "results/ball_v5_finalize_status.json",
         "exists": true,
-        "size": 169,
+        "size": 1162,
         "status": {
-          "status": "failed_metric_gate",
-          "map50": 0.82031755817434,
-          "map50_95": 0.4380733215838644,
+          "status": "promoted_manual",
+          "run_name": "ball_v5_yolo11m_1280_domain_balanced_from_stopped_best_b24",
+          "batch": 24,
+          "initial_model": "models/ball_v5_yolo11m_1280_stopped_best.pt",
+          "weights": "models/ball_v5.pt",
+          "eval_json": "results/ball_v5_eval.json",
+          "domain_eval_json": "results/ball_v5_domain_eval.json",
+          "balanced_manifest": "runs/ball_v5/domain_balanced_train/train_balanced_insta360_style-veo_style_1424_b9ef3d2f34/manifest.json",
+          "map50": 0.8219164816177114,
+          "map50_95": 0.4518181832621472,
           "target_map50": 0.9,
           "target_map50_95": 0.6,
-          "promoted": false
+          "domain": "insta360_style",
+          "domain_recall": 0.6430541155769182,
+          "target_domain_recall": 0.75,
+          "promoted": true,
+          "generated_at_utc": "2026-06-02T13:32:13.831182Z",
+          "promotion_source_weights": "models/ball_v5_yolo11m_1280_domain_balanced_best.pt",
+          "promotion_source_status": "results/ball_v5_yolo11m_1280_domain_balanced_status.json",
+          "quality_gate": "manual_override",
+          "promotion_reason": "User accepted the completed domain-balanced YOLO11m run and disbanded additional quality-gate training.",
+          "promoted_at_utc": "2026-06-02T13:49:10.350793Z"
         }
       },
       "domain_eval_json": {
@@ -446,20 +572,171 @@
       "name": "yolo11m_1280_domain_balanced_best",
       "model": {
         "path": "models/ball_v5_yolo11m_1280_domain_balanced_best.pt",
-        "exists": false
+        "exists": true,
+        "size": 40576300
       },
       "eval_json": {
         "path": "results/ball_v5_yolo11m_1280_domain_balanced_eval.json",
+        "exists": true,
+        "size": 1007,
+        "metrics": {
+          "map50": 0.8219164816177114,
+          "map50_95": 0.4518181832621472,
+          "precision": 0.8897429629459962,
+          "recall": 0.7524818054403384,
+          "fitness": 0.4518181832621472,
+          "speed": {
+            "preprocess": 2.8406401704016484,
+            "inference": 12.163192954197614,
+            "loss": 0.00034647378308034083,
+            "postprocess": 0.4144908359263375
+          },
+          "generated_at_utc": "2026-06-02T13:32:00.526240Z",
+          "split": "test",
+          "weights": "models/ball_v5_yolo11m_1280_domain_balanced_best.pt",
+          "data": "data/ball_v5/data.yaml",
+          "weights_fingerprint": {
+            "path": "models/ball_v5_yolo11m_1280_domain_balanced_best.pt",
+            "exists": true,
+            "size_bytes": 40576300,
+            "mtime_epoch": 1780407108.1181302,
+            "sha256": "8276f3a4bd0e9af2226f4b54464a53d17336a50968640f7891b761f29561e9a2"
+          },
+          "data_fingerprint": {
+            "path": "data/ball_v5/data.yaml",
+            "exists": true,
+            "size_bytes": 139,
+            "mtime_epoch": 1780401842.0016687,
+            "sha256": "669e3e703c2434a4734865d6236ef91bb3c42c027fc74c5fb798cf622d518b98"
+          }
+        }
+      },
+      "status_json": {
+        "path": "results/ball_v5_yolo11m_1280_domain_balanced_status.json",
+        "exists": true,
+        "size": 832,
+        "status": {
+          "status": "completed",
+          "run_name": "ball_v5_yolo11m_1280_domain_balanced_from_stopped_best_b24",
+          "batch": 24,
+          "initial_model": "models/ball_v5_yolo11m_1280_stopped_best.pt",
+          "weights": "models/ball_v5_yolo11m_1280_domain_balanced_best.pt",
+          "eval_json": "results/ball_v5_yolo11m_1280_domain_balanced_eval.json",
+          "domain_eval_json": "results/ball_v5_yolo11m_1280_domain_balanced_domain_eval.json",
+          "balanced_manifest": "runs/ball_v5/domain_balanced_train/train_balanced_insta360_style-veo_style_1424_b9ef3d2f34/manifest.json",
+          "map50": 0.8219164816177114,
+          "map50_95": 0.4518181832621472,
+          "target_map50": 0.9,
+          "target_map50_95": 0.6,
+          "domain": "insta360_style",
+          "domain_recall": 0.6430541155769182,
+          "target_domain_recall": 0.75,
+          "promoted": false,
+          "generated_at_utc": "2026-06-02T13:32:13.831182Z"
+        }
+      },
+      "domain_eval_json": {
+        "path": "results/ball_v5_yolo11m_1280_domain_balanced_domain_eval.json",
+        "exists": true,
+        "size": 2755,
+        "metrics": {
+          "generated_at_utc": "2026-06-02T13:32:13.067221Z",
+          "domains": [
+            {
+              "map50": 0.5981977805028014,
+              "map50_95": 0.2732020740915731,
+              "precision": 0.6763508720412501,
+              "recall": 0.6430541155769182,
+              "fitness": 0.2732020740915731,
+              "speed": {
+                "preprocess": 6.601285934448242,
+                "inference": 12.519369567079204,
+                "loss": 0.0004325328128678458,
+                "postprocess": 2.142215839454106
+              },
+              "source_split": "test",
+              "eval_split": "val",
+              "domain": "insta360_style",
+              "subset": {
+                "source_data": "data/ball_v5/data.yaml",
+                "source_images": "/root/insta360_ball_v5_continue_20260602/data/ball_v5/test/images",
+                "source_labels": "/root/insta360_ball_v5_continue_20260602/data/ball_v5/test/labels",
+                "split": "test",
+                "domain": "insta360_style",
+                "images": 70,
+                "labels": 70,
+                "missing_labels": 0,
+                "data_yaml": "runs/ball_v5/domain_subsets/test_insta360_style/data.yaml"
+              },
+              "subset_data": "runs/ball_v5/domain_subsets/test_insta360_style/data.yaml"
+            },
+            {
+              "map50": 0.8522811652422759,
+              "map50_95": 0.47965145662404646,
+              "precision": 0.9074579572410467,
+              "recall": 0.7867647058823529,
+              "fitness": 0.47965145662404646,
+              "speed": {
+                "preprocess": 3.271961057394305,
+                "inference": 12.127001023413065,
+                "loss": 0.00032212119549512863,
+                "postprocess": 0.44792045510428796
+              },
+              "source_split": "test",
+              "eval_split": "val",
+              "domain": "veo_style",
+              "subset": {
+                "source_data": "data/ball_v5/data.yaml",
+                "source_images": "/root/insta360_ball_v5_continue_20260602/data/ball_v5/test/images",
+                "source_labels": "/root/insta360_ball_v5_continue_20260602/data/ball_v5/test/labels",
+                "split": "test",
+                "domain": "veo_style",
+                "images": 272,
+                "labels": 272,
+                "missing_labels": 0,
+                "data_yaml": "runs/ball_v5/domain_subsets/test_veo_style/data.yaml"
+              },
+              "subset_data": "runs/ball_v5/domain_subsets/test_veo_style/data.yaml"
+            }
+          ],
+          "split": "test",
+          "weights": "models/ball_v5_yolo11m_1280_domain_balanced_best.pt",
+          "data": "data/ball_v5/data.yaml",
+          "weights_fingerprint": {
+            "path": "models/ball_v5_yolo11m_1280_domain_balanced_best.pt",
+            "exists": true,
+            "size_bytes": 40576300,
+            "mtime_epoch": 1780407108.1181302,
+            "sha256": "8276f3a4bd0e9af2226f4b54464a53d17336a50968640f7891b761f29561e9a2"
+          },
+          "data_fingerprint": {
+            "path": "data/ball_v5/data.yaml",
+            "exists": true,
+            "size_bytes": 139,
+            "mtime_epoch": 1780401842.0016687,
+            "sha256": "669e3e703c2434a4734865d6236ef91bb3c42c027fc74c5fb798cf622d518b98"
+          }
+        }
+      }
+    },
+    {
+      "name": "yolo11s_1280_domain_balanced_best",
+      "model": {
+        "path": "models/ball_v5_yolo11s_1280_domain_balanced_best.pt",
+        "exists": false
+      },
+      "eval_json": {
+        "path": "results/ball_v5_yolo11s_1280_domain_balanced_eval.json",
         "exists": false,
         "metrics": null
       },
       "status_json": {
-        "path": "results/ball_v5_yolo11m_1280_domain_balanced_status.json",
+        "path": "results/ball_v5_yolo11s_1280_domain_balanced_status.json",
         "exists": false,
         "status": null
       },
       "domain_eval_json": {
-        "path": "results/ball_v5_yolo11m_1280_domain_balanced_domain_eval.json",
+        "path": "results/ball_v5_yolo11s_1280_domain_balanced_domain_eval.json",
         "exists": false,
         "metrics": null
       }

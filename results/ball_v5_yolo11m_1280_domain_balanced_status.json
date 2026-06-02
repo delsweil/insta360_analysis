@@ -1,0 +1,19 @@
+{
+  "status": "completed",
+  "run_name": "ball_v5_yolo11m_1280_domain_balanced_from_stopped_best_b24",
+  "batch": 24,
+  "initial_model": "models/ball_v5_yolo11m_1280_stopped_best.pt",
+  "weights": "models/ball_v5_yolo11m_1280_domain_balanced_best.pt",
+  "eval_json": "results/ball_v5_yolo11m_1280_domain_balanced_eval.json",
+  "domain_eval_json": "results/ball_v5_yolo11m_1280_domain_balanced_domain_eval.json",
+  "balanced_manifest": "runs/ball_v5/domain_balanced_train/train_balanced_insta360_style-veo_style_1424_b9ef3d2f34/manifest.json",
+  "map50": 0.8219164816177114,
+  "map50_95": 0.4518181832621472,
+  "target_map50": 0.9,
+  "target_map50_95": 0.6,
+  "domain": "insta360_style",
+  "domain_recall": 0.6430541155769182,
+  "target_domain_recall": 0.75,
+  "promoted": false,
+  "generated_at_utc": "2026-06-02T13:32:13.831182Z"
+}

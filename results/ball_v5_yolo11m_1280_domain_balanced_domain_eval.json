@@ -1,0 +1,78 @@
+{
+  "generated_at_utc": "2026-06-02T13:32:13.067221Z",
+  "domains": [
+    {
+      "map50": 0.5981977805028014,
+      "map50_95": 0.2732020740915731,
+      "precision": 0.6763508720412501,
+      "recall": 0.6430541155769182,
+      "fitness": 0.2732020740915731,
+      "speed": {
+        "preprocess": 6.601285934448242,
+        "inference": 12.519369567079204,
+        "loss": 0.0004325328128678458,
+        "postprocess": 2.142215839454106
+      },
+      "source_split": "test",
+      "eval_split": "val",
+      "domain": "insta360_style",
+      "subset": {
+        "source_data": "data/ball_v5/data.yaml",
+        "source_images": "/root/insta360_ball_v5_continue_20260602/data/ball_v5/test/images",
+        "source_labels": "/root/insta360_ball_v5_continue_20260602/data/ball_v5/test/labels",
+        "split": "test",
+        "domain": "insta360_style",
+        "images": 70,
+        "labels": 70,
+        "missing_labels": 0,
+        "data_yaml": "runs/ball_v5/domain_subsets/test_insta360_style/data.yaml"
+      },
+      "subset_data": "runs/ball_v5/domain_subsets/test_insta360_style/data.yaml"
+    },
+    {
+      "map50": 0.8522811652422759,
+      "map50_95": 0.47965145662404646,
+      "precision": 0.9074579572410467,
+      "recall": 0.7867647058823529,
+      "fitness": 0.47965145662404646,
+      "speed": {
+        "preprocess": 3.271961057394305,
+        "inference": 12.127001023413065,
+        "loss": 0.00032212119549512863,
+        "postprocess": 0.44792045510428796
+      },
+      "source_split": "test",
+      "eval_split": "val",
+      "domain": "veo_style",
+      "subset": {
+        "source_data": "data/ball_v5/data.yaml",
+        "source_images": "/root/insta360_ball_v5_continue_20260602/data/ball_v5/test/images",
+        "source_labels": "/root/insta360_ball_v5_continue_20260602/data/ball_v5/test/labels",
+        "split": "test",
+        "domain": "veo_style",
+        "images": 272,
+        "labels": 272,
+        "missing_labels": 0,
+        "data_yaml": "runs/ball_v5/domain_subsets/test_veo_style/data.yaml"
+      },
+      "subset_data": "runs/ball_v5/domain_subsets/test_veo_style/data.yaml"
+    }
+  ],
+  "split": "test",
+  "weights": "models/ball_v5_yolo11m_1280_domain_balanced_best.pt",
+  "data": "data/ball_v5/data.yaml",
+  "weights_fingerprint": {
+    "path": "models/ball_v5_yolo11m_1280_domain_balanced_best.pt",
+    "exists": true,
+    "size_bytes": 40576300,
+    "mtime_epoch": 1780407108.1181302,
+    "sha256": "8276f3a4bd0e9af2226f4b54464a53d17336a50968640f7891b761f29561e9a2"
+  },
+  "data_fingerprint": {
+    "path": "data/ball_v5/data.yaml",
+    "exists": true,
+    "size_bytes": 139,
+    "mtime_epoch": 1780401842.0016687,
+    "sha256": "669e3e703c2434a4734865d6236ef91bb3c42c027fc74c5fb798cf622d518b98"
+  }
+}

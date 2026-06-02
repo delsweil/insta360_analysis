@@ -206,6 +206,8 @@ def preferred_ball_model() -> str:
     """Prefer the best evaluated upgraded detector, with v4 as fallback."""
     candidates = [
         ("models/ball_v5.pt", "results/ball_v5_eval.json", "results/ball_v5_domain_eval.json", "results/ball_v5_finalize_status.json"),
+        ("models/ball_v5_yolo11s_1280_domain_balanced_best.pt", "results/ball_v5_yolo11s_1280_domain_balanced_eval.json", "results/ball_v5_yolo11s_1280_domain_balanced_domain_eval.json", "results/ball_v5_yolo11s_1280_domain_balanced_status.json"),
+        ("models/ball_v5_yolo11m_1280_domain_balanced_best.pt", "results/ball_v5_yolo11m_1280_domain_balanced_eval.json", "results/ball_v5_yolo11m_1280_domain_balanced_domain_eval.json", "results/ball_v5_yolo11m_1280_domain_balanced_status.json"),
         ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json", "results/ball_v5_yolo11m_1280_continue_domain_eval.json", "results/ball_v5_yolo11m_1280_continue_status.json"),
         ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json", "results/ball_v5_yolo11s_1280_candidate_domain_eval.json", ""),
         ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json", "results/ball_v5_stable_domain_eval.json", ""),

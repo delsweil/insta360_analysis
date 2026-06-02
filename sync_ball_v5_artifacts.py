@@ -172,6 +172,13 @@ def write_candidate_manifest(live: dict | None = None) -> None:
             "results/ball_v5_yolo11m_1280_domain_balanced_status.json",
             domain_eval_json="results/ball_v5_yolo11m_1280_domain_balanced_domain_eval.json",
         ),
+        local_candidate_entry(
+            "yolo11s_1280_domain_balanced_best",
+            "models/ball_v5_yolo11s_1280_domain_balanced_best.pt",
+            "results/ball_v5_yolo11s_1280_domain_balanced_eval.json",
+            "results/ball_v5_yolo11s_1280_domain_balanced_status.json",
+            domain_eval_json="results/ball_v5_yolo11s_1280_domain_balanced_domain_eval.json",
+        ),
     ]
     payload: dict[str, Any] = {
         "candidates": entries,
@@ -204,6 +211,10 @@ def remote_files(args) -> list[RemoteFile]:
         RemoteFile("yolo11m_domain_balanced_eval_json", f"{ws}/results/ball_v5_yolo11m_1280_domain_balanced_eval.json", ROOT / "results" / "ball_v5_yolo11m_1280_domain_balanced_eval.json"),
         RemoteFile("yolo11m_domain_balanced_domain_eval_json", f"{ws}/results/ball_v5_yolo11m_1280_domain_balanced_domain_eval.json", ROOT / "results" / "ball_v5_yolo11m_1280_domain_balanced_domain_eval.json"),
         RemoteFile("yolo11m_domain_balanced_status", f"{ws}/results/ball_v5_yolo11m_1280_domain_balanced_status.json", ROOT / "results" / "ball_v5_yolo11m_1280_domain_balanced_status.json"),
+        RemoteFile("yolo11s_domain_balanced_weights", f"{ws}/models/ball_v5_yolo11s_1280_domain_balanced_best.pt", ROOT / "models" / "ball_v5_yolo11s_1280_domain_balanced_best.pt"),
+        RemoteFile("yolo11s_domain_balanced_eval_json", f"{ws}/results/ball_v5_yolo11s_1280_domain_balanced_eval.json", ROOT / "results" / "ball_v5_yolo11s_1280_domain_balanced_eval.json"),
+        RemoteFile("yolo11s_domain_balanced_domain_eval_json", f"{ws}/results/ball_v5_yolo11s_1280_domain_balanced_domain_eval.json", ROOT / "results" / "ball_v5_yolo11s_1280_domain_balanced_domain_eval.json"),
+        RemoteFile("yolo11s_domain_balanced_status", f"{ws}/results/ball_v5_yolo11s_1280_domain_balanced_status.json", ROOT / "results" / "ball_v5_yolo11s_1280_domain_balanced_status.json"),
     ]
 
 

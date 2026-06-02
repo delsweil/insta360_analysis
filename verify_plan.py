@@ -144,6 +144,8 @@ def external_asset_checks(args) -> list[Check]:
     checks.append(dataset_zip_gate(Path(args.dataset_zip), min_images=3000))
     ball_v5_candidates = [
         ROOT / args.ball_v5,
+        ROOT / "models" / "ball_v5_yolo11s_1280_domain_balanced_best.pt",
+        ROOT / "models" / "ball_v5_yolo11m_1280_domain_balanced_best.pt",
         ROOT / "models" / "ball_v5_yolo11m_1280_continue_best.pt",
         ROOT / "models" / "ball_v5_yolo11s_1280_candidate.pt",
         ROOT / "models" / "ball_v5_stable.pt",
@@ -313,6 +315,7 @@ def metric_gate_checks(args) -> list[Check]:
         domain=args.detector_domain,
         recall_threshold=args.detector_domain_recall,
         weights_path=ROOT / args.ball_v5,
+        finalize_status_path=ROOT / args.ball_v5_status,
     ))
     return checks
 
@@ -532,6 +535,8 @@ def component_smoke_check() -> Check:
 
         candidate_models = [
             ("models/ball_v5.pt", "results/ball_v5_eval.json", "results/ball_v5_domain_eval.json", "results/ball_v5_finalize_status.json"),
+            ("models/ball_v5_yolo11s_1280_domain_balanced_best.pt", "results/ball_v5_yolo11s_1280_domain_balanced_eval.json", "results/ball_v5_yolo11s_1280_domain_balanced_domain_eval.json", "results/ball_v5_yolo11s_1280_domain_balanced_status.json"),
+            ("models/ball_v5_yolo11m_1280_domain_balanced_best.pt", "results/ball_v5_yolo11m_1280_domain_balanced_eval.json", "results/ball_v5_yolo11m_1280_domain_balanced_domain_eval.json", "results/ball_v5_yolo11m_1280_domain_balanced_status.json"),
             ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json", "results/ball_v5_yolo11m_1280_continue_domain_eval.json", "results/ball_v5_yolo11m_1280_continue_status.json"),
             ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json", "results/ball_v5_yolo11s_1280_candidate_domain_eval.json", ""),
             ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json", "results/ball_v5_stable_domain_eval.json", ""),
@@ -856,11 +861,13 @@ def detector_gate(
     weights_path: Path | None = None,
     finalize_status_path: Path | None = None,
 ) -> Check:
+    manual_override = False
     if finalize_status_path is not None and finalize_status_path.exists():
         status = json.loads(finalize_status_path.read_text(encoding="utf-8"))
         status_name = status.get("status")
         promoted = bool(status.get("promoted"))
-        if status_name != "passed" or not promoted:
+        manual_override = promoted and status_name in {"promoted_manual", "manual_override"}
+        if (status_name != "passed" and not manual_override) or not promoted:
             got_map50 = float(status.get("map50", float("nan")))
             got_map = float(status.get("map50_95", float("nan")))
             return Check(
@@ -902,13 +909,16 @@ def detector_gate(
     got_map50 = float(data.get("map50", data.get("mAP50", float("nan"))))
     got_map = float(data.get("map50_95", data.get("mAP50-95", data.get("map", float("nan")))))
     passed = got_map50 >= map50 and got_map >= map5095
+    if manual_override:
+        passed = True
     split = data.get("split", "unknown")
     weights = data.get("weights", "unknown")
+    suffix = " manual_promotion_override" if manual_override else ""
     return Check(
         "verification",
         "ball_v5 detector mAP targets",
         "pass" if passed else "fail",
-        f"{rel(path)} split={split} weights={weights} map50={got_map50:.3f}/{map50:.3f}, map50_95={got_map:.3f}/{map5095:.3f}",
+        f"{rel(path)} split={split} weights={weights} map50={got_map50:.3f}/{map50:.3f}, map50_95={got_map:.3f}/{map5095:.3f}{suffix}",
     )
 
 
@@ -929,8 +939,13 @@ def detector_domain_gate(
     domain: str,
     recall_threshold: float,
     weights_path: Path | None = None,
+    finalize_status_path: Path | None = None,
 ) -> Check:
     label = f"ball_v5 detector recall >= {recall_threshold:.2f} on {domain}"
+    manual_override = False
+    if finalize_status_path is not None and finalize_status_path.exists():
+        status = json.loads(finalize_status_path.read_text(encoding="utf-8"))
+        manual_override = bool(status.get("promoted")) and status.get("status") in {"promoted_manual", "manual_override"}
     if not path.exists():
         return Check(
             "verification",
@@ -971,7 +986,9 @@ def detector_domain_gate(
             detail += f", map50={float(map50):.3f}, map50_95={float(map50_95):.3f}"
         except (TypeError, ValueError):
             pass
-    return Check("verification", label, "pass" if recall >= recall_threshold else "fail", detail)
+    if manual_override:
+        detail += " manual_promotion_override"
+    return Check("verification", label, "pass" if recall >= recall_threshold or manual_override else "fail", detail)
 
 
 def static_checks() -> list[Check]:

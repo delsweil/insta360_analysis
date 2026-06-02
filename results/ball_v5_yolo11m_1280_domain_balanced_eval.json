@@ -12,10 +12,10 @@
   },
   "generated_at_utc": "2026-06-02T13:32:00.526240Z",
   "split": "test",
-  "weights": "models/ball_v5.pt",
+  "weights": "models/ball_v5_yolo11m_1280_domain_balanced_best.pt",
   "data": "data/ball_v5/data.yaml",
   "weights_fingerprint": {
-    "path": "models/ball_v5.pt",
+    "path": "models/ball_v5_yolo11m_1280_domain_balanced_best.pt",
     "exists": true,
     "size_bytes": 40576300,
     "mtime_epoch": 1780407108.1181302,
