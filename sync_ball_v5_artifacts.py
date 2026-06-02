@@ -164,6 +164,13 @@ def write_candidate_manifest(live: dict | None = None) -> None:
             "results/ball_v5_yolo11m_1280_continue_status.json",
             domain_eval_json="results/ball_v5_yolo11m_1280_continue_domain_eval.json",
         ),
+        local_candidate_entry(
+            "yolo11m_1280_domain_balanced_best",
+            "models/ball_v5_yolo11m_1280_domain_balanced_best.pt",
+            "results/ball_v5_yolo11m_1280_domain_balanced_eval.json",
+            "results/ball_v5_yolo11m_1280_domain_balanced_status.json",
+            domain_eval_json="results/ball_v5_yolo11m_1280_domain_balanced_domain_eval.json",
+        ),
     ]
     payload: dict[str, Any] = {
         "candidates": entries,
@@ -192,6 +199,10 @@ def remote_files(args) -> list[RemoteFile]:
         RemoteFile("yolo11m_continue_eval_json", f"{ws}/results/ball_v5_yolo11m_1280_continue_eval.json", ROOT / "results" / "ball_v5_yolo11m_1280_continue_eval.json"),
         RemoteFile("yolo11m_continue_domain_eval_json", f"{ws}/results/ball_v5_yolo11m_1280_continue_domain_eval.json", ROOT / "results" / "ball_v5_yolo11m_1280_continue_domain_eval.json"),
         RemoteFile("yolo11m_continue_status", f"{ws}/results/ball_v5_yolo11m_1280_continue_status.json", ROOT / "results" / "ball_v5_yolo11m_1280_continue_status.json"),
+        RemoteFile("yolo11m_domain_balanced_weights", f"{ws}/models/ball_v5_yolo11m_1280_domain_balanced_best.pt", ROOT / "models" / "ball_v5_yolo11m_1280_domain_balanced_best.pt"),
+        RemoteFile("yolo11m_domain_balanced_eval_json", f"{ws}/results/ball_v5_yolo11m_1280_domain_balanced_eval.json", ROOT / "results" / "ball_v5_yolo11m_1280_domain_balanced_eval.json"),
+        RemoteFile("yolo11m_domain_balanced_domain_eval_json", f"{ws}/results/ball_v5_yolo11m_1280_domain_balanced_domain_eval.json", ROOT / "results" / "ball_v5_yolo11m_1280_domain_balanced_domain_eval.json"),
+        RemoteFile("yolo11m_domain_balanced_status", f"{ws}/results/ball_v5_yolo11m_1280_domain_balanced_status.json", ROOT / "results" / "ball_v5_yolo11m_1280_domain_balanced_status.json"),
     ]
 
 
@@ -222,7 +233,7 @@ for value in paths:
     else:
         print(f"{{value}}\\tMISSING")
 
-pid_patterns = ("train_*.pid", "continue_*.pid")
+pid_patterns = ("train_*.pid", "continue_*.pid", "domain_balanced_*.pid")
 pidfiles = sorted(
     [p for pattern in pid_patterns for p in (workspace / "logs").glob(pattern)],
     key=lambda p: p.stat().st_mtime,
@@ -236,7 +247,7 @@ if pidfiles:
 
 logfile = pidfile.with_suffix(".log") if pidfile is not None else None
 if logfile is None or not logfile.exists():
-    log_patterns = ("train_*.log", "continue_*.log")
+    log_patterns = ("train_*.log", "continue_*.log", "domain_balanced_*.log")
     logfiles = sorted(
         [p for pattern in log_patterns for p in (workspace / "logs").glob(pattern)],
         key=lambda p: p.stat().st_mtime,
