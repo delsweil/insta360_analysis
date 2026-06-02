@@ -168,6 +168,23 @@ def _insta360_domain_recall(domain_metrics_path: str) -> float:
     return -1.0
 
 
+def _auto_eligible(status_path: str = "") -> bool:
+    """False for finalizer outputs that explicitly failed promotion."""
+    if not status_path:
+        return True
+    try:
+        path = pathlib.Path(status_path)
+        if not path.is_absolute():
+            path = REPO_ROOT / path
+        if not path.exists():
+            return True
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+        return bool(data.get("promoted"))
+    except Exception:
+        return True
+
+
 def _ball_model_score(metrics_path: str, domain_metrics_path: str = "") -> Tuple[float, float, float]:
     domain_recall = _insta360_domain_recall(domain_metrics_path)
     try:
@@ -188,18 +205,18 @@ def _ball_model_score(metrics_path: str, domain_metrics_path: str = "") -> Tuple
 def preferred_ball_model() -> str:
     """Prefer the best evaluated upgraded detector, with v4 as fallback."""
     candidates = [
-        ("models/ball_v5.pt", "results/ball_v5_eval.json", "results/ball_v5_domain_eval.json"),
-        ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json", "results/ball_v5_yolo11m_1280_continue_domain_eval.json"),
-        ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json", ""),
-        ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json", "results/ball_v5_stable_domain_eval.json"),
-        ("models/ball_v4.pt", "", ""),
+        ("models/ball_v5.pt", "results/ball_v5_eval.json", "results/ball_v5_domain_eval.json", "results/ball_v5_finalize_status.json"),
+        ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json", "results/ball_v5_yolo11m_1280_continue_domain_eval.json", "results/ball_v5_yolo11m_1280_continue_status.json"),
+        ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json", "", ""),
+        ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json", "results/ball_v5_stable_domain_eval.json", ""),
+        ("models/ball_v4.pt", "", "", ""),
     ]
     available = []
-    for idx, (model_path, metrics_path, domain_metrics_path) in enumerate(candidates):
+    for idx, (model_path, metrics_path, domain_metrics_path, status_path) in enumerate(candidates):
         path = pathlib.Path(model_path)
         if not path.is_absolute():
             path = REPO_ROOT / path
-        if path.exists():
+        if path.exists() and _auto_eligible(status_path):
             score = _ball_model_score(metrics_path, domain_metrics_path) if metrics_path else (-1.0, -0.5, -0.5)
             available.append((score[0], score[1], score[2], -idx, model_path))
     if available:

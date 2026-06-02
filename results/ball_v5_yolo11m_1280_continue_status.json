@@ -1,0 +1,11 @@
+{
+  "status": "completed",
+  "map50": 0.8325127547777671,
+  "map50_95": 0.45567223346506563,
+  "target_map50": 0.9,
+  "target_map50_95": 0.6,
+  "domain": "insta360_style",
+  "domain_recall": 0.5384615384615384,
+  "target_domain_recall": 0.75,
+  "promoted": false
+}

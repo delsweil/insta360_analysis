@@ -120,18 +120,31 @@ def _insta360_domain_recall(domain_metrics_path: str) -> float:
     return -1.0
 
 
+def _auto_eligible(status_path: str = "") -> bool:
+    if not status_path:
+        return True
+    try:
+        path = REPO_ROOT / status_path
+        if not path.exists():
+            return True
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return bool(data.get("promoted"))
+    except Exception:
+        return True
+
+
 def preferred_ball_model() -> str:
     candidates = [
-        ("models/ball_v5.pt", "results/ball_v5_eval.json", "results/ball_v5_domain_eval.json"),
-        ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json", "results/ball_v5_yolo11m_1280_continue_domain_eval.json"),
-        ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json", ""),
-        ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json", "results/ball_v5_stable_domain_eval.json"),
-        ("models/ball_v4.pt", "", ""),
+        ("models/ball_v5.pt", "results/ball_v5_eval.json", "results/ball_v5_domain_eval.json", "results/ball_v5_finalize_status.json"),
+        ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json", "results/ball_v5_yolo11m_1280_continue_domain_eval.json", "results/ball_v5_yolo11m_1280_continue_status.json"),
+        ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json", "", ""),
+        ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json", "results/ball_v5_stable_domain_eval.json", ""),
+        ("models/ball_v4.pt", "", "", ""),
     ]
     available = []
-    for idx, (model_path, metrics_path, domain_metrics_path) in enumerate(candidates):
+    for idx, (model_path, metrics_path, domain_metrics_path, status_path) in enumerate(candidates):
         path = REPO_ROOT / model_path
-        if not path.exists():
+        if not path.exists() or not _auto_eligible(status_path):
             continue
         score = (-1.0, -0.5, -0.5)
         if metrics_path:

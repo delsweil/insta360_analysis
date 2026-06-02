@@ -514,14 +514,14 @@ def component_smoke_check() -> Check:
             failures.append(f"team classifier empty update failed: {empty_assignments}")
 
         candidate_models = [
-            ("models/ball_v5.pt", "results/ball_v5_eval.json", "results/ball_v5_domain_eval.json"),
-            ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json", "results/ball_v5_yolo11m_1280_continue_domain_eval.json"),
-            ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json", ""),
-            ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json", "results/ball_v5_stable_domain_eval.json"),
+            ("models/ball_v5.pt", "results/ball_v5_eval.json", "results/ball_v5_domain_eval.json", "results/ball_v5_finalize_status.json"),
+            ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json", "results/ball_v5_yolo11m_1280_continue_domain_eval.json", "results/ball_v5_yolo11m_1280_continue_status.json"),
+            ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json", "", ""),
+            ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json", "results/ball_v5_stable_domain_eval.json", ""),
         ]
         available_candidates = [
-            (model_path, metrics_path, domain_metrics_path)
-            for model_path, metrics_path, domain_metrics_path in candidate_models
+            (model_path, metrics_path, domain_metrics_path, status_path)
+            for model_path, metrics_path, domain_metrics_path, status_path in candidate_models
             if (ROOT / model_path).exists()
         ]
         if available_candidates:
@@ -549,8 +549,22 @@ def component_smoke_check() -> Check:
                     return -1.0
                 return -1.0
 
+            def auto_eligible(path: Path) -> bool:
+                if not str(path):
+                    return True
+                if not path.exists():
+                    return True
+                try:
+                    return bool(json.loads(path.read_text(encoding="utf-8")).get("promoted"))
+                except Exception:
+                    return True
+
+            eligible_candidates = [
+                item for item in available_candidates if auto_eligible(ROOT / item[3])
+            ]
+
             expected = max(
-                enumerate(available_candidates),
+                enumerate(eligible_candidates),
                 key=lambda item: (
                     domain_recall(ROOT / item[1][2]),
                     score(ROOT / item[1][1]),

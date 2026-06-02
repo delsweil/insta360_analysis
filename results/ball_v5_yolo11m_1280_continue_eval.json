@@ -1,0 +1,31 @@
+{
+  "map50": 0.8325127547777671,
+  "map50_95": 0.45567223346506563,
+  "precision": 0.8805293844275915,
+  "recall": 0.7820551981153877,
+  "fitness": 0.45567223346506563,
+  "speed": {
+    "preprocess": 2.09383741674716,
+    "inference": 12.297309690008039,
+    "loss": 0.0005079901706405551,
+    "postprocess": 0.4665772239977156
+  },
+  "generated_at_utc": "2026-06-02T10:01:11.814772Z",
+  "split": "test",
+  "weights": "models/ball_v5_yolo11m_1280_continue_best.pt",
+  "data": "data/ball_v5/data.yaml",
+  "weights_fingerprint": {
+    "path": "models/ball_v5_yolo11m_1280_continue_best.pt",
+    "exists": true,
+    "size_bytes": 40578156,
+    "mtime_epoch": 1780394459.419737,
+    "sha256": "cd0678c01cf66f6d1ad788adfd81efe3bb7565e1b4e192eba026edf6bf975b0c"
+  },
+  "data_fingerprint": {
+    "path": "data/ball_v5/data.yaml",
+    "exists": true,
+    "size_bytes": 139,
+    "mtime_epoch": 1780388151.8812644,
+    "sha256": "669e3e703c2434a4734865d6236ef91bb3c42c027fc74c5fb798cf622d518b98"
+  }
+}

@@ -42,3 +42,4 @@
 - PowerShell does not support Bash-style `python - <<'PY'` heredocs. Use a PowerShell here-string piped into Python, e.g. `@' ... '@ | python -`, for inline Python checks.
 - Higher ball detector recall is not automatically better for autopan RMSE. Feeding extra false positives into continuous Kalman tracking can cause drift; test improved ball models as gated re-anchor triggers separately from continuous ball-following presets.
 - Do not pass pitch-rejected detector boxes into either the camera target selector or ball-metric CSV as if they were accepted balls. Keep raw detections for overlays/debugging, but only pitch-gated view detections or accepted full-pitch scan detections should update trackers.
+- Finished detector finalizer artifacts with `promoted: false` are evidence, not production defaults. Commit them under explicit candidate names, but keep `auto` model selection on promoted outputs or deliberately preserved candidate checkpoints.
