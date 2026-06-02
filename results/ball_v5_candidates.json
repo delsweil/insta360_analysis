@@ -39,6 +39,11 @@
           "target_map50_95": 0.6,
           "promoted": false
         }
+      },
+      "domain_eval_json": {
+        "path": "results/ball_v5_domain_eval.json",
+        "exists": false,
+        "metrics": null
       }
     },
     {
@@ -96,6 +101,11 @@
           "target_map50_95": 0.6,
           "promoted": false
         }
+      },
+      "domain_eval_json": {
+        "path": "results/ball_v5_stable_domain_eval.json",
+        "exists": false,
+        "metrics": null
       }
     },
     {
@@ -190,13 +200,48 @@
       "results_csv": {
         "path": "results/ball_v5_live_results.csv",
         "exists": true,
-        "size": 4317
+        "size": 437
+      }
+    },
+    {
+      "name": "yolo11m_1280_stopped_best",
+      "model": {
+        "path": "models/ball_v5_yolo11m_1280_stopped_best.pt",
+        "exists": true,
+        "size": 161236074
+      },
+      "results_csv": {
+        "path": "results/ball_v5_yolo11m_1280_stopped_results.csv",
+        "exists": true,
+        "size": 16258
+      }
+    },
+    {
+      "name": "yolo11m_1280_continue_best",
+      "model": {
+        "path": "models/ball_v5_yolo11m_1280_continue_best.pt",
+        "exists": false
+      },
+      "eval_json": {
+        "path": "results/ball_v5_yolo11m_1280_continue_eval.json",
+        "exists": false,
+        "metrics": null
+      },
+      "status_json": {
+        "path": "results/ball_v5_yolo11m_1280_continue_status.json",
+        "exists": false,
+        "status": null
+      },
+      "domain_eval_json": {
+        "path": "results/ball_v5_yolo11m_1280_continue_domain_eval.json",
+        "exists": false,
+        "metrics": null
       }
     }
   ],
   "live_run": {
-    "remote": "/root/insta360_ball_v5_20260601/runs/ball_v5_followup_after_highres/ball_v5_yolo11m_1280_after_highres",
-    "project": "ball_v5_followup_after_highres",
-    "name": "ball_v5_yolo11m_1280_after_highres"
+    "remote": "/root/insta360_ball_v5_continue_20260602/runs/ball_v5_continue/ball_v5_yolo11m_1280_continue_from_stopped_best_polars",
+    "project": "ball_v5_continue",
+    "name": "ball_v5_yolo11m_1280_continue_from_stopped_best_polars"
   }
 }

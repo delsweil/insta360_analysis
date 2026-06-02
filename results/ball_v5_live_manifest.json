@@ -1,76 +1,55 @@
 {
   "run": {
-    "remote": "/root/insta360_ball_v5_20260601/runs/ball_v5_followup_after_highres/ball_v5_yolo11m_1280_after_highres",
-    "project": "ball_v5_followup_after_highres",
-    "name": "ball_v5_yolo11m_1280_after_highres"
+    "remote": "/root/insta360_ball_v5_continue_20260602/runs/ball_v5_continue/ball_v5_yolo11m_1280_continue_from_stopped_best_polars",
+    "project": "ball_v5_continue",
+    "name": "ball_v5_yolo11m_1280_continue_from_stopped_best_polars"
   },
   "last_metrics": {
-    "epoch": "33",
-    "time": "4168.36",
-    "train/box_loss": "2.27755",
-    "train/cls_loss": "1.1166",
-    "train/dfl_loss": "0.73428",
-    "metrics/precision(B)": "0.84759",
-    "metrics/recall(B)": "0.71956",
-    "metrics/mAP50(B)": "0.79019",
-    "metrics/mAP50-95(B)": "0.3837",
-    "val/box_loss": "1.97866",
-    "val/cls_loss": "1.14354",
-    "val/dfl_loss": "0.76005",
-    "lr/pg0": "0.000569527",
-    "lr/pg1": "0.000569527",
-    "lr/pg2": "0.000569527"
+    "epoch": "2",
+    "time": "266.073",
+    "train/box_loss": "1.91559",
+    "train/cls_loss": "0.71101",
+    "train/dfl_loss": "0.7266",
+    "metrics/precision(B)": "0.8591",
+    "metrics/recall(B)": "0.77316",
+    "metrics/mAP50(B)": "0.82462",
+    "metrics/mAP50-95(B)": "0.42946",
+    "val/box_loss": "1.92706",
+    "val/cls_loss": "0.95013",
+    "val/dfl_loss": "0.74709",
+    "lr/pg0": "0.000132866",
+    "lr/pg1": "0.000132866",
+    "lr/pg2": "0.0336884"
   },
   "artifacts": {
     "live_results": {
-      "remote": "/root/insta360_ball_v5_20260601/runs/ball_v5_followup_after_highres/ball_v5_yolo11m_1280_after_highres/results.csv",
-      "size": 4317,
+      "remote": "/root/insta360_ball_v5_continue_20260602/runs/ball_v5_continue/ball_v5_yolo11m_1280_continue_from_stopped_best_polars/results.csv",
+      "size": 437,
       "exists": true
     },
     "live_best": {
-      "remote": "/root/insta360_ball_v5_20260601/runs/ball_v5_followup_after_highres/ball_v5_yolo11m_1280_after_highres/weights/best.pt",
-      "size": 161226986,
+      "remote": "/root/insta360_ball_v5_continue_20260602/runs/ball_v5_continue/ball_v5_yolo11m_1280_continue_from_stopped_best_polars/weights/best.pt",
+      "size": 161223658,
       "exists": true
     },
     "live_last": {
-      "remote": "/root/insta360_ball_v5_20260601/runs/ball_v5_followup_after_highres/ball_v5_yolo11m_1280_after_highres/weights/last.pt",
-      "size": 161227242,
+      "remote": "/root/insta360_ball_v5_continue_20260602/runs/ball_v5_continue/ball_v5_yolo11m_1280_continue_from_stopped_best_polars/weights/last.pt",
+      "size": 161223658,
       "exists": true
     }
   },
   "logs": {
     "initial_train": {
-      "remote": "/root/insta360_ball_v5_20260601/logs/train_speed_20260601-131830.log",
-      "size": 4130314
+      "remote": "/root/insta360_ball_v5_continue_20260602/logs/continue_yolo11m_from_stopped_best_polars_20260602-081549.log",
+      "size": 89026
     },
-    "finalizer": {
-      "remote": "/root/insta360_ball_v5_20260601/logs/finalize_20260601-145717.log",
-      "size": 115977
-    },
-    "followup": {
-      "remote": "/root/insta360_ball_v5_20260601/logs/followup_after_highres_recovered.log",
-      "size": 1743837
-    },
-    "highres": {
-      "remote": "/root/insta360_ball_v5_20260601/logs/highres_after_yolo11m_20260601-161229.log",
-      "size": 864
-    }
+    "finalizer": null,
+    "followup": null,
+    "highres": null
   },
   "states": {
-    "finalizer": {
-      "pid": "5225",
-      "state": "exited",
-      "pidfile": "/root/insta360_ball_v5_20260601/logs/finalize_20260601-145717.pid"
-    },
-    "followup": {
-      "pid": "6446",
-      "state": "running",
-      "pidfile": "/root/insta360_ball_v5_20260601/logs/followup_after_highres_recovered.pid"
-    },
-    "highres": {
-      "pid": "6830",
-      "state": "running",
-      "pidfile": "/root/insta360_ball_v5_20260601/logs/highres_after_yolo11m_20260601-161229.pid"
-    }
+    "finalizer": null,
+    "followup": null,
+    "highres": null
   }
 }

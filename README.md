@@ -117,18 +117,29 @@ python sync_ball_v5_artifacts.py --fetch-live --skip-live-best
 python sync_ball_v5_artifacts.py --fetch
 ```
 
-`--status` reports remote and local artifact state separately. Final detector
-artifacts are only current once the remote finalizer has produced
+`sync_ball_v5_artifacts.py` defaults to the active continuation VM at
+`root@69.30.85.25:22187` and
+`/root/insta360_ball_v5_continue_20260602`. `--status` reports remote and local
+artifact state separately, including the active continuation PID/log and latest
+YOLO results row. Use explicit `--host`, `--port`, and `--remote-workspace`
+arguments if you need to inspect the older VM workspace.
+
+Final detector artifacts are only current once the remote finalizer has produced
 `models/ball_v5.pt`, `models/ball_v5_stable.pt`, and the matching eval JSON
-files. Live checkpoints are fetched to `ball_v5_live_*` filenames and should not
-be treated as promoted production weights. Use `--skip-live-best` for lightweight
-status/log/result sync while a large checkpoint is still changing; the command
-writes `results/ball_v5_live_manifest.json` with the active run name, paths, and
-latest metrics. Fetch commands also write `results/ball_v5_candidates.json`, a
-local manifest of final, stable, preserved candidate, and live-cache artifacts.
-Completed finalizers fetch `results/ball_v5_stable_domain_eval.json` and, on
-promotion, `results/ball_v5_domain_eval.json` alongside the aggregate eval
-files.
+files, or once the m-continuation run has produced
+`models/ball_v5_yolo11m_1280_continue_best.pt` plus
+`results/ball_v5_yolo11m_1280_continue_eval.json`,
+`results/ball_v5_yolo11m_1280_continue_domain_eval.json`, and
+`results/ball_v5_yolo11m_1280_continue_status.json`. Live checkpoints are
+fetched to `ball_v5_live_*` filenames and should not be treated as promoted
+production weights. Use `--skip-live-best` for lightweight status/log/result
+sync while a large checkpoint is still changing; the command writes
+`results/ball_v5_live_manifest.json` with the active run name, paths, and latest
+metrics. Fetch commands also write `results/ball_v5_candidates.json`, a local
+manifest of final, stable, preserved candidate, stopped m, continuation m, and
+live-cache artifacts. Completed finalizers fetch
+`results/ball_v5_stable_domain_eval.json` and, on promotion,
+`results/ball_v5_domain_eval.json` alongside the aggregate eval files.
 
 Runs that miss the formal target can still be useful. Preserve those checkpoints
 under explicit candidate names, for example

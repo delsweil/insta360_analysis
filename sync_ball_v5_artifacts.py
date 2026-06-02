@@ -2,7 +2,7 @@
 """Check or fetch ball_v5 training artifacts from the GPU VM.
 
 Default remote workspace:
-  root@69.30.85.204:/root/insta360_ball_v5_20260601
+  root@69.30.85.25:22187:/root/insta360_ball_v5_continue_20260602
 
 Examples:
   python sync_ball_v5_artifacts.py --status
@@ -25,6 +25,9 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parent
+DEFAULT_HOST = "root@69.30.85.25"
+DEFAULT_PORT = 22187
+DEFAULT_REMOTE_WORKSPACE = "/root/insta360_ball_v5_continue_20260602"
 
 
 @dataclass
@@ -149,6 +152,18 @@ def write_candidate_manifest(live: dict | None = None) -> None:
             "results/ball_v5_yolo11s_1280_candidate_results.csv",
         ),
         local_candidate_entry("live_best_cache", "models/ball_v5_live_best.pt", "results/ball_v5_live_eval.json", None, "results/ball_v5_live_results.csv"),
+        local_candidate_entry(
+            "yolo11m_1280_stopped_best",
+            "models/ball_v5_yolo11m_1280_stopped_best.pt",
+            results_csv="results/ball_v5_yolo11m_1280_stopped_results.csv",
+        ),
+        local_candidate_entry(
+            "yolo11m_1280_continue_best",
+            "models/ball_v5_yolo11m_1280_continue_best.pt",
+            "results/ball_v5_yolo11m_1280_continue_eval.json",
+            "results/ball_v5_yolo11m_1280_continue_status.json",
+            domain_eval_json="results/ball_v5_yolo11m_1280_continue_domain_eval.json",
+        ),
     ]
     payload: dict[str, Any] = {
         "candidates": entries,
@@ -173,6 +188,10 @@ def remote_files(args) -> list[RemoteFile]:
         RemoteFile("domain_eval_json", f"{ws}/results/ball_v5_domain_eval.json", ROOT / "results" / "ball_v5_domain_eval.json"),
         RemoteFile("stable_domain_eval_json", f"{ws}/results/ball_v5_stable_domain_eval.json", ROOT / "results" / "ball_v5_stable_domain_eval.json"),
         RemoteFile("finalize_status", f"{ws}/results/ball_v5_finalize_status.json", ROOT / "results" / "ball_v5_finalize_status.json"),
+        RemoteFile("yolo11m_continue_weights", f"{ws}/models/ball_v5_yolo11m_1280_continue_best.pt", ROOT / "models" / "ball_v5_yolo11m_1280_continue_best.pt"),
+        RemoteFile("yolo11m_continue_eval_json", f"{ws}/results/ball_v5_yolo11m_1280_continue_eval.json", ROOT / "results" / "ball_v5_yolo11m_1280_continue_eval.json"),
+        RemoteFile("yolo11m_continue_domain_eval_json", f"{ws}/results/ball_v5_yolo11m_1280_continue_domain_eval.json", ROOT / "results" / "ball_v5_yolo11m_1280_continue_domain_eval.json"),
+        RemoteFile("yolo11m_continue_status", f"{ws}/results/ball_v5_yolo11m_1280_continue_status.json", ROOT / "results" / "ball_v5_yolo11m_1280_continue_status.json"),
     ]
 
 
@@ -203,7 +222,11 @@ for value in paths:
     else:
         print(f"{{value}}\\tMISSING")
 
-pidfiles = sorted((workspace / "logs").glob("train_*.pid"), key=lambda p: p.stat().st_mtime)
+pid_patterns = ("train_*.pid", "continue_*.pid")
+pidfiles = sorted(
+    [p for pattern in pid_patterns for p in (workspace / "logs").glob(pattern)],
+    key=lambda p: p.stat().st_mtime,
+)
 pidfile = None
 if pidfiles:
     pidfile = pidfiles[-1]
@@ -213,7 +236,11 @@ if pidfiles:
 
 logfile = pidfile.with_suffix(".log") if pidfile is not None else None
 if logfile is None or not logfile.exists():
-    logfiles = sorted((workspace / "logs").glob("train_*.log"), key=lambda p: p.stat().st_mtime)
+    log_patterns = ("train_*.log", "continue_*.log")
+    logfiles = sorted(
+        [p for pattern in log_patterns for p in (workspace / "logs").glob(pattern)],
+        key=lambda p: p.stat().st_mtime,
+    )
     logfile = logfiles[-1] if logfiles else None
 if logfile is not None and logfile.exists():
     print(f"__LOG__\\t{{logfile}}\\t{{logfile.stat().st_size}}")
@@ -513,10 +540,10 @@ def fetch_live(args, live: dict) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default="root@69.30.85.204")
-    parser.add_argument("--port", type=int, default=22182)
+    parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--ssh-key", default="~/.ssh/id_ed25519_default")
-    parser.add_argument("--remote-workspace", default="/root/insta360_ball_v5_20260601")
+    parser.add_argument("--remote-workspace", default=DEFAULT_REMOTE_WORKSPACE)
     parser.add_argument("--status", action="store_true", help="Print artifact status")
     parser.add_argument("--fetch", action="store_true", help="Fetch available artifacts")
     parser.add_argument("--fetch-live", action="store_true",
