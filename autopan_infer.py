@@ -115,6 +115,15 @@ except ImportError:
     HAS_GAME_STATE = False
 
 
+def wrap_lon(lon_deg: float) -> float:
+    """Wrap longitude to [-180, 180)."""
+    return ((float(lon_deg) + 180.0) % 360.0) - 180.0
+
+
+def lon_delta_deg(a_deg: float, b_deg: float) -> float:
+    """Shortest signed delta from b to a in degrees."""
+    return wrap_lon(float(a_deg) - float(b_deg))
+
 
 # ── Output ────────────────────────────────────────────────────────
 OUT_W, OUT_H = 1280, 720
@@ -130,7 +139,37 @@ BALL_DETECT_EVERY   = 2  # ~15 fps at 30fps video
 FULL_SCAN_EVERY     = 0  # disabled by default; set 10-15 on GPU
 
 
-def _ball_model_score(metrics_path: str) -> Tuple[float, float]:
+def _domain_rows(data: dict) -> List[dict]:
+    domains = data.get("domains", [])
+    if isinstance(domains, dict):
+        rows = []
+        for domain, metrics in domains.items():
+            row = dict(metrics) if isinstance(metrics, dict) else {"value": metrics}
+            row.setdefault("domain", domain)
+            rows.append(row)
+        return rows
+    return [row for row in domains if isinstance(row, dict)]
+
+
+def _insta360_domain_recall(domain_metrics_path: str) -> float:
+    if not domain_metrics_path:
+        return -1.0
+    try:
+        path = pathlib.Path(domain_metrics_path)
+        if not path.is_absolute():
+            path = REPO_ROOT / path
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+        for row in _domain_rows(data):
+            if row.get("domain") == "insta360_style":
+                return float(row.get("recall", row.get("metrics/recall(B)", -1.0)))
+    except Exception:
+        return -1.0
+    return -1.0
+
+
+def _ball_model_score(metrics_path: str, domain_metrics_path: str = "") -> Tuple[float, float, float]:
+    domain_recall = _insta360_domain_recall(domain_metrics_path)
     try:
         path = pathlib.Path(metrics_path)
         if not path.is_absolute():
@@ -138,33 +177,34 @@ def _ball_model_score(metrics_path: str) -> Tuple[float, float]:
         with path.open(encoding="utf-8") as f:
             data = json.load(f)
         return (
+            domain_recall,
             float(data.get("map50_95", data.get("mAP50-95", data.get("map", 0.0)))),
             float(data.get("map50", data.get("mAP50", 0.0))),
         )
     except Exception:
-        return (-1.0, -1.0)
+        return (domain_recall, -1.0, -1.0)
 
 
 def preferred_ball_model() -> str:
     """Prefer the best evaluated upgraded detector, with v4 as fallback."""
     candidates = [
-        ("models/ball_v5.pt", "results/ball_v5_eval.json"),
-        ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json"),
-        ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json"),
-        ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json"),
-        ("models/ball_v4.pt", ""),
+        ("models/ball_v5.pt", "results/ball_v5_eval.json", "results/ball_v5_domain_eval.json"),
+        ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json", "results/ball_v5_yolo11m_1280_continue_domain_eval.json"),
+        ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json", ""),
+        ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json", "results/ball_v5_stable_domain_eval.json"),
+        ("models/ball_v4.pt", "", ""),
     ]
     available = []
-    for idx, (model_path, metrics_path) in enumerate(candidates):
+    for idx, (model_path, metrics_path, domain_metrics_path) in enumerate(candidates):
         path = pathlib.Path(model_path)
         if not path.is_absolute():
             path = REPO_ROOT / path
         if path.exists():
-            score = _ball_model_score(metrics_path) if metrics_path else (-0.5, -0.5)
-            available.append((score[0], score[1], -idx, model_path))
+            score = _ball_model_score(metrics_path, domain_metrics_path) if metrics_path else (-1.0, -0.5, -0.5)
+            available.append((score[0], score[1], score[2], -idx, model_path))
     if available:
         available.sort(reverse=True)
-        return available[0][3]
+        return available[0][4]
     return "models/ball_v5.pt"
 
 
@@ -203,6 +243,7 @@ REANCHOR_COOLDOWN     = 10.0  # minimum seconds between re-anchors
 REANCHOR_BACKSTOP     = 60.0  # re-anchor if nothing triggered for this long
 REANCHOR_SINGLE_FRAMES = 60   # consecutive single_player frames to trigger
 REANCHOR_CENTRE_FRAMES = 30   # consecutive centre frames to trigger
+REANCHOR_BALL_CONF     = 0.60 # accepted ball confidence needed for re-anchor trigger
 REANCHOR_BALL_DIST     = 30.0 # degrees — confirmed ball this far triggers re-anchor
 REANCHOR_BALL_CONFIRMS = 2    # detection windows needed to confirm ball trigger
 
@@ -1077,6 +1118,7 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
 
         eq_measurements = []
         accepted_view_ball = None
+        reanchor_ball_measure = None
         if eq_tracker is not None:
             eq_tracker.predict()
 
@@ -1108,6 +1150,7 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
                     cam.yaw, cam.pitch, _dfov, OUT_W, OUT_H)
                 if pitch_gate is None or pitch_gate.check(lon, lat, t):
                     accepted_view_ball = (lon, lat, current_ball[2])
+                    reanchor_ball_measure = accepted_view_ball
                     if eq_tracker is not None:
                         eq_measurements.append(
                             BallMeasurement(lon, lat, current_ball[2], source="view", timestamp_s=t))
@@ -1133,6 +1176,9 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
                     eq_measurements.append(
                         BallMeasurement(det.lon, det.lat, det.conf, source=f"scan:{det.source_yaw}", timestamp_s=t)
                     )
+            if accepted_scan_dets and reanchor_ball_measure is None:
+                best = accepted_scan_dets[0]
+                reanchor_ball_measure = (best.lon, best.lat, best.conf)
             if accepted_scan_dets and current_ball is None:
                 best = accepted_scan_dets[0]
                 px, py = lon_lat_to_perspective_pixel(
@@ -1186,15 +1232,22 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
                     trigger, trigger_reason = True, 'ball_far'
 
             if trigger:
-                anchor_yaw = scan_warm_start(
-                    insv_path, start_s + t_in_seg,
-                    e2p_tilt, e2p_fov,
-                    player_model, ball_model, device, calib_path)
+                ball_target_yaw = getattr(cam, '_ball_trigger_yaw', None)
+                if trigger_reason == 'ball_far' and ball_target_yaw is not None:
+                    anchor_yaw = float(np.clip(ball_target_yaw, -MAX_YAW_DEV, MAX_YAW_DEV))
+                    print(f"  Warm start: confirmed far ball → yaw_init={anchor_yaw:.1f}°")
+                else:
+                    anchor_yaw = scan_warm_start(
+                        insv_path, start_s + t_in_seg,
+                        e2p_tilt, e2p_fov,
+                        player_model, ball_model, device, calib_path)
                 cam._target_yaw   = anchor_yaw
                 cam._last_anchor_t = t_in_seg
+                cam._last_anchor_reason = trigger_reason
                 cam._consec_single = 0
                 cam._consec_centre = 0
                 cam._ball_trigger_count = 0
+                cam._ball_trigger_yaw = None
                 print(f"    Re-anchor [{trigger_reason}] t+{t_in_seg:.0f}s → {anchor_yaw:.1f}°")
 
             # Smooth pan toward anchor target
@@ -1203,7 +1256,9 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
             step = float(np.clip(diff * 0.15, -REANCHOR_PAN_SPEED, REANCHOR_PAN_SPEED))
             cam.yaw += step
             cam.yaw = float(np.clip(cam.yaw, -MAX_YAW_DEV, MAX_YAW_DEV))
-            frame_mode = 'hold' if abs(diff) < 1.0 else 'players'
+            anchor_reason = getattr(cam, '_last_anchor_reason', '')
+            frame_mode = 'hold' if abs(diff) < 1.0 else (
+                'reanchor_ball_far' if anchor_reason == 'ball_far' else 'players')
             mode_counts[frame_mode] = mode_counts.get(frame_mode, 0) + 1
 
             # Update trigger counters from last detection
@@ -1218,15 +1273,19 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
                     cam._consec_centre = getattr(cam, '_consec_centre', 0) + player_detect_every
                 else:
                     cam._consec_centre = 0
-                # ball far counter
-                if current_ball is not None and current_ball[2] >= 0.60:
-                    ball_lon = pixel_to_lon(current_ball[0], cam.yaw, OUT_W, e2p_fov)
-                    if abs(ball_lon - cam.yaw) > REANCHOR_BALL_DIST:
+                # ball far counter: count only pitch-gated view/scan balls, then
+                # use their longitude as the re-anchor target when confirmed.
+                if reanchor_ball_measure is not None and reanchor_ball_measure[2] >= REANCHOR_BALL_CONF:
+                    ball_lon = wrap_lon(reanchor_ball_measure[0])
+                    if abs(lon_delta_deg(ball_lon, cam.yaw)) > REANCHOR_BALL_DIST:
                         cam._ball_trigger_count = getattr(cam, '_ball_trigger_count', 0) + 1
+                        cam._ball_trigger_yaw = ball_lon
                     else:
                         cam._ball_trigger_count = 0
+                        cam._ball_trigger_yaw = None
                 else:
                     cam._ball_trigger_count = 0
+                    cam._ball_trigger_yaw = None
         else:
             if eq_tracker is not None and eq_tracker.is_valid():
                 snap = eq_tracker.snapshot()

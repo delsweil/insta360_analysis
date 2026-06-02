@@ -6,6 +6,7 @@ Usage:
     python3 evaluate.py --approach track
     python3 evaluate.py --approach track_v2
     python3 evaluate.py --approach reanchor_triggered
+    python3 evaluate.py --approach reanchor_ball_v5
     python3 evaluate.py --approach hold_only
     python3 evaluate.py --approach reanchor_fixed --reanchor-interval 25
 
@@ -301,11 +302,12 @@ def build_cmd(approach: str, clip: dict, csv_path: str,
               mp4_path: str, extra_args: list, args) -> list:
     """Build autopan_infer.py command for a given approach."""
     is_track_v2 = approach == 'track_v2'
+    is_reanchor_ball_v5 = approach == 'reanchor_ball_v5'
     ball_model = args.ball
-    if is_track_v2 and args.ball == BALL:
+    if (is_track_v2 or is_reanchor_ball_v5) and args.ball == BALL:
         ball_model = preferred_track_v2_ball_model()
     scan_every = args.scan_every
-    if is_track_v2 and scan_every <= 0:
+    if (is_track_v2 or is_reanchor_ball_v5) and scan_every <= 0:
         scan_every = 15
     ball_sahi = args.ball_sahi or is_track_v2
     field_opt = args.field_opt or is_track_v2
@@ -333,7 +335,7 @@ def build_cmd(approach: str, clip: dict, csv_path: str,
 
     if approach in ('track', 'track_v2'):
         base += ['--mode', 'track']
-    elif approach == 'reanchor_triggered':
+    elif approach in ('reanchor_triggered', 'reanchor_ball_v5'):
         base += ['--mode', 'reanchor']
     elif approach.startswith('reanchor_fixed'):
         interval = approach.split('_')[-1]
@@ -409,7 +411,7 @@ def remap_clip_roots(clips: dict, clip_root: str | None) -> dict:
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--approach', required=True,
-                   help='track | track_v2 | reanchor_triggered | reanchor_fixed_25 | hold_only')
+                   help='track | track_v2 | reanchor_triggered | reanchor_ball_v5 | reanchor_fixed_25 | hold_only')
     p.add_argument('--clips', default='001,002,003,004,005',
                    help='Comma-separated clip IDs to evaluate')
     p.add_argument('--skip-inference', action='store_true',
@@ -447,6 +449,12 @@ def main():
         else:
             print(f"track_v2 preset: using override {args.ball}")
         print("track_v2 preset: SAHI on, scan_every=15 unless overridden, field optimizer on")
+    elif args.approach == 'reanchor_ball_v5':
+        if args.ball == BALL:
+            print(f"reanchor_ball_v5 preset: using {preferred_track_v2_ball_model()}")
+        else:
+            print(f"reanchor_ball_v5 preset: using override {args.ball}")
+        print("reanchor_ball_v5 preset: reanchor mode, scan_every=15 unless overridden, no continuous Kalman target")
 
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)

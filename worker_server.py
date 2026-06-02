@@ -95,33 +95,60 @@ def job_dir(insv_path: str) -> Path:
     return d
 
 
+def _domain_rows(data: dict) -> list[dict]:
+    domains = data.get("domains", [])
+    if isinstance(domains, dict):
+        rows = []
+        for domain, metrics in domains.items():
+            row = dict(metrics) if isinstance(metrics, dict) else {"value": metrics}
+            row.setdefault("domain", domain)
+            rows.append(row)
+        return rows
+    return [row for row in domains if isinstance(row, dict)]
+
+
+def _insta360_domain_recall(domain_metrics_path: str) -> float:
+    if not domain_metrics_path:
+        return -1.0
+    try:
+        data = json.loads((REPO_ROOT / domain_metrics_path).read_text(encoding="utf-8"))
+        for row in _domain_rows(data):
+            if row.get("domain") == "insta360_style":
+                return float(row.get("recall", row.get("metrics/recall(B)", -1.0)))
+    except Exception:
+        return -1.0
+    return -1.0
+
+
 def preferred_ball_model() -> str:
     candidates = [
-        ("models/ball_v5.pt", "results/ball_v5_eval.json"),
-        ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json"),
-        ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json"),
-        ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json"),
-        ("models/ball_v4.pt", ""),
+        ("models/ball_v5.pt", "results/ball_v5_eval.json", "results/ball_v5_domain_eval.json"),
+        ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json", "results/ball_v5_yolo11m_1280_continue_domain_eval.json"),
+        ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json", ""),
+        ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json", "results/ball_v5_stable_domain_eval.json"),
+        ("models/ball_v4.pt", "", ""),
     ]
     available = []
-    for idx, (model_path, metrics_path) in enumerate(candidates):
+    for idx, (model_path, metrics_path, domain_metrics_path) in enumerate(candidates):
         path = REPO_ROOT / model_path
         if not path.exists():
             continue
-        score = (-0.5, -0.5)
+        score = (-1.0, -0.5, -0.5)
         if metrics_path:
+            domain_recall = _insta360_domain_recall(domain_metrics_path)
             try:
                 data = json.loads((REPO_ROOT / metrics_path).read_text(encoding="utf-8"))
                 score = (
+                    domain_recall,
                     float(data.get("map50_95", data.get("mAP50-95", data.get("map", 0.0)))),
                     float(data.get("map50", data.get("mAP50", 0.0))),
                 )
             except Exception:
-                score = (-1.0, -1.0)
-        available.append((score[0], score[1], -idx, model_path))
+                score = (domain_recall, -1.0, -1.0)
+        available.append((score[0], score[1], score[2], -idx, model_path))
     if available:
         available.sort(reverse=True)
-        return available[0][3]
+        return available[0][4]
     return "models/ball_v5.pt"
 
 

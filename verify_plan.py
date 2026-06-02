@@ -514,14 +514,14 @@ def component_smoke_check() -> Check:
             failures.append(f"team classifier empty update failed: {empty_assignments}")
 
         candidate_models = [
-            ("models/ball_v5.pt", "results/ball_v5_eval.json"),
-            ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json"),
-            ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json"),
-            ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json"),
+            ("models/ball_v5.pt", "results/ball_v5_eval.json", "results/ball_v5_domain_eval.json"),
+            ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json", "results/ball_v5_yolo11m_1280_continue_domain_eval.json"),
+            ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json", ""),
+            ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json", "results/ball_v5_stable_domain_eval.json"),
         ]
         available_candidates = [
-            (model_path, metrics_path)
-            for model_path, metrics_path in candidate_models
+            (model_path, metrics_path, domain_metrics_path)
+            for model_path, metrics_path, domain_metrics_path in candidate_models
             if (ROOT / model_path).exists()
         ]
         if available_candidates:
@@ -537,9 +537,22 @@ def component_smoke_check() -> Check:
                 except Exception:
                     return -1.0
 
+            def domain_recall(path: Path) -> float:
+                if not path.exists():
+                    return -1.0
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    for row in _domain_rows(data):
+                        if row.get("domain") == "insta360_style":
+                            return float(row.get("recall", row.get("metrics/recall(B)", -1.0)))
+                except Exception:
+                    return -1.0
+                return -1.0
+
             expected = max(
                 enumerate(available_candidates),
                 key=lambda item: (
+                    domain_recall(ROOT / item[1][2]),
                     score(ROOT / item[1][1]),
                     -item[0],
                 ),
@@ -573,6 +586,31 @@ def component_smoke_check() -> Check:
             )
             if expected not in cmd:
                 failures.append(f"evaluate track_v2 command does not use {expected}: {cmd}")
+            cmd = evaluate.build_cmd(
+                "reanchor_ball_v5",
+                {"insv": "clip.insv", "calib": "calib.json"},
+                "out.csv",
+                "out.mp4",
+                [],
+                argparse.Namespace(
+                    ball=evaluate.BALL,
+                    players=evaluate.PLAYERS,
+                    scan_every=0,
+                    ball_sahi=False,
+                    field_opt=False,
+                    segments=1,
+                    seg_duration=1.0,
+                    seed=1,
+                    device="cpu",
+                    player_detect_every=3,
+                    ball_detect_every=2,
+                    ball_sahi_every=6,
+                ),
+            )
+            if expected not in cmd or '--mode' not in cmd or 'reanchor' not in cmd:
+                failures.append(f"evaluate reanchor_ball_v5 command is not wired to {expected} reanchor mode: {cmd}")
+            if '--ball-sahi' in cmd:
+                failures.append(f"evaluate reanchor_ball_v5 unexpectedly enables SAHI by default: {cmd}")
 
         return Check(
             "automated",

@@ -39,3 +39,5 @@
 - Keep the formal domain eval artifact at `results/ball_v5_domain_eval.json` so `verify_plan.py` can gate the final detector on Insta360-style recall.
 - Remote detector finalizers should produce stable and promoted domain eval JSON in the same pass as aggregate eval, otherwise the formal detector gate can pass while the Insta360-specific gate stays unverified.
 - When installing Ultralytics with `--no-deps` on a system-site-packages CUDA venv, still install runtime dependencies from `requirements.txt` such as `polars`. Ultralytics 8.4.x imports `polars` while saving checkpoints, so a run can train and validate for an epoch and then fail before writing weights.
+- PowerShell does not support Bash-style `python - <<'PY'` heredocs. Use a PowerShell here-string piped into Python, e.g. `@' ... '@ | python -`, for inline Python checks.
+- Higher ball detector recall is not automatically better for autopan RMSE. Feeding extra false positives into continuous Kalman tracking can cause drift; test improved ball models as gated re-anchor triggers separately from continuous ball-following presets.

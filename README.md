@@ -149,6 +149,17 @@ under explicit candidate names, for example
 preset choose the best evaluated local detector candidate rather than blindly
 preferring a stale final filename.
 
+To test detector-guided re-anchoring without letting noisy ball detections drive
+the Kalman tracker continuously, run:
+
+```bash
+python evaluate.py --approach reanchor_ball_v5 --ball-metrics
+```
+
+This preset uses the best evaluated local ball_v5 candidate, runs re-anchor mode,
+and uses accepted ball detections only to trigger and target confirmed far-ball
+re-anchors.
+
 Run the implementation verifier:
 
 ```bash
