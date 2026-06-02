@@ -696,6 +696,32 @@ def evaluation_summary_smoke_check() -> Check:
             )
             _, gt_wrap_rmse, gt_wrap_mae = evaluate_csv(str(gt_wrap_csv), str(gt_wrap), seg_dur=100.0)
 
+            from evaluate import compare_approach_summaries
+
+            base_summary = {
+                "approach": "base",
+                "clips": {
+                    "001": {
+                        "segments": [{"t0": 0, "rmse": 10.0, "mae": 8.0, "n": 100}],
+                        "overall_rmse": 10.0,
+                        "overall_mae": 8.0,
+                    }
+                },
+            }
+            better_summary = {
+                "approach": "better",
+                "clips": {
+                    "001": {
+                        "segments": [{"t0": 0, "rmse": 5.0, "mae": 4.0, "n": 100}],
+                        "overall_rmse": 5.0,
+                        "overall_mae": 4.0,
+                    }
+                },
+            }
+            (tmpdir / "base_summary.json").write_text(json.dumps(base_summary), encoding="utf-8")
+            (tmpdir / "better_summary.json").write_text(json.dumps(better_summary), encoding="utf-8")
+            comparison = compare_approach_summaries(tmpdir, ["base", "better"], baseline="base")
+
         failures = []
         expected_rmse = math.sqrt((60 * 10.0**2 + 100 * 20.0**2) / 160.0)
         expected_mae = (60 * 10.0 + 100 * 20.0) / 160.0
@@ -709,6 +735,12 @@ def evaluation_summary_smoke_check() -> Check:
             failures.append(f"angle wrap rmse/mae={(wrap_rmse, wrap_mae)} expected 2")
         if gt_wrap_rmse > 1.1 or gt_wrap_mae > 1.1:
             failures.append(f"GT unwrap rmse/mae={(gt_wrap_rmse, gt_wrap_mae)} expected <=1.1")
+        approaches = comparison["approaches"]
+        if approaches[0]["approach"] != "better":
+            failures.append(f"comparison did not sort best RMSE first: {approaches}")
+        better = next(row for row in approaches if row["approach"] == "better")
+        if abs(better["delta_clip_mean_rmse_vs_baseline"] + 5.0) > 1e-6:
+            failures.append(f"comparison delta wrong: {better}")
         return Check(
             "automated",
             "synthetic evaluation summary smoke test",

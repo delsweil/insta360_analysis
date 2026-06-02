@@ -7,6 +7,7 @@ Usage:
     python3 evaluate.py --approach track_v2
     python3 evaluate.py --approach reanchor_triggered
     python3 evaluate.py --approach reanchor_ball_v5
+    python3 evaluate.py --compare track,reanchor_triggered,reanchor_ball_v5
     python3 evaluate.py --approach hold_only
     python3 evaluate.py --approach reanchor_fixed --reanchor-interval 25
 
@@ -298,6 +299,113 @@ def evaluate_ball_metrics(
     return metrics
 
 
+def summarize_approach(summary: dict) -> dict:
+    """Summarize an approach JSON with clip-mean and frame-weighted metrics."""
+    clips = summary.get('clips', {}) if isinstance(summary, dict) else {}
+    clip_rows = []
+    total_frames = 0
+    sum_sq = 0.0
+    sum_mae = 0.0
+    for clip_id, clip in clips.items():
+        try:
+            rmse = float(clip.get('overall_rmse'))
+            mae = float(clip.get('overall_mae'))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(rmse):
+            continue
+        frames = 0
+        for seg in clip.get('segments', []):
+            try:
+                n = int(seg.get('n', 0))
+                seg_rmse = float(seg.get('rmse', rmse))
+                seg_mae = float(seg.get('mae', mae))
+            except (TypeError, ValueError):
+                continue
+            if n <= 0 or not math.isfinite(seg_rmse):
+                continue
+            frames += n
+            total_frames += n
+            sum_sq += (seg_rmse ** 2) * n
+            if math.isfinite(seg_mae):
+                sum_mae += seg_mae * n
+        clip_rows.append({
+            'clip': str(clip_id),
+            'overall_rmse': rmse,
+            'overall_mae': mae if math.isfinite(mae) else None,
+            'frames': frames,
+        })
+    clip_mean_rmse = float(np.mean([r['overall_rmse'] for r in clip_rows])) if clip_rows else float('nan')
+    valid_mae = [r['overall_mae'] for r in clip_rows if r['overall_mae'] is not None]
+    clip_mean_mae = float(np.mean(valid_mae)) if valid_mae else float('nan')
+    frame_weighted_rmse = float(math.sqrt(sum_sq / total_frames)) if total_frames else float('nan')
+    frame_weighted_mae = float(sum_mae / total_frames) if total_frames else float('nan')
+    return {
+        'approach': summary.get('approach'),
+        'n_clips': len(clip_rows),
+        'n_frames': total_frames,
+        'clip_mean_rmse': clip_mean_rmse,
+        'clip_mean_mae': clip_mean_mae,
+        'frame_weighted_rmse': frame_weighted_rmse,
+        'frame_weighted_mae': frame_weighted_mae,
+        'clips': clip_rows,
+    }
+
+
+def compare_approach_summaries(results_dir: Path, approaches: list[str], baseline: str | None = None) -> dict:
+    """Load approach summaries and compute deltas against a baseline."""
+    rows = []
+    missing = []
+    if len(approaches) == 1 and approaches[0] == 'all':
+        approaches = sorted(p.name[:-len('_summary.json')] for p in results_dir.glob('*_summary.json'))
+    for approach in approaches:
+        path = results_dir / f"{approach}_summary.json"
+        if not path.exists():
+            missing.append(str(path))
+            continue
+        summary = json.loads(path.read_text(encoding='utf-8'))
+        row = summarize_approach(summary)
+        row['summary_path'] = str(path)
+        rows.append(row)
+    if baseline is None and rows:
+        baseline = rows[0]['approach']
+    base_row = next((r for r in rows if r.get('approach') == baseline), None)
+    if base_row:
+        base_rmse = float(base_row['clip_mean_rmse'])
+        for row in rows:
+            rmse = float(row['clip_mean_rmse'])
+            if math.isfinite(base_rmse) and math.isfinite(rmse):
+                row['delta_clip_mean_rmse_vs_baseline'] = rmse - base_rmse
+                row['relative_clip_mean_rmse_vs_baseline'] = (rmse / base_rmse) if base_rmse else float('nan')
+    rows.sort(key=lambda r: float(r['clip_mean_rmse']) if math.isfinite(float(r['clip_mean_rmse'])) else float('inf'))
+    return {
+        'baseline': baseline,
+        'missing': missing,
+        'approaches': rows,
+    }
+
+
+def print_approach_comparison(comparison: dict) -> None:
+    rows = comparison.get('approaches', [])
+    if not rows:
+        print("No summary files found for comparison")
+        for missing in comparison.get('missing', []):
+            print(f"  missing: {missing}")
+        return
+    print("\nApproach comparison")
+    print(f"  {'approach':<24} {'clips':>5} {'clip RMSE':>10} {'weighted RMSE':>13} {'delta':>9}")
+    print(f"  {'-'*62}")
+    for row in rows:
+        delta = row.get('delta_clip_mean_rmse_vs_baseline')
+        delta_s = "" if delta is None else f"{delta:+.1f}"
+        print(
+            f"  {row['approach']:<24} {row['n_clips']:>5} "
+            f"{row['clip_mean_rmse']:>9.1f}° {row['frame_weighted_rmse']:>12.1f}° {delta_s:>9}"
+        )
+    for missing in comparison.get('missing', []):
+        print(f"  missing: {missing}")
+
+
 def build_cmd(approach: str, clip: dict, csv_path: str,
               mp4_path: str, extra_args: list, args) -> list:
     """Build autopan_infer.py command for a given approach."""
@@ -410,8 +518,12 @@ def remap_clip_roots(clips: dict, clip_root: str | None) -> dict:
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('--approach', required=True,
+    p.add_argument('--approach', default=None,
                    help='track | track_v2 | reanchor_triggered | reanchor_ball_v5 | reanchor_fixed_25 | hold_only')
+    p.add_argument('--compare', default=None,
+                   help='Comma-separated approaches, or "all", to compare existing *_summary.json files')
+    p.add_argument('--baseline', default=None,
+                   help='Baseline approach for --compare deltas; default is first compared approach')
     p.add_argument('--clips', default='001,002,003,004,005',
                    help='Comma-separated clip IDs to evaluate')
     p.add_argument('--skip-inference', action='store_true',
@@ -440,6 +552,20 @@ def main():
     p.add_argument('--results-dir', default='results')
     args = p.parse_args()
 
+    results_dir = Path(args.results_dir)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.compare:
+        approaches = [a.strip() for a in args.compare.split(',') if a.strip()]
+        comparison = compare_approach_summaries(results_dir, approaches, args.baseline)
+        print_approach_comparison(comparison)
+        out_path = results_dir / 'approach_comparison.json'
+        out_path.write_text(json.dumps(comparison, indent=2), encoding='utf-8')
+        print(f"\nComparison saved: {out_path}")
+        return
+    if not args.approach:
+        p.error('--approach is required unless --compare is used')
+
     CLIPS = remap_clip_roots(load_clips(args.clips_file), args.clip_root)
     if args.clips_file:
         print(f"Loaded {len(CLIPS)} clips from {args.clips_file}")
@@ -455,9 +581,6 @@ def main():
         else:
             print(f"reanchor_ball_v5 preset: using override {args.ball}")
         print("reanchor_ball_v5 preset: reanchor mode, scan_every=15 unless overridden, no continuous Kalman target")
-
-    results_dir = Path(args.results_dir)
-    results_dir.mkdir(parents=True, exist_ok=True)
 
     clip_ids = args.clips.split(',')
     summary  = {'approach': args.approach, 'clips': {}}

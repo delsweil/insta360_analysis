@@ -1,0 +1,96 @@
+{
+  "baseline": "track",
+  "missing": [
+    "results\\reanchor_ball_v5_summary.json"
+  ],
+  "approaches": [
+    {
+      "approach": "reanchor_triggered",
+      "n_clips": 5,
+      "n_frames": 25430,
+      "clip_mean_rmse": 33.03923770360087,
+      "clip_mean_mae": 26.789933946444727,
+      "frame_weighted_rmse": 33.87675607752492,
+      "frame_weighted_mae": 25.960569160936593,
+      "clips": [
+        {
+          "clip": "001",
+          "overall_rmse": 38.536136108943786,
+          "overall_mae": 29.71197735321877,
+          "frames": 6288
+        },
+        {
+          "clip": "002",
+          "overall_rmse": 46.982045079906754,
+          "overall_mae": 39.4577491704564,
+          "frames": 2532
+        },
+        {
+          "clip": "003",
+          "overall_rmse": 30.145815001616608,
+          "overall_mae": 22.607758462785746,
+          "frames": 7637
+        },
+        {
+          "clip": "004",
+          "overall_rmse": 16.474665524087147,
+          "overall_mae": 15.093668666575518,
+          "frames": 2609
+        },
+        {
+          "clip": "005",
+          "overall_rmse": 33.05752680345003,
+          "overall_mae": 27.07851607918721,
+          "frames": 6364
+        }
+      ],
+      "summary_path": "results\\reanchor_triggered_summary.json",
+      "delta_clip_mean_rmse_vs_baseline": -14.9580675305439,
+      "relative_clip_mean_rmse_vs_baseline": 0.6883560971272427
+    },
+    {
+      "approach": "track",
+      "n_clips": 5,
+      "n_frames": 25430,
+      "clip_mean_rmse": 47.99730523414477,
+      "clip_mean_mae": 40.927100505665614,
+      "frame_weighted_rmse": 51.66121694044153,
+      "frame_weighted_mae": 40.676423033488746,
+      "clips": [
+        {
+          "clip": "001",
+          "overall_rmse": 48.0602841263202,
+          "overall_mae": 36.96767102121189,
+          "frames": 6288
+        },
+        {
+          "clip": "002",
+          "overall_rmse": 58.13916792502166,
+          "overall_mae": 50.19080979430298,
+          "frames": 2532
+        },
+        {
+          "clip": "003",
+          "overall_rmse": 44.03410607203891,
+          "overall_mae": 34.827817953680004,
+          "frames": 7637
+        },
+        {
+          "clip": "004",
+          "overall_rmse": 16.530387977905825,
+          "overall_mae": 15.120538034871107,
+          "frames": 2609
+        },
+        {
+          "clip": "005",
+          "overall_rmse": 73.22258006943726,
+          "overall_mae": 67.52866572426205,
+          "frames": 6364
+        }
+      ],
+      "summary_path": "results\\track_summary.json",
+      "delta_clip_mean_rmse_vs_baseline": 0.0,
+      "relative_clip_mean_rmse_vs_baseline": 1.0
+    }
+  ]
+}

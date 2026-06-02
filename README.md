@@ -160,6 +160,15 @@ This preset uses the best evaluated local ball_v5 candidate, runs re-anchor mode
 and uses accepted ball detections only to trigger and target confirmed far-ball
 re-anchors.
 
+Compare existing approach summaries with:
+
+```bash
+python evaluate.py --compare track,reanchor_triggered,reanchor_ball_v5
+```
+
+The comparison writes `results/approach_comparison.json` and reports both
+clip-mean RMSE, matching the historical table, and frame-weighted RMSE.
+
 Run the implementation verifier:
 
 ```bash
