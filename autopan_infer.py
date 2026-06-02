@@ -1119,6 +1119,7 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
         eq_measurements = []
         accepted_view_ball = None
         reanchor_ball_measure = None
+        tracking_ball_px = None
         if eq_tracker is not None:
             eq_tracker.predict()
 
@@ -1151,6 +1152,7 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
                 if pitch_gate is None or pitch_gate.check(lon, lat, t):
                     accepted_view_ball = (lon, lat, current_ball[2])
                     reanchor_ball_measure = accepted_view_ball
+                    tracking_ball_px = current_ball
                     if eq_tracker is not None:
                         eq_measurements.append(
                             BallMeasurement(lon, lat, current_ball[2], source="view", timestamp_s=t))
@@ -1179,14 +1181,16 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
             if accepted_scan_dets and reanchor_ball_measure is None:
                 best = accepted_scan_dets[0]
                 reanchor_ball_measure = (best.lon, best.lat, best.conf)
-            if accepted_scan_dets and current_ball is None:
+            if accepted_scan_dets and tracking_ball_px is None:
                 best = accepted_scan_dets[0]
                 px, py = lon_lat_to_perspective_pixel(
                     best.lon, best.lat, cam.yaw, cam.pitch, _dfov, OUT_W, OUT_H)
-                current_ball = (px, py, best.conf)
-                last_ball = current_ball
-                last_ball_draw = current_ball
-                ball_count += 1
+                tracking_ball_px = (px, py, best.conf)
+                if current_ball is None:
+                    current_ball = tracking_ball_px
+                    last_ball = current_ball
+                    last_ball_draw = current_ball
+                    ball_count += 1
 
         if eq_tracker is not None and eq_measurements:
             eq_tracker.update(eq_measurements)
@@ -1295,7 +1299,7 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
                 frame_mode = 'equirect_ball' if eq_tracker.is_fresh() else 'equirect_kalman'
             else:
                 tx, ty, frame_mode = choose_target(
-                    last_players, current_ball, tracker, cam.yaw, e2p_fov)
+                    last_players, tracking_ball_px, tracker, cam.yaw, e2p_fov)
                 if game_state is not None and frame_mode in {
                     'players', 'few_players', 'single_player', 'hold', 'centre'
                 }:
@@ -1338,13 +1342,14 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
 
         writer.stdin.write(persp.tobytes())
         if csv_writer is not None:
-            ball_conf = f"{current_ball[2]:.3f}" if current_ball else ""
-            ball_x = f"{current_ball[0]:.2f}" if current_ball else ""
-            ball_y = f"{current_ball[1]:.2f}" if current_ball else ""
+            log_ball = tracking_ball_px
+            ball_conf = f"{log_ball[2]:.3f}" if log_ball else ""
+            ball_x = f"{log_ball[0]:.2f}" if log_ball else ""
+            ball_y = f"{log_ball[1]:.2f}" if log_ball else ""
             ball_lon = ball_lat = ""
-            if current_ball:
+            if log_ball:
                 blon, blat = perspective_pixel_to_lon_lat(
-                    current_ball[0], current_ball[1], cam.yaw, cam.pitch, _dfov, OUT_W, OUT_H)
+                    log_ball[0], log_ball[1], cam.yaw, cam.pitch, _dfov, OUT_W, OUT_H)
                 ball_lon, ball_lat = f"{blon:.4f}", f"{blat:.4f}"
             tracker_lon = tracker_lat = ""
             if state_target_lon_lat is not None:

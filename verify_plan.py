@@ -961,6 +961,7 @@ def static_checks() -> list[Check]:
                 "--field-opt",
                 "--no-game-state",
                 "preferred_ball_model",
+                "tracking_ball_px",
             ],
             "phase0_phase5",
             "main autopan pipeline integrates cross-platform encoder, device selection, v5 modules, equirect tracker, pitch gate, and game-state fallback",
