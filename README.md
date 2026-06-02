@@ -109,6 +109,26 @@ separately. Treat the Insta360 subset as the critical detector signal for the
 autopan pipeline. `verify_plan.py` reads `results/ball_v5_domain_eval.json`
 and requires at least `0.75` recall on `insta360_style` by default.
 
+When aggregate metrics look acceptable but the Insta360 subset is weak, train the
+next detector candidate with a balanced train split:
+
+```bash
+python train_ball_v5.py \
+  --data data/ball_v5/data.yaml \
+  --model yolo11m.pt \
+  --imgsz 1280 \
+  --epochs 180 \
+  --batch 16 \
+  --balance-train-domains \
+  --name ball_v5_yolo11m_1280_domain_balanced
+```
+
+`--balance-train-domains` builds a hardlinked/copied train split under
+`runs/ball_v5/domain_balanced_train/` that oversamples selected source domains
+to the same image count, while validation and test still point at the original
+dataset. Repeat `--balance-domain` to change the balanced domains, or set
+`--balance-target-count` to cap/raise the per-domain sample count.
+
 Check the remote GPU training job and fetch artifacts:
 
 ```bash

@@ -3,6 +3,7 @@
 
 Examples:
     python train_ball_v5.py --data data/ball_v5/data.yaml --model yolo11s.pt
+    python train_ball_v5.py --data data/ball_v5/data.yaml --model yolo11m.pt --balance-train-domains
     python train_ball_v5.py --eval-only --data data/ball_v5/data.yaml --weights models/ball_v5.pt
     python train_ball_v5.py --make-split --source-dir exports/roboflow_pool --split-dir data/ball_v5
 """
@@ -256,6 +257,155 @@ def link_or_copy_file(src: Path, dst: Path) -> None:
         dst.hardlink_to(src)
     except OSError:
         shutil.copy2(src, dst)
+
+
+def safe_path_token(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in value)
+
+
+def paired_label_path(labels_dir: Path, image_path: Path) -> Path:
+    return labels_dir / f"{image_path.stem}.txt"
+
+
+def source_image_token(source_root: Path, image_path: Path) -> str:
+    try:
+        rel = image_path.relative_to(source_root)
+    except ValueError:
+        rel = image_path.name
+    rel_text = str(rel).replace("\\", "/")
+    digest = hashlib.sha1(rel_text.encode("utf-8")).hexdigest()[:10]
+    return f"{safe_path_token(image_path.stem)}__{digest}"
+
+
+def write_domain_balanced_train_yaml(
+    data_yaml: str | Path,
+    domains: list[str] | None,
+    output_root: str | Path,
+    *,
+    target_count: int | None = None,
+    seed: int = 42,
+) -> tuple[Path, dict]:
+    """Create a YOLO data.yaml whose train split balances source domains.
+
+    Validation and test splits remain pointed at the original dataset so the
+    oversampling only affects optimisation, not metric gates.
+    """
+    data_yaml = Path(data_yaml)
+    train_images_dir, train_labels_dir = resolve_split_dirs(data_yaml, "train")
+    image_paths = sorted(p for p in train_images_dir.glob("*") if p.suffix.lower() in IMAGE_EXTS)
+    if not image_paths:
+        raise ValueError(f"No training images found in {train_images_dir}")
+
+    requested_domains = domains or ["insta360_style", "veo_style"]
+    by_domain = {domain: [] for domain in requested_domains}
+    unknown_count = 0
+    for image_path in image_paths:
+        domain = classify_source_domain_from_name(image_path)
+        if domain in by_domain:
+            by_domain[domain].append(image_path)
+        elif domain == "unknown":
+            unknown_count += 1
+
+    empty_domains = [domain for domain, paths in by_domain.items() if not paths]
+    if empty_domains:
+        raise ValueError(f"No training images found for requested domains: {empty_domains}")
+
+    source_counts = {domain: len(paths) for domain, paths in by_domain.items()}
+    effective_target = target_count or max(source_counts.values())
+    if effective_target <= 0:
+        raise ValueError("--balance-target-count must be positive")
+
+    signature_payload = {
+        "data_yaml": str(data_yaml.resolve()),
+        "train_images_dir": str(train_images_dir.resolve()),
+        "domains": requested_domains,
+        "source_counts": source_counts,
+        "source_images": {
+            domain: [p.name for p in by_domain[domain]]
+            for domain in requested_domains
+        },
+        "target_count": effective_target,
+        "seed": seed,
+    }
+    signature = hashlib.sha1(json.dumps(signature_payload, sort_keys=True).encode("utf-8")).hexdigest()[:10]
+    domains_token = "-".join(safe_path_token(domain) for domain in requested_domains)
+    out_dir = Path(output_root) / f"train_balanced_{domains_token}_{effective_target}_{signature}"
+    balanced_images = out_dir / "train" / "images"
+    balanced_labels = out_dir / "train" / "labels"
+    balanced_images.mkdir(parents=True, exist_ok=True)
+    balanced_labels.mkdir(parents=True, exist_ok=True)
+
+    rng = random.Random(seed)
+    written_images = 0
+    written_labels = 0
+    missing_labels = 0
+    repeats_by_domain: dict[str, int] = {}
+    subsampled_by_domain: dict[str, int] = {}
+    for domain in requested_domains:
+        paths = list(by_domain[domain])
+        rng.shuffle(paths)
+        repeats_by_domain[domain] = max(0, effective_target - len(paths))
+        subsampled_by_domain[domain] = max(0, len(paths) - effective_target)
+        for index in range(effective_target):
+            source_image = paths[index % len(paths)]
+            token = source_image_token(train_images_dir, source_image)
+            repeat = index // len(paths)
+            dst_image = balanced_images / f"{domain}__{token}__r{repeat:03d}{source_image.suffix.lower()}"
+            dst_label = balanced_labels / f"{dst_image.stem}.txt"
+            link_or_copy_file(source_image, dst_image)
+            written_images += 1
+            source_label = paired_label_path(train_labels_dir, source_image)
+            if source_label.exists():
+                link_or_copy_file(source_label, dst_label)
+                written_labels += 1
+            else:
+                missing_labels += 1
+
+    original_values = parse_simple_yaml(data_yaml)
+    yaml_lines = [
+        f"path: {out_dir.resolve().as_posix()}",
+        "train: train/images",
+    ]
+    for split_key in ("val", "test"):
+        if split_key not in original_values:
+            continue
+        split_images_dir, _ = resolve_split_dirs(data_yaml, split_key)
+        yaml_lines.append(f"{split_key}: {split_images_dir.resolve().as_posix()}")
+    yaml_lines.extend([
+        "nc: 1",
+        "names:",
+        "  0: ball",
+        "",
+    ])
+    yaml_path = out_dir / "data.yaml"
+    yaml_path.write_text("\n".join(yaml_lines), encoding="utf-8")
+
+    manifest = {
+        "source_data": str(data_yaml),
+        "source_train_images": str(train_images_dir),
+        "source_train_labels": str(train_labels_dir),
+        "output_dir": str(out_dir),
+        "data_yaml": str(yaml_path),
+        "domains": requested_domains,
+        "source_counts": source_counts,
+        "unknown_source_images_not_sampled": unknown_count,
+        "target_count_per_domain": effective_target,
+        "total_train_images": written_images,
+        "total_train_labels": written_labels,
+        "missing_labels": missing_labels,
+        "repeats_by_domain": repeats_by_domain,
+        "subsampled_by_domain": subsampled_by_domain,
+        "seed": seed,
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    print(f"Domain-balanced train data.yaml written to {yaml_path}")
+    print(json.dumps({
+        "source_counts": source_counts,
+        "target_count_per_domain": effective_target,
+        "total_train_images": written_images,
+        "missing_labels": missing_labels,
+    }, indent=2))
+    return yaml_path, manifest
 
 
 def write_domain_subset_yaml(
@@ -522,8 +672,17 @@ def train(args) -> None:
 
     model = YOLO(args.model)
     project = resolve_project(args.project)
+    train_data = args.data
+    if args.balance_train_domains:
+        train_data, _ = write_domain_balanced_train_yaml(
+            args.data,
+            args.balance_domain,
+            args.balance_output_dir,
+            target_count=args.balance_target_count,
+            seed=args.seed,
+        )
     train_kwargs = {
-        "data": args.data,
+        "data": str(train_data),
         "epochs": args.epochs,
         "imgsz": args.imgsz,
         "batch": args.batch,
@@ -687,6 +846,14 @@ def main() -> None:
                         help="Where to create hardlinked/copied YOLO subset datasets for --eval-domains")
     parser.add_argument("--domain-metrics-json", default=None,
                         help="Optional JSON output for --eval-domains metrics")
+    parser.add_argument("--balance-train-domains", action="store_true",
+                        help="Before training, create a domain-balanced train split while preserving original val/test splits")
+    parser.add_argument("--balance-domain", action="append", choices=["insta360_style", "veo_style", "unknown"],
+                        help="Source-domain train subset to balance; repeat to choose multiple domains")
+    parser.add_argument("--balance-output-dir", default="runs/ball_v5/domain_balanced_train",
+                        help="Where to create the hardlinked/copied balanced training dataset")
+    parser.add_argument("--balance-target-count", type=int, default=None,
+                        help="Images per selected domain after balancing; defaults to the largest selected domain count")
     parser.add_argument("--sweep-conf", default="0.05,0.10,0.15,0.20,0.25,0.30,0.35,0.40")
     parser.add_argument("--sweep-iou", default="0.45,0.50,0.55,0.60,0.65")
 

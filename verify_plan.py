@@ -395,7 +395,7 @@ def component_smoke_check() -> Check:
         from game_state import GameStatePredictor
         from pitch_model import PitchAwareBallGate, PitchHomographyModel
         from team_classifier import TeamClassifier
-        from train_ball_v5 import write_domain_subset_yaml
+        from train_ball_v5 import write_domain_balanced_train_yaml, write_domain_subset_yaml
 
         failures: list[str] = []
 
@@ -448,14 +448,16 @@ def component_smoke_check() -> Check:
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             data_root = tmpdir / "data"
-            for name in ("frame_001.jpg", "Veo-match-001.jpg"):
-                (data_root / "valid" / "images").mkdir(parents=True, exist_ok=True)
-                (data_root / "valid" / "labels").mkdir(parents=True, exist_ok=True)
-                (data_root / "valid" / "images" / name).write_bytes(b"fake")
-                (data_root / "valid" / "labels" / f"{Path(name).stem}.txt").write_text(
-                    "0 0.5 0.5 0.1 0.1\n",
-                    encoding="utf-8",
-                )
+            for split in ("train", "valid", "test"):
+                (data_root / split / "images").mkdir(parents=True, exist_ok=True)
+                (data_root / split / "labels").mkdir(parents=True, exist_ok=True)
+            for name in ("frame_001.jpg", "frame_002.jpg", "Veo-match-001.jpg"):
+                for split in ("train", "valid", "test"):
+                    (data_root / split / "images" / name).write_bytes(b"fake")
+                    (data_root / split / "labels" / f"{Path(name).stem}.txt").write_text(
+                        "0 0.5 0.5 0.1 0.1\n",
+                        encoding="utf-8",
+                    )
             data_yaml = data_root / "data.yaml"
             data_yaml.write_text(
                 "\n".join([
@@ -471,8 +473,23 @@ def component_smoke_check() -> Check:
                 encoding="utf-8",
             )
             subset_yaml, manifest = write_domain_subset_yaml(data_yaml, "val", "insta360_style", tmpdir / "subsets")
-            if manifest["images"] != 1 or manifest["labels"] != 1 or not subset_yaml.exists():
+            if manifest["images"] != 2 or manifest["labels"] != 2 or not subset_yaml.exists():
                 failures.append(f"domain subset generation failed: {manifest}")
+            balanced_yaml, balanced_manifest = write_domain_balanced_train_yaml(
+                data_yaml,
+                ["insta360_style", "veo_style"],
+                tmpdir / "balanced",
+                seed=7,
+            )
+            if (
+                balanced_manifest["source_counts"] != {"insta360_style": 2, "veo_style": 1}
+                or balanced_manifest["target_count_per_domain"] != 2
+                or balanced_manifest["total_train_images"] != 4
+                or not balanced_yaml.exists()
+                or "val: " not in balanced_yaml.read_text(encoding="utf-8")
+                or "test: " not in balanced_yaml.read_text(encoding="utf-8")
+            ):
+                failures.append(f"domain-balanced train generation failed: {balanced_manifest}")
             domain_eval = tmpdir / "domain_eval.json"
             domain_eval.write_text(
                 json.dumps({"domains": [{"domain": "insta360_style", "recall": 0.76, "map50": 0.7, "map50_95": 0.3}]}),
@@ -988,9 +1005,9 @@ def static_checks() -> list[Check]:
         ),
         check_markers(
             "train_ball_v5.py",
-            ["--make-split", "--zip", "yolo11s.pt", "--imgsz", "--sweep", "--tracking", "copy_paste", "mosaic", "scale", "--eval-domains", "insta360_style"],
+            ["--make-split", "--zip", "yolo11s.pt", "--imgsz", "--sweep", "--tracking", "copy_paste", "mosaic", "scale", "--eval-domains", "--balance-train-domains", "insta360_style"],
             "phase1_detector",
-            "ball_v5 training script supports splits/ZIP datasets, YOLO11s/1280, augmentations, sweeps, tracking, and source-domain eval",
+            "ball_v5 training script supports splits/ZIP datasets, YOLO11s/1280, augmentations, sweeps, tracking, source-domain eval, and domain-balanced training",
         ),
         check_markers(
             "equirect_ball_scanner.py",
