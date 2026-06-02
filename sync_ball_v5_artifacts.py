@@ -150,6 +150,7 @@ def write_candidate_manifest(live: dict | None = None) -> None:
             "results/ball_v5_yolo11s_1280_candidate_eval.json",
             "results/ball_v5_yolo11s_1280_candidate_status.json",
             "results/ball_v5_yolo11s_1280_candidate_results.csv",
+            domain_eval_json="results/ball_v5_yolo11s_1280_candidate_domain_eval.json",
         ),
         local_candidate_entry("live_best_cache", "models/ball_v5_live_best.pt", "results/ball_v5_live_eval.json", None, "results/ball_v5_live_results.csv"),
         local_candidate_entry(

@@ -1,0 +1,78 @@
+{
+  "generated_at_utc": "2026-06-02T12:27:58.705145Z",
+  "domains": [
+    {
+      "map50": 0.566451579757175,
+      "map50_95": 0.2404981974900148,
+      "precision": 0.8030873922547253,
+      "recall": 0.5641025641025641,
+      "fitness": 0.2404981974900148,
+      "speed": {
+        "preprocess": 1.2718314280001712,
+        "inference": 206.75947428597803,
+        "loss": 0.00014285739910389696,
+        "postprocess": 0.3560842863017959
+      },
+      "source_split": "test",
+      "eval_split": "val",
+      "domain": "insta360_style",
+      "subset": {
+        "source_data": "data\\ball_v5\\data.yaml",
+        "source_images": "C:\\Workspace\\2026\\David-Ball-Tracking\\insta360_analysis\\data\\ball_v5\\test\\images",
+        "source_labels": "C:\\Workspace\\2026\\David-Ball-Tracking\\insta360_analysis\\data\\ball_v5\\test\\labels",
+        "split": "test",
+        "domain": "insta360_style",
+        "images": 70,
+        "labels": 70,
+        "missing_labels": 0,
+        "data_yaml": "runs\\ball_v5\\domain_subsets\\test_insta360_style\\data.yaml"
+      },
+      "subset_data": "runs\\ball_v5\\domain_subsets\\test_insta360_style\\data.yaml"
+    },
+    {
+      "map50": 0.8574790567267181,
+      "map50_95": 0.4676573984785225,
+      "precision": 0.8959943837841626,
+      "recall": 0.8161764705882353,
+      "fitness": 0.4676573984785225,
+      "speed": {
+        "preprocess": 1.190232353110332,
+        "inference": 190.70695183900705,
+        "loss": 0.00012977975797291626,
+        "postprocess": 0.2950900732899112
+      },
+      "source_split": "test",
+      "eval_split": "val",
+      "domain": "veo_style",
+      "subset": {
+        "source_data": "data\\ball_v5\\data.yaml",
+        "source_images": "C:\\Workspace\\2026\\David-Ball-Tracking\\insta360_analysis\\data\\ball_v5\\test\\images",
+        "source_labels": "C:\\Workspace\\2026\\David-Ball-Tracking\\insta360_analysis\\data\\ball_v5\\test\\labels",
+        "split": "test",
+        "domain": "veo_style",
+        "images": 272,
+        "labels": 272,
+        "missing_labels": 0,
+        "data_yaml": "runs\\ball_v5\\domain_subsets\\test_veo_style\\data.yaml"
+      },
+      "subset_data": "runs\\ball_v5\\domain_subsets\\test_veo_style\\data.yaml"
+    }
+  ],
+  "split": "test",
+  "weights": "models/ball_v5_yolo11s_1280_candidate.pt",
+  "data": "data/ball_v5/data.yaml",
+  "weights_fingerprint": {
+    "path": "models\\ball_v5_yolo11s_1280_candidate.pt",
+    "exists": true,
+    "size_bytes": 19254106,
+    "mtime_epoch": 1780329626.2235818,
+    "sha256": "52ae7faa1a713bbcb08454f8cd6358748c6b8690a5edadfe30468cd6658581cc"
+  },
+  "data_fingerprint": {
+    "path": "data\\ball_v5\\data.yaml",
+    "exists": true,
+    "size_bytes": 161,
+    "mtime_epoch": 1780326492.347221,
+    "sha256": "ca57ff30976ba7775bc1f0caeee9c0d3cf57b18766c7f6e462e09e8638907ed8"
+  }
+}
