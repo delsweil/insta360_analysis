@@ -155,6 +155,17 @@ Run the implementation verifier:
 python verify_plan.py --allow-blocked --run-python-compile --run-cli-smoke --run-metric-smoke --run-component-smoke --run-eval-smoke
 ```
 
+To verify the completed m-continuation artifacts before promoting or renaming
+them, point the detector gates at the explicit continuation files:
+
+```bash
+python verify_plan.py \
+  --ball-v5 models/ball_v5_yolo11m_1280_continue_best.pt \
+  --ball-v5-eval results/ball_v5_yolo11m_1280_continue_eval.json \
+  --ball-v5-status results/ball_v5_yolo11m_1280_continue_status.json \
+  --ball-domain-eval results/ball_v5_yolo11m_1280_continue_domain_eval.json
+```
+
 The detector metric gate requires `mAP50 >= 0.90` and `mAP50-95 >= 0.60`.
 End-to-end pan/ball recall gates also require accessible `.insv` footage and
 independently annotated ball ground-truth files. Detector-derived predictor

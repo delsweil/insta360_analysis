@@ -144,6 +144,7 @@ def external_asset_checks(args) -> list[Check]:
     checks.append(dataset_zip_gate(Path(args.dataset_zip), min_images=3000))
     ball_v5_candidates = [
         ROOT / args.ball_v5,
+        ROOT / "models" / "ball_v5_yolo11m_1280_continue_best.pt",
         ROOT / "models" / "ball_v5_yolo11s_1280_candidate.pt",
         ROOT / "models" / "ball_v5_stable.pt",
         ROOT / "models" / "ball_v5_live_best.pt",
@@ -301,11 +302,11 @@ def metric_gate_checks(args) -> list[Check]:
     checks.append(ball_metric_gate(track_v2_summary, "median_ball_track_s", 5.0, "Track continuity median > 5s"))
     checks.append(scanner_gate(results_dir / "equirect_ball_scanner_summary.json", 0.80))
     checks.append(detector_gate(
-        results_dir / "ball_v5_eval.json",
+        ROOT / args.ball_v5_eval,
         map50=0.90,
         map5095=0.60,
         weights_path=ROOT / args.ball_v5,
-        finalize_status_path=results_dir / "ball_v5_finalize_status.json",
+        finalize_status_path=ROOT / args.ball_v5_status,
     ))
     checks.append(detector_domain_gate(
         ROOT / args.ball_domain_eval,
@@ -512,8 +513,18 @@ def component_smoke_check() -> Check:
         if empty_assignments != []:
             failures.append(f"team classifier empty update failed: {empty_assignments}")
 
-        candidate_model = ROOT / "models" / "ball_v5_yolo11s_1280_candidate.pt"
-        if candidate_model.exists():
+        candidate_models = [
+            ("models/ball_v5.pt", "results/ball_v5_eval.json"),
+            ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json"),
+            ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json"),
+            ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json"),
+        ]
+        available_candidates = [
+            (model_path, metrics_path)
+            for model_path, metrics_path in candidate_models
+            if (ROOT / model_path).exists()
+        ]
+        if available_candidates:
             import autopan_infer
             import argparse
             import evaluate
@@ -526,39 +537,42 @@ def component_smoke_check() -> Check:
                 except Exception:
                     return -1.0
 
-            candidate_score = score(ROOT / "results" / "ball_v5_yolo11s_1280_candidate_eval.json")
-            final_score = score(ROOT / "results" / "ball_v5_eval.json")
-            if candidate_score > final_score:
-                expected = "models/ball_v5_yolo11s_1280_candidate.pt"
-                if autopan_infer.preferred_ball_model() != expected:
-                    failures.append(f"autopan auto model={autopan_infer.preferred_ball_model()} expected {expected}")
-                if worker_server.preferred_ball_model() != expected:
-                    failures.append(f"worker auto model={worker_server.preferred_ball_model()} expected {expected}")
-                if evaluate.preferred_track_v2_ball_model() != expected:
-                    failures.append(f"evaluate track_v2 model={evaluate.preferred_track_v2_ball_model()} expected {expected}")
-                cmd = evaluate.build_cmd(
-                    "track_v2",
-                    {"insv": "clip.insv", "calib": "calib.json"},
-                    "out.csv",
-                    "out.mp4",
-                    [],
-                    argparse.Namespace(
-                        ball=evaluate.BALL,
-                        players=evaluate.PLAYERS,
-                        scan_every=0,
-                        ball_sahi=False,
-                        field_opt=False,
-                        segments=1,
-                        seg_duration=1.0,
-                        seed=1,
-                        device="cpu",
-                        player_detect_every=3,
-                        ball_detect_every=2,
-                        ball_sahi_every=6,
-                    ),
-                )
-                if expected not in cmd:
-                    failures.append(f"evaluate track_v2 command does not use {expected}: {cmd}")
+            expected = max(
+                enumerate(available_candidates),
+                key=lambda item: (
+                    score(ROOT / item[1][1]),
+                    -item[0],
+                ),
+            )[1][0]
+            if autopan_infer.preferred_ball_model() != expected:
+                failures.append(f"autopan auto model={autopan_infer.preferred_ball_model()} expected {expected}")
+            if worker_server.preferred_ball_model() != expected:
+                failures.append(f"worker auto model={worker_server.preferred_ball_model()} expected {expected}")
+            if evaluate.preferred_track_v2_ball_model() != expected:
+                failures.append(f"evaluate track_v2 model={evaluate.preferred_track_v2_ball_model()} expected {expected}")
+            cmd = evaluate.build_cmd(
+                "track_v2",
+                {"insv": "clip.insv", "calib": "calib.json"},
+                "out.csv",
+                "out.mp4",
+                [],
+                argparse.Namespace(
+                    ball=evaluate.BALL,
+                    players=evaluate.PLAYERS,
+                    scan_every=0,
+                    ball_sahi=False,
+                    field_opt=False,
+                    segments=1,
+                    seg_duration=1.0,
+                    seed=1,
+                    device="cpu",
+                    player_detect_every=3,
+                    ball_detect_every=2,
+                    ball_sahi_every=6,
+                ),
+            )
+            if expected not in cmd:
+                failures.append(f"evaluate track_v2 command does not use {expected}: {cmd}")
 
         return Check(
             "automated",
@@ -970,6 +984,8 @@ def main() -> int:
     parser.add_argument("--results-dir", default="results")
     parser.add_argument("--dataset-zip", default="../ball_detector_merged.v3i.yolov8.zip")
     parser.add_argument("--ball-v5", default="models/ball_v5.pt")
+    parser.add_argument("--ball-v5-eval", default="results/ball_v5_eval.json")
+    parser.add_argument("--ball-v5-status", default="results/ball_v5_finalize_status.json")
     parser.add_argument("--ball-data", default="data/ball_v5/data.yaml")
     parser.add_argument("--ball-domain-eval", default="results/ball_v5_domain_eval.json",
                         help="Domain-split detector eval JSON generated by train_ball_v5.py --eval-domains")

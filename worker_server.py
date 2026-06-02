@@ -98,6 +98,7 @@ def job_dir(insv_path: str) -> Path:
 def preferred_ball_model() -> str:
     candidates = [
         ("models/ball_v5.pt", "results/ball_v5_eval.json"),
+        ("models/ball_v5_yolo11m_1280_continue_best.pt", "results/ball_v5_yolo11m_1280_continue_eval.json"),
         ("models/ball_v5_yolo11s_1280_candidate.pt", "results/ball_v5_yolo11s_1280_candidate_eval.json"),
         ("models/ball_v5_stable.pt", "results/ball_v5_stable_eval.json"),
         ("models/ball_v4.pt", ""),
