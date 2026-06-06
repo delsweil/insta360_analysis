@@ -32,30 +32,11 @@ import numpy as np
 # ── Clip list ────────────────────────────────────────────────────────────────
 
 CLIPS = [
-    "/Users/davidelsweiler/footage/20241028/VID_20241028_140657_10_007.insv",
-    "/Users/davidelsweiler/footage/20241028/VID_20241028_143616_10_008.insv",
-    # "/Users/davidelsweiler/footage/20241028/VID_20241028_150534_10_009.insv",  # wrong lens
-    "/Volumes/Sickis disk/DCIM/Camera01/VID_20241028_144020_10_001.insv",
-    "/Volumes/Sickis disk/DCIM/Camera01/VID_20241028_150939_10_002.insv",
-    "/Volumes/Sickis disk/DCIM/Camera01/VID_20241028_153158_10_003.insv",
-    "/Volumes/Sickis disk/DCIM/Camera01/VID_20241028_160117_10_004.insv",
-    "/Volumes/Sickis disk/DCIM/Camera01/VID_20241028_174053_10_005.insv",
-    "/Volumes/Sickis disk/DCIM/Camera01/VID_20241028_180829_10_006.insv",
-    "/Volumes/Sickis disk/DCIM/Camera01/VID_20241028_184414_10_007.insv",
-    "/Volumes/Untitled/DCIM/Camera01/VID_20241028_124047_10_010.insv",
-    "/Volumes/Untitled/DCIM/Camera01/VID_20241028_131005_10_011.insv",
-    "/Volumes/Untitled/DCIM/Camera01/VID_20241028_132551_10_012.insv",
-    "/Volumes/Untitled/DCIM/Camera01/VID_20241028_133508_10_013.insv",
-    "/Volumes/Untitled/DCIM/Camera01/VID_20241028_140425_10_014.insv",
-    # "/Volumes/Untitled/DCIM/Camera01/VID_20250628_151959_10_001.insv",  # training session not game
-    # "/Volumes/Untitled/DCIM/Camera01/VID_20250628_154917_10_002.insv",  # training session not game
-    "/Volumes/Untitled/DCIM/Camera01/VID_20250629_112549_10_003.insv",
-    "/Volumes/Untitled/DCIM/Camera01/VID_20250629_120951_10_004.insv",
-    "/Volumes/Untitled/DCIM/Camera01/VID_20250629_121009_10_005.insv",
-    "/Volumes/Untitled/DCIM/Camera01/VID_20250629_123709_10_006.insv",
-    "/Volumes/Untitled/DCIM/Camera01/VID_20250629_130627_10_007.insv",
-    "/Volumes/Untitled/DCIM/Camera01/VID_20250629_131742_10_008.insv",
-    "/Volumes/Untitled/DCIM/Camera01/VID_20250629_134123_10_009.insv",
+    # Oct 2024 mens game — new pitch, long balls, not yet annotated
+    "/Volumes/Sickis disk/DCIM/VID_20241028_143608_10_001.insv",
+    "/Volumes/Sickis disk/DCIM/VID_20241028_150214_10_002.insv",
+    "/Volumes/Sickis disk/DCIM/VID_20241028_154008_10_003.insv",
+    "/Volumes/Sickis disk/DCIM/VID_20241028_160641_10_004.insv",
 ]
 
 # ── FFmpeg helpers ────────────────────────────────────────────────────────────
