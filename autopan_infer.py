@@ -34,6 +34,14 @@ import cv2
 import numpy as np
 from py360convert import e2p
 from sklearn.cluster import DBSCAN
+try:
+    from sahi import AutoDetectionModel
+    from sahi.predict import get_sliced_prediction
+    SAHI_AVAILABLE = True
+except ImportError:
+    SAHI_AVAILABLE = False
+    AutoDetectionModel = None
+    get_sliced_prediction = None
 
 
 # ── Output ────────────────────────────────────────────────────────
@@ -614,7 +622,9 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
                     csv_writer=None,
                     seg_mode: str = 'track',
                     output_fov: float = None,
-                    detect_fov: float = None) -> int:
+                    detect_fov: float = None,
+                    sahi_model=None,
+                    sahi_slice: int = 640) -> int:
 
     cam       = CameraState(yaw=yaw_init, pitch=e2p_tilt)
     tracker   = KalmanBallTracker()
@@ -675,15 +685,38 @@ def process_segment(insv_path: str, start_s: float, duration_s: float,
             last_players = detect_players(det_frame, player_model, device, mask)
             if ball_model is not None:
                 last_trusted = tracker.predicted_pos() if tracker.is_valid() else None
-                # Ball mask: keep bottom boundary (exclude near-side spare balls)
-                # but open top third so aerial balls are detected
                 if mask_eroded is not None:
                     ball_mask = mask_eroded.copy()
-                    ball_mask[:OUT_H//3, :] = 1  # allow top third for aerial balls
+                    ball_mask[:OUT_H//3, :] = 1
                 else:
                     ball_mask = None
-                last_ball = detect_ball(det_frame, ball_model, device,
-                                        ball_mask, last_trusted, None)
+                if sahi_model is not None:
+                    _sahi_tmp = '/tmp/_sahi_frame.jpg'
+                    cv2.imwrite(_sahi_tmp, det_frame)
+                    sahi_result = get_sliced_prediction(
+                        _sahi_tmp, sahi_model,
+                        slice_height=sahi_slice, slice_width=sahi_slice,
+                        overlap_height_ratio=0.2, overlap_width_ratio=0.2,
+                        verbose=0)
+                    best = None
+                    for pred in sahi_result.object_prediction_list:
+                        bbox = pred.bbox
+                        cx = (bbox.minx + bbox.maxx) / 2
+                        cy = (bbox.miny + bbox.maxy) / 2
+                        conf = pred.score.value
+                        if ball_mask is not None:
+                            xi = int(np.clip(cx, 0, ball_mask.shape[1]-1))
+                            yi = int(np.clip(cy, 0, ball_mask.shape[0]-1))
+                            if not ball_mask[yi, xi]: continue
+                        if last_trusted is not None:
+                            dist = math.hypot(cx-last_trusted[0], cy-last_trusted[1])
+                            if dist > BALL_MAX_JUMP_PX: conf *= 0.3
+                        if best is None or conf > best[2]:
+                            best = (cx, cy, conf)
+                    last_ball = best if (best and best[2] >= CONF_BALL) else None
+                else:
+                    last_ball = detect_ball(det_frame, ball_model, device,
+                                            ball_mask, last_trusted, None)
             else:
                 last_ball = None
             if last_ball: ball_count += 1
@@ -827,6 +860,10 @@ def main():
                         'Smaller = more zoom, better ball detection. Try 70-80.')
     p.add_argument('--detect-fov',   type=float, default=None,
                    help='FOV for detection (default: same as output-fov). Smaller = larger ball.')
+    p.add_argument('--sahi',         action='store_true',
+                   help='Use SAHI sliced inference for ball detection (better recall, slower)')
+    p.add_argument('--sahi-slice',   type=int, default=640,
+                   help='SAHI slice size in pixels (default: 640)')
     p.add_argument('--mode',         default='track', choices=['track','reanchor'],
                    help='track=continuous (default), reanchor=periodic scan+hold')
     p.add_argument('--log-csv',      type=str,   default=None, metavar='PATH',
@@ -849,6 +886,17 @@ def main():
     from ultralytics import YOLO
     player_model = YOLO(args.players)
     ball_model   = YOLO(args.ball) if args.ball else None
+    sahi_model = None
+    if args.sahi and args.ball and SAHI_AVAILABLE:
+        sahi_model = AutoDetectionModel.from_pretrained(
+            model_type='ultralytics',
+            model_path=args.ball,
+            confidence_threshold=CONF_BALL,
+            device=device
+        )
+        print(f'SAHI model loaded (slice={args.sahi_slice})')
+    elif args.sahi and not SAHI_AVAILABLE:
+        print('WARNING: SAHI not available, falling back to standard detection')
     print("Detectors loaded")
 
     # Calibration
@@ -902,6 +950,8 @@ def main():
             seg_mode=args.mode,
             output_fov=args.output_fov,
             detect_fov=args.detect_fov,
+            sahi_model=sahi_model,
+            sahi_slice=args.sahi_slice,
         )
 
     writer.stdin.close()

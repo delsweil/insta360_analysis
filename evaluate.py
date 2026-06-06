@@ -131,6 +131,8 @@ def build_cmd(approach: str, clip: dict, csv_path: str,
     ]
     if 'reanchor' in approach:
         base += ['--mode', 'reanchor']
+    if 'sahi' in approach:
+        base += ['--sahi']
 
     if approach == 'track':
         base += ['--mode', 'track']
