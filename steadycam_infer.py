@@ -54,8 +54,8 @@ SOFTZONE_FRAC  = 0.40    # full spring force beyond this frac
 TARGET_ALPHA   = 0.12    # target x smoothing
 
 # ── Zoom control ──────────────────────────────────────────────────────────────
-CROP_NEAR      = 1280
-CROP_FAR       = 1050    # was 820; less aggressive zoom -> only ~1.22x upscale (was 1.56x)
+CROP_NEAR      = 1700    # wider default view -> ball stays in frame more often
+CROP_FAR       = 1400    # gentle zoom on far side; downscales to output (sharper)
 ZOOM_ALPHA     = 0.025
 ZOOM_MAX_VEL   = 3.0
 YCEN_ALPHA     = 0.03
@@ -445,6 +445,7 @@ def process_video(video_path: str, calib_path: str,
 
 
 def main():
+    global CROP_NEAR, CROP_FAR
     parser = argparse.ArgumentParser()
     parser.add_argument('--video',   required=True)
     parser.add_argument('--calib',   required=True)
@@ -454,9 +455,20 @@ def main():
     parser.add_argument('--device',  default='mps')
     parser.add_argument('--sahi',    action='store_true')
     parser.add_argument('--sahi-slice', type=int, default=640)
+    parser.add_argument('--crop-near', type=int, default=None,
+                        help=f'Crop width near side (default {CROP_NEAR})')
+    parser.add_argument('--crop-far', type=int, default=None,
+                        help=f'Crop width far side (default {CROP_FAR})')
     parser.add_argument('--debug',   action='store_true')
     parser.add_argument('--log-csv', default=None, metavar='PATH')
     args = parser.parse_args()
+
+    # Apply crop-width overrides to module globals
+    if args.crop_near is not None:
+        CROP_NEAR = args.crop_near
+    if args.crop_far is not None:
+        CROP_FAR = args.crop_far
+    print(f"Crop widths: near={CROP_NEAR} far={CROP_FAR}")
 
     player_model = YOLO(args.players)
     ball_model   = YOLO(args.ball) if args.ball else None
