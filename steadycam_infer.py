@@ -17,6 +17,7 @@ import json
 import math
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Tuple, List
@@ -54,14 +55,15 @@ SOFTZONE_FRAC  = 0.40    # full spring force beyond this frac
 TARGET_ALPHA   = 0.12    # target x smoothing
 
 # ── Zoom control ──────────────────────────────────────────────────────────────
-CROP_NEAR      = 1700    # wider default view -> ball stays in frame more often
-CROP_FAR       = 1400    # gentle zoom on far side; downscales to output (sharper)
+CROP_NEAR      = 1850    # wider default view -> ball stays in frame more often
+CROP_FAR       = 1550    # gentle zoom on far side; downscales to output (sharper)
 ZOOM_ALPHA     = 0.025
 ZOOM_MAX_VEL   = 3.0
 YCEN_ALPHA     = 0.03
 
 # ── Ball tracking ─────────────────────────────────────────────────────────────
 BALL_MAX_JUMP  = 200     # max pixel jump between detections
+BALL_HOLD_FRAMES = 45    # keep aiming at last ball pos this many frames after losing it (~1.5s @30fps)
 
 
 @dataclass
@@ -81,6 +83,55 @@ class TargetState:
 def load_calib(calib_path: str):
     with open(calib_path) as f:
         return json.load(f)
+
+
+def probe_frame_count(video_path: str) -> Optional[int]:
+    """Estimate total frames via ffprobe (nb_frames, else duration*fps). None if unknown."""
+    try:
+        out = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+             '-show_entries', 'stream=nb_frames,duration,r_frame_rate',
+             '-of', 'default=noprint_wrappers=1', video_path],
+            capture_output=True, text=True).stdout
+        vals = {}
+        for line in out.strip().splitlines():
+            if '=' in line:
+                k, v = line.split('=', 1)
+                vals[k] = v
+        nb = vals.get('nb_frames', 'N/A')
+        if nb.isdigit() and int(nb) > 0:
+            return int(nb)
+        # Fall back to duration * fps
+        dur = float(vals.get('duration', 0) or 0)
+        rfr = vals.get('r_frame_rate', '0/1')
+        num, den = rfr.split('/')
+        fps = float(num) / float(den) if float(den) else 0
+        if dur > 0 and fps > 0:
+            return int(dur * fps)
+    except Exception:
+        pass
+    return None
+
+
+def probe_fps(video_path: str, default: float = 30.0) -> float:
+    """Read the source video's frame rate via ffprobe. Falls back to default."""
+    try:
+        out = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+             '-show_entries', 'stream=r_frame_rate',
+             '-of', 'default=noprint_wrappers=1:nokey=1', video_path],
+            capture_output=True, text=True).stdout.strip()
+        # r_frame_rate is like "30000/1001" or "25/1"
+        if '/' in out:
+            num, den = out.split('/')
+            fps = float(num) / float(den)
+        else:
+            fps = float(out)
+        if fps <= 0 or fps > 1000:
+            return default
+        return fps
+    except Exception:
+        return default
 
 
 def build_mask(calib: dict, h: int, w: int) -> np.ndarray:
@@ -229,7 +280,7 @@ def process_video(video_path: str, calib_path: str,
                   output_path: str,
                   player_model, ball_model,
                   sahi_model=None, sahi_slice=640,
-                  debug=False, log_csv=None):
+                  debug=False, log_csv=None, mux_audio=False):
 
     calib = load_calib(calib_path)
     fw = calib['frame_width']
@@ -253,6 +304,10 @@ def process_video(video_path: str, calib_path: str,
     y1_pitch = max(0,  far_y  - PITCH_MARGIN_TOP)
     y2_pitch = min(fh, near_y + PITCH_MARGIN_BOTTOM)
 
+    # Read source fps so output matches realtime (keeps audio in sync on mux)
+    out_fps = probe_fps(video_path, default=OUT_FPS)
+    print(f"Source fps: {out_fps:.3f} (output will match)")
+
     # FFmpeg reader
     cmd_in = [
         'ffmpeg', '-i', video_path,
@@ -265,7 +320,7 @@ def process_video(video_path: str, calib_path: str,
     cmd_out = [
         'ffmpeg', '-y',
         '-f', 'rawvideo', '-pix_fmt', 'bgr24',
-        '-s', f'{OUT_W}x{OUT_H}', '-r', str(OUT_FPS),
+        '-s', f'{OUT_W}x{OUT_H}', '-r', f'{out_fps:.5f}',
         '-i', 'pipe:0',
         '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
         '-loglevel', 'error', output_path
@@ -280,6 +335,7 @@ def process_video(video_path: str, calib_path: str,
     tgt   = TargetState(tx=fw/2, crop_w=CROP_NEAR)
     last_ball = None
     last_players = []
+    frames_since_ball = BALL_HOLD_FRAMES + 1   # start "expired"
     frame_idx = 0
     ball_count = 0
     mode_counts = {}
@@ -287,7 +343,14 @@ def process_video(video_path: str, calib_path: str,
 
     bytes_per_frame = fw * fh * 3
 
+    total_frames = probe_frame_count(video_path)
+    t_start = time.time()
+    t_last  = t_start
+    last_idx = 0
+
+    tf_str = f"{total_frames}" if total_frames else "unknown"
     print(f"Processing {Path(video_path).name} → {Path(output_path).name}")
+    print(f"Total frames: {tf_str}")
 
     while True:
         raw = reader.stdout.read(bytes_per_frame)
@@ -305,26 +368,37 @@ def process_video(video_path: str, calib_path: str,
             last_players = [(px, py + y1_pitch, ph) for px, py, ph in last_players]
             if ball_model is not None:
                 if sahi_model is not None:
-                    last_ball = detect_ball_sahi(
+                    detected_ball = detect_ball_sahi(
                         pitch_crop_full, ball_model, sahi_slice,
                         cam.x, cam.crop_w, fw, y1_pitch,
                         mask=ball_mask,
                         last_pos=(last_ball[0], last_ball[1]) if last_ball else None)
                 else:
-                    last_ball = detect_ball(
+                    detected_ball = detect_ball(
                         frame, ball_model, ball_mask,
                         last_pos=(last_ball[0], last_ball[1]) if last_ball else None)
-                if last_ball:
+                if detected_ball:
+                    last_ball = detected_ball
+                    frames_since_ball = 0
                     ball_count += 1
+                else:
+                    frames_since_ball += DETECT_EVERY
+
+        # Ball memory is "fresh" if seen within the hold window
+        ball_fresh = last_ball is not None and frames_since_ball <= BALL_HOLD_FRAMES
 
         # Choose target x
         mode = 'hold'
-        if last_ball and last_ball[2] >= 0.55:
+        if ball_fresh and frames_since_ball == 0 and last_ball[2] >= 0.55:
             raw_tx = last_ball[0]
             mode = 'ball_highconf'
-        elif last_ball:
+        elif ball_fresh and frames_since_ball == 0:
             raw_tx = last_ball[0]
             mode = 'ball'
+        elif ball_fresh:
+            # holding last known ball position through a detection gap
+            raw_tx = last_ball[0]
+            mode = 'ball_hold'
         elif last_players:
             raw_tx = player_cluster_x(last_players) or cam.x
             mode = 'players'
@@ -338,7 +412,7 @@ def process_video(video_path: str, calib_path: str,
         tgt.tx = tgt.tx * (1 - TARGET_ALPHA) + raw_tx * TARGET_ALPHA
 
         # Adaptive crop width, rate-limited for subtle zoom
-        target_cw = target_crop_w(last_players, last_ball, fh, mask_far_y)
+        target_cw = target_crop_w(last_players, last_ball if ball_fresh else None, fh, mask_far_y)
         cw_step = (target_cw - tgt.crop_w) * ZOOM_ALPHA
         cw_step = float(np.clip(cw_step, -ZOOM_MAX_VEL, ZOOM_MAX_VEL))
         tgt.crop_w += cw_step
@@ -365,7 +439,7 @@ def process_video(video_path: str, calib_path: str,
         # True 16:9 crop: height follows width
         crop_h = cam.crop_w * OUT_H / OUT_W
         action_y = (y1_pitch + y2_pitch) / 2
-        ys_act = ([last_ball[1]] if last_ball else []) + \
+        ys_act = ([last_ball[1]] if ball_fresh else []) + \
                  [p[1] for p in last_players[:6]]
         if ys_act:
             action_y = float(np.mean(ys_act))
@@ -420,9 +494,19 @@ def process_video(video_path: str, calib_path: str,
                            f"{len(last_players)},{mode}\n")
 
         frame_idx += 1
-        if frame_idx % 500 == 0:
-            fps_est = frame_idx / max(1, frame_idx)
-            print(f"  {frame_idx} frames  ball={ball_count}  modes={mode_counts}")
+        if frame_idx % 200 == 0:
+            now = time.time()
+            inst_fps = (frame_idx - last_idx) / max(1e-6, now - t_last)
+            avg_fps  = frame_idx / max(1e-6, now - t_start)
+            t_last, last_idx = now, frame_idx
+            if total_frames:
+                pct = 100.0 * frame_idx / total_frames
+                eta_s = (total_frames - frame_idx) / max(0.1, avg_fps)
+                eta = f"{int(eta_s//60)}m{int(eta_s%60):02d}s"
+                print(f"  {frame_idx}/{total_frames} ({pct:4.1f}%)  "
+                      f"{inst_fps:4.1f} fps  ETA {eta}  ball={ball_count}")
+            else:
+                print(f"  {frame_idx} frames  {inst_fps:4.1f} fps  ball={ball_count}")
 
     reader.stdout.close()
     reader.wait()
@@ -433,7 +517,9 @@ def process_video(video_path: str, calib_path: str,
     if debug:
         cv2.destroyAllWindows()
 
-    print(f"\nDone: {frame_idx} frames")
+    elapsed = time.time() - t_start
+    print(f"\nDone: {frame_idx} frames in {int(elapsed//60)}m{int(elapsed%60):02d}s "
+          f"({frame_idx/max(1e-6,elapsed):.1f} fps avg)")
     print(f"Ball detections: {ball_count}/{frame_idx // DETECT_EVERY}")
     print(f"Modes: {mode_counts}")
     if crop_w_samples:
@@ -442,6 +528,30 @@ def process_video(video_path: str, calib_path: str,
         print(f"Crop width: min={cw.min():.0f} mean={cw.mean():.0f} max={cw.max():.0f} (output={OUT_W})")
         print(f"Upscaled frames: {upscaled_pct:.0f}%  worst enlargement={OUT_W/cw.min():.2f}x")
     print(f"Output: {output_path}")
+
+    # Optionally mux original audio back in (keeps sync since fps matches source)
+    if mux_audio:
+        tmp_video = str(Path(output_path).with_suffix('.noaudio.mp4'))
+        try:
+            import os
+            os.replace(output_path, tmp_video)
+            mux_cmd = [
+                'ffmpeg', '-y',
+                '-i', tmp_video,
+                '-i', video_path,
+                '-c:v', 'copy', '-map', '0:v:0', '-map', '1:a:0',
+                '-shortest', '-loglevel', 'error', output_path
+            ]
+            res = subprocess.run(mux_cmd, capture_output=True, text=True)
+            if res.returncode == 0:
+                os.remove(tmp_video)
+                print(f"Audio muxed from source -> {output_path}")
+            else:
+                # mux failed (e.g. source has no audio) — restore video-only output
+                os.replace(tmp_video, output_path)
+                print(f"Audio mux skipped: {res.stderr.strip()[:120]}")
+        except Exception as e:
+            print(f"Audio mux error: {e}")
 
 
 def main():
@@ -461,6 +571,8 @@ def main():
                         help=f'Crop width far side (default {CROP_FAR})')
     parser.add_argument('--debug',   action='store_true')
     parser.add_argument('--log-csv', default=None, metavar='PATH')
+    parser.add_argument('--audio', action='store_true',
+                        help='Mux original audio from source into output')
     args = parser.parse_args()
 
     # Apply crop-width overrides to module globals
@@ -490,7 +602,8 @@ def main():
         sahi_model=sahi_model,
         sahi_slice=args.sahi_slice,
         debug=args.debug,
-        log_csv=args.log_csv)
+        log_csv=args.log_csv,
+        mux_audio=args.audio)
 
 
 if __name__ == '__main__':
