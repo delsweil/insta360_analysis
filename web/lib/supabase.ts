@@ -25,6 +25,7 @@ export type Annotation = {
   end_timestamp_sec?: number
   label: string
   note?: string
+  shapes?: Shape[] | null   // NEW
   is_public: boolean
   created_at: string
   profiles?: {

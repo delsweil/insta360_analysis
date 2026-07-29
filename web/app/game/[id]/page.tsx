@@ -9,6 +9,8 @@ import AnnotationShape from '@/components/AnnotationShape'
 import ShareModal from '@/components/ShareModal'
 import AnnotationFilter, { type FilterState, ALL_FILTERS, passesFilter } from '@/components/AnnotationFilter'
 import ClipRecorder from '@/components/ClipRecorder'
+import AnnotationCanvas, { type Shape, type Tool } from '@/components/AnnotationCanvas'
+import DrawTools from '@/components/DrawTools'
 
 function formatTime(sec: number) {
   const m = Math.floor(sec / 60)
@@ -42,6 +44,18 @@ export default function GamePage({ params }: Props) {
   const [markIn, setMarkIn] = useState<number | null>(null)
   const [isRecording, setIsRecording] = useState(false)
   const [filter, setFilter] = useState<FilterState>(ALL_FILTERS)
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [drawTool, setDrawTool] = useState<Tool>('select')
+  const [draftShapes, setDraftShapes] = useState<Shape[]>([])
+
+  // Shapes belonging to whichever tactical annotation is active right now
+  const activeTacticalShapes: Shape[] = isDrawing
+    ? draftShapes
+    : annotations.find(a =>
+        a.shapes?.length &&
+        currentTime >= a.timestamp_sec &&
+        currentTime <= (a.end_timestamp_sec ?? a.timestamp_sec + 5)
+      )?.shapes ?? []
 
   // Filtered annotations
   const filteredAnnotations = annotations.filter(a => passesFilter(a.label, filter))
@@ -159,6 +173,19 @@ export default function GamePage({ params }: Props) {
     )
   }, [])
 
+  const pauseVideo = useCallback(() => {
+    playerRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*'
+    )
+  }, [])
+
+  const startDrawing = useCallback(() => {
+    pauseVideo()
+    setDraftShapes([])
+    setDrawTool('select')
+    setIsDrawing(true)
+  }, [pauseVideo])
+
   const handleQuickSave = useCallback(async () => {
     if (saving) return
     setSaving(true)
@@ -202,6 +229,7 @@ export default function GamePage({ params }: Props) {
         end_timestamp_sec: currentTime > markIn + 1 ? currentTime : null,
         label: selectedLabel,
         note: note.trim() || null,
+        shapes: draftShapes.length ? draftShapes : null,
         is_public: true,
       })
       .select('*, profiles(display_name)')
@@ -215,9 +243,11 @@ export default function GamePage({ params }: Props) {
       setTimeout(() => setSaved(false), 1500)
     }
     setMarkIn(null)
+    setDraftShapes([])
+    setIsDrawing(false)
     setNote('')
     setSaving(false)
-  }, [saving, markIn, currentTime, selectedLabel, note, id])
+  }, [saving, markIn, currentTime, selectedLabel, note, draftShapes, id])
 
   const handleDelete = useCallback(async (annId: string) => {
     await supabase.from('annotations').delete().eq('id', annId)
@@ -467,13 +497,22 @@ export default function GamePage({ params }: Props) {
         ) : (
           <>
             {/* Video */}
-            <div style={{ background: '#091d52', aspectRatio: '16/9', flexShrink: 0 }}>
+            <div style={{ background: '#091d52', aspectRatio: '16/9', flexShrink: 0, position: 'relative' }}>
               <iframe
                 ref={playerRef}
                 src={`${game.video_url}?enablejsapi=1`}
                 style={{ width: '100%', height: '100%', border: 'none' }}
                 allowFullScreen
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              />
+              <AnnotationCanvas
+                shapes={activeTacticalShapes}
+                editable={isDrawing}
+                tool={drawTool}
+                onAddShape={s => setDraftShapes(prev => [...prev, s])}
+                onUpdateShape={(shapeId, patch) =>
+                  setDraftShapes(prev => prev.map(s => s.id === shapeId ? { ...s, ...patch } as Shape : s))
+                }
               />
             </div>
 
@@ -664,7 +703,7 @@ export default function GamePage({ params }: Props) {
             {/* Video */}
             <div style={{
               background: '#091d52', borderRadius: 12,
-              overflow: 'hidden', aspectRatio: '16/9',
+              overflow: 'hidden', aspectRatio: '16/9', position: 'relative',
             }}>
               <iframe
                 ref={playerRef}
@@ -672,6 +711,15 @@ export default function GamePage({ params }: Props) {
                 style={{ width: '100%', height: '100%', border: 'none' }}
                 allowFullScreen
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              />
+              <AnnotationCanvas
+                shapes={activeTacticalShapes}
+                editable={isDrawing}
+                tool={drawTool}
+                onAddShape={s => setDraftShapes(prev => [...prev, s])}
+                onUpdateShape={(shapeId, patch) =>
+                  setDraftShapes(prev => prev.map(s => s.id === shapeId ? { ...s, ...patch } as Shape : s))
+                }
               />
             </div>
 
@@ -728,6 +776,34 @@ export default function GamePage({ params }: Props) {
               <div style={{ marginBottom: 10 }}>
                 <LabelPicker />
               </div>
+
+              {/* Draw tactical shapes on the current frame (coach, Tactical label only) */}
+              {isCoach && selectedLabel === 'tactical' && (
+                <div style={{ marginBottom: 8 }}>
+                  {isDrawing ? (
+                    <DrawTools
+                      tool={drawTool}
+                      onChange={setDrawTool}
+                      canUndo={draftShapes.length > 0}
+                      onUndo={() => setDraftShapes(prev => prev.slice(0, -1))}
+                      onClear={() => setDraftShapes([])}
+                      onDone={() => { setIsDrawing(false); setDrawTool('select') }}
+                    />
+                  ) : (
+                    <button
+                      onClick={startDrawing}
+                      style={{
+                        width: '100%', fontSize: 11, fontWeight: 600,
+                        padding: '6px 8px', borderRadius: 6,
+                        border: '1.5px solid #E4E6EE', background: '#fff',
+                        color: '#0f2972', cursor: 'pointer',
+                      }}
+                    >
+                      Draw on frame
+                    </button>
+                  )}
+                </div>
+              )}
 
               {/* Mark in/out (coach) or quick save (player) */}
               {isCoach ? (
