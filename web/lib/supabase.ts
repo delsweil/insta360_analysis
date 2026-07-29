@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import type { Shape } from '@/components/AnnotationCanvas'
 
 export const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
