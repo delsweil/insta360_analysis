@@ -513,6 +513,7 @@ export default function GamePage({ params }: Props) {
                 onUpdateShape={(shapeId, patch) =>
                   setDraftShapes(prev => prev.map(s => s.id === shapeId ? { ...s, ...patch } as Shape : s))
                 }
+                onRemoveShape={shapeId => setDraftShapes(prev => prev.filter(s => s.id !== shapeId))}
               />
             </div>
 
@@ -720,6 +721,7 @@ export default function GamePage({ params }: Props) {
                 onUpdateShape={(shapeId, patch) =>
                   setDraftShapes(prev => prev.map(s => s.id === shapeId ? { ...s, ...patch } as Shape : s))
                 }
+                onRemoveShape={shapeId => setDraftShapes(prev => prev.filter(s => s.id !== shapeId))}
               />
             </div>
 

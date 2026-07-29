@@ -16,10 +16,11 @@ interface DrawToolsProps {
 }
 
 const TOOLS: { key: Tool; label: string; icon: string }[] = [
-  { key: 'select', label: 'Select', icon: '↖' },
-  { key: 'zone',   label: 'Zone',   icon: '▭' },
-  { key: 'arrow',  label: 'Arrow',  icon: '↗' },
-  { key: 'label',  label: 'Label',  icon: 'T' },
+  { key: 'select',    label: 'Select',    icon: '↖' },
+  { key: 'zone',      label: 'Zone',      icon: '▭' },
+  { key: 'arrow',     label: 'Arrow',     icon: '↗' },
+  { key: 'label',     label: 'Label',     icon: 'T' },
+  { key: 'highlight', label: 'Highlight', icon: '◎' },
 ]
 
 export default function DrawTools({ tool, onChange, onUndo, onClear, onDone, canUndo }: DrawToolsProps) {
