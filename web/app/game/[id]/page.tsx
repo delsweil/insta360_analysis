@@ -25,6 +25,8 @@ interface Props {
 export default function GamePage({ params }: Props) {
   const { id } = React.use(params)
   const playerRef = useRef<HTMLIFrameElement>(null)
+  const firedAnnotationIds = useRef<Set<string>>(new Set())
+  const prevTimeRef = useRef(0)
 
   const [game, setGame] = useState<Game | null>(null)
   const [annotations, setAnnotations] = useState<Annotation[]>([])
@@ -165,6 +167,7 @@ export default function GamePage({ params }: Props) {
   }, [])
 
   const seekTo = useCallback((sec: number) => {
+    firedAnnotationIds.current.clear() // allow re-triggering annotations when a viewer jumps around
     playerRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: 'seekTo', args: [sec, true] }), '*'
     )
@@ -178,6 +181,28 @@ export default function GamePage({ params }: Props) {
       JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*'
     )
   }, [])
+
+  // Auto-pause the moment playback naturally crosses into a tactical
+  // annotation that has shapes, so viewers get a beat to look at it.
+  // Guards against: re-triggering on scrub/seek jumps (only fires on
+  // small forward steps, i.e. normal playback), and firing more than
+  // once per annotation until the viewer seeks elsewhere.
+  useEffect(() => {
+    const prev = prevTimeRef.current
+    const delta = currentTime - prev
+    if (!isDrawing && delta > 0 && delta < 2) {
+      const hit = annotations.find(a =>
+        a.label === 'tactical' && a.shapes?.length &&
+        !firedAnnotationIds.current.has(a.id) &&
+        a.timestamp_sec > prev && a.timestamp_sec <= currentTime
+      )
+      if (hit) {
+        firedAnnotationIds.current.add(hit.id)
+        pauseVideo()
+      }
+    }
+    prevTimeRef.current = currentTime
+  }, [currentTime, annotations, isDrawing, pauseVideo])
 
   const startDrawing = useCallback(() => {
     pauseVideo()
