@@ -49,15 +49,18 @@ export default function GamePage({ params }: Props) {
   const [isDrawing, setIsDrawing] = useState(false)
   const [drawTool, setDrawTool] = useState<Tool>('select')
   const [draftShapes, setDraftShapes] = useState<Shape[]>([])
+  const [isPlaying, setIsPlaying] = useState(true)
+  const [pausedAnnotationId, setPausedAnnotationId] = useState<string | null>(null)
+  const [holdSec, setHoldSec] = useState(0) // grace period (seconds of playback) before shapes hide after resume
+  const resumeAnchorRef = useRef<number | null>(null)
 
-  // Shapes belonging to whichever tactical annotation is active right now
+  // Shapes belonging to whichever tactical annotation is currently paused on
+  // (or, while playing, still within its hold grace period). Tied to pause
+  // state rather than a fixed clock window, so shapes vanish as soon as the
+  // action resumes instead of lingering over a situation that's moved on.
   const activeTacticalShapes: Shape[] = isDrawing
     ? draftShapes
-    : annotations.find(a =>
-        a.shapes?.length &&
-        currentTime >= a.timestamp_sec &&
-        currentTime <= (a.end_timestamp_sec ?? a.timestamp_sec + 5)
-      )?.shapes ?? []
+    : annotations.find(a => a.id === pausedAnnotationId)?.shapes ?? []
 
   // Filtered annotations
   const filteredAnnotations = annotations.filter(a => passesFilter(a.label, filter))
@@ -150,6 +153,7 @@ export default function GamePage({ params }: Props) {
         if (data?.event === 'infoDelivery' && data?.info) {
           if (data.info.currentTime !== undefined) setCurrentTime(data.info.currentTime)
           if (data.info.duration !== undefined && data.info.duration > 0) setDuration(data.info.duration)
+          if (data.info.playerState !== undefined) setIsPlaying(data.info.playerState === 1)
         }
       } catch {}
     }
@@ -199,10 +203,43 @@ export default function GamePage({ params }: Props) {
       if (hit) {
         firedAnnotationIds.current.add(hit.id)
         pauseVideo()
+        setPausedAnnotationId(hit.id)
+        resumeAnchorRef.current = null
       }
     }
     prevTimeRef.current = currentTime
   }, [currentTime, annotations, isDrawing, pauseVideo])
+
+  // Keep pausedAnnotationId in sync with actual play state:
+  // - if paused (auto or manual) and currentTime lands inside a tactical
+  //   annotation's window, show it
+  // - once playing resumes, keep showing for `holdSec` seconds of
+  //   playback (grace period), then hide
+  useEffect(() => {
+    if (isDrawing) return
+
+    if (!isPlaying) {
+      const hit = annotations.find(a =>
+        a.label === 'tactical' && a.shapes?.length &&
+        currentTime >= a.timestamp_sec &&
+        currentTime <= (a.end_timestamp_sec ?? a.timestamp_sec + 8)
+      )
+      if (hit) {
+        setPausedAnnotationId(hit.id)
+        resumeAnchorRef.current = null
+      }
+      return
+    }
+
+    // isPlaying === true
+    if (pausedAnnotationId) {
+      if (resumeAnchorRef.current === null) resumeAnchorRef.current = currentTime
+      if (currentTime - resumeAnchorRef.current > holdSec) {
+        setPausedAnnotationId(null)
+        resumeAnchorRef.current = null
+      }
+    }
+  }, [isPlaying, currentTime, annotations, isDrawing, pausedAnnotationId, holdSec])
 
   const startDrawing = useCallback(() => {
     pauseVideo()
@@ -255,6 +292,7 @@ export default function GamePage({ params }: Props) {
         label: selectedLabel,
         note: note.trim() || null,
         shapes: draftShapes.length ? draftShapes : null,
+        shapes_hold_sec: draftShapes.length ? holdSec : null,
         is_public: true,
       })
       .select('*, profiles(display_name)')
@@ -270,9 +308,10 @@ export default function GamePage({ params }: Props) {
     setMarkIn(null)
     setDraftShapes([])
     setIsDrawing(false)
+    setHoldSec(0)
     setNote('')
     setSaving(false)
-  }, [saving, markIn, currentTime, selectedLabel, note, draftShapes, id])
+  }, [saving, markIn, currentTime, selectedLabel, note, draftShapes, holdSec, id])
 
   const handleDelete = useCallback(async (annId: string) => {
     await supabase.from('annotations').delete().eq('id', annId)
@@ -808,14 +847,32 @@ export default function GamePage({ params }: Props) {
               {isCoach && selectedLabel === 'tactical' && (
                 <div style={{ marginBottom: 8 }}>
                   {isDrawing ? (
-                    <DrawTools
-                      tool={drawTool}
-                      onChange={setDrawTool}
-                      canUndo={draftShapes.length > 0}
-                      onUndo={() => setDraftShapes(prev => prev.slice(0, -1))}
-                      onClear={() => setDraftShapes([])}
-                      onDone={() => { setIsDrawing(false); setDrawTool('select') }}
-                    />
+                    <>
+                      <DrawTools
+                        tool={drawTool}
+                        onChange={setDrawTool}
+                        canUndo={draftShapes.length > 0}
+                        onUndo={() => setDraftShapes(prev => prev.slice(0, -1))}
+                        onClear={() => setDraftShapes([])}
+                        onDone={() => { setIsDrawing(false); setDrawTool('select') }}
+                      />
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        fontSize: 11, color: '#8A8F9E', marginTop: 4,
+                      }}>
+                        <span>Keep visible after resume:</span>
+                        <input
+                          type="number" min={0} max={30} value={holdSec}
+                          onChange={e => setHoldSec(Math.max(0, Number(e.target.value) || 0))}
+                          style={{
+                            width: 46, fontSize: 11, padding: '3px 6px',
+                            border: '1px solid #E4E6EE', borderRadius: 5,
+                            outline: 'none', fontFamily: 'DM Sans, sans-serif',
+                          }}
+                        />
+                        <span>sec</span>
+                      </div>
+                    </>
                   ) : (
                     <button
                       onClick={startDrawing}
