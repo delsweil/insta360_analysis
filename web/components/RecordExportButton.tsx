@@ -100,19 +100,25 @@ export default function RecordExportButton({ onStart, isFinished, resetFinished,
     setWarning(null)
     let fullscreened = false
 
+    console.log('[RecordExportButton] start clicked. captureRegionRef element:', captureRegionRef?.current)
+
     try {
       // 1. Fullscreen the capture target first, so there's nothing else on
       // screen for the user to accidentally share — works in every browser.
       if (captureRegionRef?.current) {
         try {
+          console.log('[RecordExportButton] attempting requestFullscreen()...')
           await requestFs(captureRegionRef.current)
           fullscreened = true
+          console.log('[RecordExportButton] fullscreen succeeded')
           prevCursorRef.current = captureRegionRef.current.style.cursor
           captureRegionRef.current.style.cursor = 'none' // hide the pointer while over the recorded area
         } catch (err) {
-          console.warn('Fullscreen request failed, falling back to Element Capture cropping:', err)
+          console.warn('[RecordExportButton] Fullscreen request failed, falling back to Element Capture cropping:', err)
           setWarning('no-fullscreen')
         }
+      } else {
+        console.warn('[RecordExportButton] No captureRegionRef element — skipping fullscreen entirely. This prop may not be wired up.')
       }
 
       // preferCurrentTab is Chrome-only; falls back to the normal picker elsewhere.
