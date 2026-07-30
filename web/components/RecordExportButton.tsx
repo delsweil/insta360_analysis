@@ -8,10 +8,22 @@
 // rendered to the screen, which is unaffected by CORS/canvas-tainting rules
 // that block drawImage()-based approaches.
 //
-// Flow: user clicks "Record & Export" → browser prompts to share this tab →
+// Cropping strategy: rather than relying on Chrome-only APIs (Element Capture,
+// preferCurrentTab), the capture target is put into the standard Fullscreen
+// API before recording starts — supported everywhere, including Safari and
+// Firefox. If the video+annotations element fills the whole screen, there's
+// nothing else on screen to accidentally capture, no cropping needed after
+// the fact. The mouse cursor is hidden via CSS `cursor: none` on that same
+// fullscreened element, which suppresses the OS pointer icon while hovering
+// it — also universal, unlike the Chrome-only `cursor: 'never'` constraint.
+// The old crop-after-capture approach (Element Capture) is kept as a fallback
+// for the rare case fullscreen itself isn't available.
+//
+// Flow: user clicks "Record & Export" → target element goes fullscreen →
+// browser prompts to share a screen/window (now showing only that element) →
 // video seeks to 0 and plays → your existing pause-on-annotation feature
 // fires naturally during playback, exactly as a normal viewer would see it →
-// on reaching the end, recording stops and downloads automatically.
+// on reaching the end, recording stops, fullscreen exits, and the file downloads.
 
 import { useRef, useState, useCallback, useEffect } from 'react'
 
@@ -23,16 +35,15 @@ interface RecordExportButtonProps {
   /** Reset isFinished's underlying source back to false — called right before onStart, so a fresh finish can be detected next time. */
   resetFinished: () => void
   /**
-   * Optional: crop the recording to just this element (e.g. the video + annotation
-   * wrapper div) instead of capturing the whole tab. Uses the Element Capture API
-   * (RestrictionTarget), which only works for self-capture (sharing "this tab") —
-   * Chrome/Edge only as of writing. Falls back to full-tab capture silently if
-   * unsupported, so this is always safe to pass.
+   * The element to fullscreen and record — typically the video + annotation
+   * wrapper div. Required for the fullscreen-crop strategy; if fullscreening
+   * fails or is unsupported, falls back to Chrome-only Element Capture
+   * cropping on the same element, then to full-tab capture as a last resort.
    */
   captureRegionRef?: React.RefObject<HTMLElement | null>
 }
 
-type ShareWarning = 'not-this-tab' | 'crop-unsupported' | null
+type ShareWarning = 'not-this-tab' | 'crop-unsupported' | 'no-fullscreen' | null
 
 function pickMimeType(): string {
   const candidates = [
@@ -51,12 +62,31 @@ function pickMimeType(): string {
   return 'video/webm'
 }
 
+function requestFs(el: HTMLElement): Promise<void> {
+  const anyEl = el as any
+  const fn = el.requestFullscreen || anyEl.webkitRequestFullscreen || anyEl.mozRequestFullScreen
+  if (!fn) return Promise.reject(new Error('Fullscreen API not supported'))
+  return fn.call(el)
+}
+
+function exitFs(): Promise<void> {
+  const anyDoc = document as any
+  const fn = document.exitFullscreen || anyDoc.webkitExitFullscreen || anyDoc.mozCancelFullScreen
+  if (!fn || !(document.fullscreenElement || anyDoc.webkitFullscreenElement)) return Promise.resolve()
+  return fn.call(document).catch(() => {})
+}
+
 export default function RecordExportButton({ onStart, isFinished, resetFinished, captureRegionRef }: RecordExportButtonProps) {
   const [status, setStatus] = useState<'idle' | 'requesting' | 'recording' | 'finishing'>('idle')
   const [warning, setWarning] = useState<ShareWarning>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
+  const prevCursorRef = useRef<string>('')
+
+  const restoreCursor = useCallback(() => {
+    if (captureRegionRef?.current) captureRegionRef.current.style.cursor = prevCursorRef.current
+  }, [captureRegionRef])
 
   const stopAndSave = useCallback(() => {
     if (recorderRef.current && recorderRef.current.state !== 'inactive') {
@@ -67,10 +97,27 @@ export default function RecordExportButton({ onStart, isFinished, resetFinished,
 
   const startRecording = useCallback(async () => {
     setStatus('requesting')
+    setWarning(null)
+    let fullscreened = false
+
     try {
+      // 1. Fullscreen the capture target first, so there's nothing else on
+      // screen for the user to accidentally share — works in every browser.
+      if (captureRegionRef?.current) {
+        try {
+          await requestFs(captureRegionRef.current)
+          fullscreened = true
+          prevCursorRef.current = captureRegionRef.current.style.cursor
+          captureRegionRef.current.style.cursor = 'none' // hide the pointer while over the recorded area
+        } catch (err) {
+          console.warn('Fullscreen request failed, falling back to Element Capture cropping:', err)
+          setWarning('no-fullscreen')
+        }
+      }
+
       // preferCurrentTab is Chrome-only; falls back to the normal picker elsewhere.
-      // cursor: 'never' asks the browser to omit the mouse pointer from captured frames
-      // (support varies by OS/browser — best-effort, not guaranteed everywhere).
+      // cursor: 'never' is a Chrome-only best-effort hint; the CSS cursor:none
+      // above is what actually does the work cross-browser once fullscreened.
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: { displaySurface: 'browser', cursor: 'never' } as MediaTrackConstraints,
         audio: true,
@@ -78,25 +125,21 @@ export default function RecordExportButton({ onStart, isFinished, resetFinished,
         preferCurrentTab: true,
       })
       streamRef.current = stream
-      setWarning(null)
 
       const [track] = stream.getVideoTracks()
       const settings = track.getSettings() as MediaTrackSettings & { displaySurface?: string }
 
-      if (settings.displaySurface && settings.displaySurface !== 'browser') {
-        // User picked "Entire Screen" or "Window" instead of "This Tab" —
-        // cropping and cursor-hiding both degrade badly outside self-capture.
+      if (!fullscreened && settings.displaySurface && settings.displaySurface !== 'browser') {
+        // Only relevant when fullscreen wasn't available — otherwise the whole
+        // screen legitimately IS just the recorded element regardless of surface type.
         setWarning('not-this-tab')
       }
 
-      // Crop to a specific element if requested and the browser supports it.
-      // Try the newer Element Capture (RestrictionTarget) first, then fall back
-      // to the older, more broadly-supported Region Capture (CropTarget) —
-      // independently, so a runtime failure in one still lets the other try,
-      // rather than giving up after the first attempt throws.
-      if (captureRegionRef?.current && settings.displaySurface === 'browser') {
+      // Fallback cropping (Chrome/Edge only) — only attempted if fullscreen
+      // didn't happen, since fullscreen already solves the same problem
+      // more reliably and cross-browser.
+      if (!fullscreened && captureRegionRef?.current && settings.displaySurface === 'browser') {
         let cropped = false
-
         try {
           const RestrictionTargetCtor = (window as any).RestrictionTarget
           if (RestrictionTargetCtor?.fromElement && typeof (track as any).restrictTo === 'function') {
@@ -107,7 +150,6 @@ export default function RecordExportButton({ onStart, isFinished, resetFinished,
         } catch (err) {
           console.warn('RestrictionTarget crop failed, trying CropTarget fallback:', err)
         }
-
         if (!cropped) {
           try {
             const CropTargetCtor = (window as any).CropTarget
@@ -120,15 +162,15 @@ export default function RecordExportButton({ onStart, isFinished, resetFinished,
             console.warn('CropTarget crop also failed:', err)
           }
         }
-
         if (!cropped) setWarning('crop-unsupported')
       }
 
       if (track.readyState !== 'live') {
         console.error('Video track is not live after setup — recording would be audio-only. Aborting.')
         stream.getTracks().forEach(t => t.stop())
+        restoreCursor()
+        await exitFs()
         setStatus('idle')
-        setWarning('crop-unsupported')
         return
       }
 
@@ -147,6 +189,8 @@ export default function RecordExportButton({ onStart, isFinished, resetFinished,
         a.click()
         URL.revokeObjectURL(url)
         streamRef.current?.getTracks().forEach(t => t.stop())
+        restoreCursor()
+        exitFs()
         setStatus('idle')
       }
 
@@ -162,9 +206,27 @@ export default function RecordExportButton({ onStart, isFinished, resetFinished,
       onStart() // begin whatever playback should be captured — full playthrough or a highlight-reel sequence
     } catch (err) {
       console.error('Screen share was cancelled or failed:', err)
+      restoreCursor()
+      if (fullscreened) await exitFs()
       setStatus('idle')
     }
-  }, [onStart, resetFinished, stopAndSave, captureRegionRef])
+  }, [onStart, resetFinished, stopAndSave, captureRegionRef, restoreCursor])
+
+  // If the user exits fullscreen manually (Esc key) mid-recording, stop and save
+  // rather than continuing to record whatever's now visible outside fullscreen.
+  useEffect(() => {
+    const handler = () => {
+      const anyDoc = document as any
+      const stillFullscreen = document.fullscreenElement || anyDoc.webkitFullscreenElement
+      if (!stillFullscreen && status === 'recording') stopAndSave()
+    }
+    document.addEventListener('fullscreenchange', handler)
+    document.addEventListener('webkitfullscreenchange', handler)
+    return () => {
+      document.removeEventListener('fullscreenchange', handler)
+      document.removeEventListener('webkitfullscreenchange', handler)
+    }
+  }, [status, stopAndSave])
 
   // Auto-stop the moment the tracked playback (full video or highlight reel) finishes.
   useEffect(() => {
@@ -201,6 +263,16 @@ export default function RecordExportButton({ onStart, isFinished, resetFinished,
           </button>
         )}
       </div>
+      {warning === 'no-fullscreen' && (
+        <div style={{
+          fontSize: 11, color: '#b45309', background: '#fffbeb',
+          border: '1px solid #fde68a', borderRadius: 6, padding: '6px 10px',
+          maxWidth: 320,
+        }}>
+          Couldn't enter fullscreen for a clean recording — falling back to
+          cropping, which works best in Chrome or Edge.
+        </div>
+      )}
       {warning === 'not-this-tab' && (
         <div style={{
           fontSize: 11, color: '#b45309', background: '#fffbeb',
