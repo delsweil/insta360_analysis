@@ -35,6 +35,7 @@ interface Props {
 export default function SharePage({ params }: Props) {
   const { token } = React.use(params)
   const playerRef = useRef<HTMLIFrameElement>(null)
+  const videoWrapperRef = useRef<HTMLDivElement>(null)
 
   const [title, setTitle] = useState('')
   const [videoUrl, setVideoUrl] = useState('')
@@ -279,6 +280,7 @@ export default function SharePage({ params }: Props) {
                 onStart={handlePlayAll}
                 isFinished={reelFinished}
                 resetFinished={() => setReelFinished(false)}
+                captureRegionRef={videoWrapperRef}
               />
               <button
                 onClick={handlePlayAll}
@@ -301,10 +303,13 @@ export default function SharePage({ params }: Props) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 10 }}>
           {/* Left: video + timeline */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{
-              background: '#091d52', borderRadius: 12,
-              overflow: 'hidden', aspectRatio: '16/9', position: 'relative',
-            }}>
+            <div
+              ref={videoWrapperRef}
+              style={{
+                background: '#091d52', borderRadius: 12,
+                overflow: 'hidden', aspectRatio: '16/9', position: 'relative',
+              }}
+            >
               {videoUrl && (
                 <iframe
                   ref={playerRef}

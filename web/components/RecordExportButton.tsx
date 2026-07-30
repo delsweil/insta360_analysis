@@ -22,6 +22,14 @@ interface RecordExportButtonProps {
   isFinished: boolean
   /** Reset isFinished's underlying source back to false — called right before onStart, so a fresh finish can be detected next time. */
   resetFinished: () => void
+  /**
+   * Optional: crop the recording to just this element (e.g. the video + annotation
+   * wrapper div) instead of capturing the whole tab. Uses the Element Capture API
+   * (RestrictionTarget), which only works for self-capture (sharing "this tab") —
+   * Chrome/Edge only as of writing. Falls back to full-tab capture silently if
+   * unsupported, so this is always safe to pass.
+   */
+  captureRegionRef?: React.RefObject<HTMLElement | null>
 }
 
 function pickMimeType(): string {
@@ -37,7 +45,7 @@ function pickMimeType(): string {
   return 'video/webm'
 }
 
-export default function RecordExportButton({ onStart, isFinished, resetFinished }: RecordExportButtonProps) {
+export default function RecordExportButton({ onStart, isFinished, resetFinished, captureRegionRef }: RecordExportButtonProps) {
   const [status, setStatus] = useState<'idle' | 'requesting' | 'recording' | 'finishing'>('idle')
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -53,14 +61,39 @@ export default function RecordExportButton({ onStart, isFinished, resetFinished 
   const startRecording = useCallback(async () => {
     setStatus('requesting')
     try {
-      // preferCurrentTab is Chrome-only; falls back to the normal picker elsewhere
+      // preferCurrentTab is Chrome-only; falls back to the normal picker elsewhere.
+      // cursor: 'never' asks the browser to omit the mouse pointer from captured frames
+      // (support varies by OS/browser — best-effort, not guaranteed everywhere).
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: 'browser' } as MediaTrackConstraints,
+        video: { displaySurface: 'browser', cursor: 'never' } as MediaTrackConstraints,
         audio: true,
         // @ts-expect-error — Chrome-specific, not yet in lib.dom.d.ts
         preferCurrentTab: true,
       })
       streamRef.current = stream
+
+      // Crop to a specific element if requested and the browser supports it
+      // (Element Capture — Chrome/Edge, self-capture only). Best-effort: if this
+      // fails or isn't supported, we silently keep the full-tab recording.
+      const [track] = stream.getVideoTracks()
+      if (captureRegionRef?.current) {
+        try {
+          const RestrictionTargetCtor = (window as any).RestrictionTarget
+          if (RestrictionTargetCtor?.fromElement && typeof (track as any).restrictTo === 'function') {
+            const target = await RestrictionTargetCtor.fromElement(captureRegionRef.current)
+            await (track as any).restrictTo(target)
+          } else {
+            // Older Chrome versions shipped the same capability under CropTarget/cropTo
+            const CropTargetCtor = (window as any).CropTarget
+            if (CropTargetCtor?.fromElement && typeof (track as any).cropTo === 'function') {
+              const target = await CropTargetCtor.fromElement(captureRegionRef.current)
+              await (track as any).cropTo(target)
+            }
+          }
+        } catch (cropErr) {
+          console.warn('Could not restrict recording to the video region — recording full tab instead:', cropErr)
+        }
+      }
 
       const mimeType = pickMimeType()
       const recorder = new MediaRecorder(stream, { mimeType })
@@ -82,7 +115,7 @@ export default function RecordExportButton({ onStart, isFinished, resetFinished 
 
       // If the user stops sharing via the browser's own "Stop sharing" control,
       // treat that the same as clicking stop ourselves.
-      stream.getVideoTracks()[0].addEventListener('ended', stopAndSave)
+      track.addEventListener('ended', stopAndSave)
 
       recorderRef.current = recorder
       recorder.start()
@@ -94,7 +127,7 @@ export default function RecordExportButton({ onStart, isFinished, resetFinished 
       console.error('Screen share was cancelled or failed:', err)
       setStatus('idle')
     }
-  }, [onStart, resetFinished, stopAndSave])
+  }, [onStart, resetFinished, stopAndSave, captureRegionRef])
 
   // Auto-stop the moment the tracked playback (full video or highlight reel) finishes.
   useEffect(() => {

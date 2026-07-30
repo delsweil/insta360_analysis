@@ -26,6 +26,7 @@ interface Props {
 export default function GamePage({ params }: Props) {
   const { id } = React.use(params)
   const playerRef = useRef<HTMLIFrameElement>(null)
+  const videoWrapperRef = useRef<HTMLDivElement>(null)
   const firedAnnotationIds = useRef<Set<string>>(new Set())
   const prevTimeRef = useRef(0)
 
@@ -748,6 +749,7 @@ export default function GamePage({ params }: Props) {
                 onStart={() => seekTo(0)}
                 isFinished={hasEnded}
                 resetFinished={() => setHasEnded(false)}
+                captureRegionRef={videoWrapperRef}
               />
               <button
                 onClick={() => setShowShare(true)}
@@ -778,10 +780,13 @@ export default function GamePage({ params }: Props) {
           {/* Left */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {/* Video */}
-            <div style={{
-              background: '#091d52', borderRadius: 12,
-              overflow: 'hidden', aspectRatio: '16/9', position: 'relative',
-            }}>
+            <div
+              ref={videoWrapperRef}
+              style={{
+                background: '#091d52', borderRadius: 12,
+                overflow: 'hidden', aspectRatio: '16/9', position: 'relative',
+              }}
+            >
               <iframe
                 ref={playerRef}
                 src={`${game.video_url}?enablejsapi=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
