@@ -36,10 +36,14 @@ type ShareWarning = 'not-this-tab' | 'crop-unsupported' | null
 
 function pickMimeType(): string {
   const candidates = [
-    'video/mp4;codecs=avc1',       // Safari, and newer Chrome builds
     'video/webm;codecs=vp9,opus',
     'video/webm;codecs=vp8,opus',
     'video/webm',
+    // MP4 recording in MediaRecorder is newer and less battle-tested than WebM —
+    // some Chrome builds report support via isTypeSupported() but then silently
+    // fail to encode the video track (audio still works), so it's kept as a
+    // last resort rather than the first choice.
+    'video/mp4;codecs=avc1',
   ]
   for (const c of candidates) {
     if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(c)) return c
@@ -118,6 +122,14 @@ export default function RecordExportButton({ onStart, isFinished, resetFinished,
         }
 
         if (!cropped) setWarning('crop-unsupported')
+      }
+
+      if (track.readyState !== 'live') {
+        console.error('Video track is not live after setup — recording would be audio-only. Aborting.')
+        stream.getTracks().forEach(t => t.stop())
+        setStatus('idle')
+        setWarning('crop-unsupported')
+        return
       }
 
       const mimeType = pickMimeType()
