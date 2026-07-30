@@ -313,7 +313,7 @@ export default function SharePage({ params }: Props) {
               {videoUrl && (
                 <iframe
                   ref={playerRef}
-                  src={`${videoUrl}?enablejsapi=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
+                  src={`${videoUrl}?enablejsapi=1&controls=0&rel=0&modestbranding=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
                   style={{ width: '100%', height: '100%', border: 'none' }}
                   allowFullScreen
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"

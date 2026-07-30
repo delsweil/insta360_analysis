@@ -570,7 +570,7 @@ export default function GamePage({ params }: Props) {
             <div style={{ background: '#091d52', aspectRatio: '16/9', flexShrink: 0, position: 'relative' }}>
               <iframe
                 ref={playerRef}
-                src={`${game.video_url}?enablejsapi=1`}
+                src={`${game.video_url}?enablejsapi=1&controls=0&rel=0&modestbranding=1`}
                 style={{ width: '100%', height: '100%', border: 'none' }}
                 allowFullScreen
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -789,7 +789,7 @@ export default function GamePage({ params }: Props) {
             >
               <iframe
                 ref={playerRef}
-                src={`${game.video_url}?enablejsapi=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
+                src={`${game.video_url}?enablejsapi=1&controls=0&rel=0&modestbranding=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
                 style={{ width: '100%', height: '100%', border: 'none' }}
                 allowFullScreen
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"

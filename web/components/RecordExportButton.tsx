@@ -32,6 +32,8 @@ interface RecordExportButtonProps {
   captureRegionRef?: React.RefObject<HTMLElement | null>
 }
 
+type ShareWarning = 'not-this-tab' | 'crop-unsupported' | null
+
 function pickMimeType(): string {
   const candidates = [
     'video/mp4;codecs=avc1',       // Safari, and newer Chrome builds
@@ -47,6 +49,7 @@ function pickMimeType(): string {
 
 export default function RecordExportButton({ onStart, isFinished, resetFinished, captureRegionRef }: RecordExportButtonProps) {
   const [status, setStatus] = useState<'idle' | 'requesting' | 'recording' | 'finishing'>('idle')
+  const [warning, setWarning] = useState<ShareWarning>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
@@ -71,28 +74,50 @@ export default function RecordExportButton({ onStart, isFinished, resetFinished,
         preferCurrentTab: true,
       })
       streamRef.current = stream
+      setWarning(null)
 
-      // Crop to a specific element if requested and the browser supports it
-      // (Element Capture — Chrome/Edge, self-capture only). Best-effort: if this
-      // fails or isn't supported, we silently keep the full-tab recording.
       const [track] = stream.getVideoTracks()
-      if (captureRegionRef?.current) {
+      const settings = track.getSettings() as MediaTrackSettings & { displaySurface?: string }
+
+      if (settings.displaySurface && settings.displaySurface !== 'browser') {
+        // User picked "Entire Screen" or "Window" instead of "This Tab" —
+        // cropping and cursor-hiding both degrade badly outside self-capture.
+        setWarning('not-this-tab')
+      }
+
+      // Crop to a specific element if requested and the browser supports it.
+      // Try the newer Element Capture (RestrictionTarget) first, then fall back
+      // to the older, more broadly-supported Region Capture (CropTarget) —
+      // independently, so a runtime failure in one still lets the other try,
+      // rather than giving up after the first attempt throws.
+      if (captureRegionRef?.current && settings.displaySurface === 'browser') {
+        let cropped = false
+
         try {
           const RestrictionTargetCtor = (window as any).RestrictionTarget
           if (RestrictionTargetCtor?.fromElement && typeof (track as any).restrictTo === 'function') {
             const target = await RestrictionTargetCtor.fromElement(captureRegionRef.current)
             await (track as any).restrictTo(target)
-          } else {
-            // Older Chrome versions shipped the same capability under CropTarget/cropTo
+            cropped = true
+          }
+        } catch (err) {
+          console.warn('RestrictionTarget crop failed, trying CropTarget fallback:', err)
+        }
+
+        if (!cropped) {
+          try {
             const CropTargetCtor = (window as any).CropTarget
             if (CropTargetCtor?.fromElement && typeof (track as any).cropTo === 'function') {
               const target = await CropTargetCtor.fromElement(captureRegionRef.current)
               await (track as any).cropTo(target)
+              cropped = true
             }
+          } catch (err) {
+            console.warn('CropTarget crop also failed:', err)
           }
-        } catch (cropErr) {
-          console.warn('Could not restrict recording to the video region — recording full tab instead:', cropErr)
         }
+
+        if (!cropped) setWarning('crop-unsupported')
       }
 
       const mimeType = pickMimeType()
@@ -137,30 +162,53 @@ export default function RecordExportButton({ onStart, isFinished, resetFinished,
   }, [isFinished, status, stopAndSave])
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <button
-        onClick={status === 'idle' ? startRecording : undefined}
-        disabled={status !== 'idle'}
-        style={{
-          fontSize: 12, fontWeight: 600,
-          padding: '7px 14px', borderRadius: 8, border: 'none',
-          background: status === 'idle' ? '#0f2972' : '#E4E6EE',
-          color: status === 'idle' ? '#fff' : '#8A8F9E',
-          cursor: status === 'idle' ? 'pointer' : 'default',
-        }}
-      >
-        {status === 'idle' && '● Record & Export'}
-        {status === 'requesting' && 'Choose this tab to share…'}
-        {status === 'recording' && '● Recording — will save at end of video'}
-        {status === 'finishing' && 'Saving…'}
-      </button>
-      {status === 'recording' && (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <button
-          onClick={stopAndSave}
-          style={{ fontSize: 12, color: '#b91c1c', background: 'none', border: 'none', cursor: 'pointer' }}
+          onClick={status === 'idle' ? startRecording : undefined}
+          disabled={status !== 'idle'}
+          style={{
+            fontSize: 12, fontWeight: 600,
+            padding: '7px 14px', borderRadius: 8, border: 'none',
+            background: status === 'idle' ? '#0f2972' : '#E4E6EE',
+            color: status === 'idle' ? '#fff' : '#8A8F9E',
+            cursor: status === 'idle' ? 'pointer' : 'default',
+          }}
         >
-          Stop now
+          {status === 'idle' && '● Record & Export'}
+          {status === 'requesting' && 'Choose "This Tab" when prompted…'}
+          {status === 'recording' && '● Recording — will save at end of video'}
+          {status === 'finishing' && 'Saving…'}
         </button>
+        {status === 'recording' && (
+          <button
+            onClick={stopAndSave}
+            style={{ fontSize: 12, color: '#b91c1c', background: 'none', border: 'none', cursor: 'pointer' }}
+          >
+            Stop now
+          </button>
+        )}
+      </div>
+      {warning === 'not-this-tab' && (
+        <div style={{
+          fontSize: 11, color: '#b45309', background: '#fffbeb',
+          border: '1px solid #fde68a', borderRadius: 6, padding: '6px 10px',
+          maxWidth: 320,
+        }}>
+          You shared the whole screen/window instead of this tab — the video won't be
+          cropped and the cursor may still show. Stop, then try again and pick
+          <strong> "Chrome Tab" → this tab</strong> in the share dialog.
+        </div>
+      )}
+      {warning === 'crop-unsupported' && (
+        <div style={{
+          fontSize: 11, color: '#b45309', background: '#fffbeb',
+          border: '1px solid #fde68a', borderRadius: 6, padding: '6px 10px',
+          maxWidth: 320,
+        }}>
+          Couldn't crop to just the video area in this browser — recording the full tab
+          instead. Cropping needs a recent Chrome or Edge.
+        </div>
       )}
     </div>
   )
