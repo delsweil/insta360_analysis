@@ -10,6 +10,7 @@ import ShareModal from '@/components/ShareModal'
 import AnnotationFilter, { type FilterState, ALL_FILTERS, passesFilter } from '@/components/AnnotationFilter'
 import ClipRecorder from '@/components/ClipRecorder'
 import AnnotationCanvas, { type Shape, type Tool } from '@/components/AnnotationCanvas'
+import RecordExportButton from '@/components/RecordExportButton'
 import DrawTools from '@/components/DrawTools'
 
 function formatTime(sec: number) {
@@ -50,6 +51,7 @@ export default function GamePage({ params }: Props) {
   const [drawTool, setDrawTool] = useState<Tool>('select')
   const [draftShapes, setDraftShapes] = useState<Shape[]>([])
   const [isPlaying, setIsPlaying] = useState(true)
+  const [hasEnded, setHasEnded] = useState(false)
   const [pausedAnnotationId, setPausedAnnotationId] = useState<string | null>(null)
   const [holdSec, setHoldSec] = useState(0) // grace period (seconds of playback) before shapes hide after resume
   const resumeAnchorRef = useRef<number | null>(null)
@@ -153,7 +155,10 @@ export default function GamePage({ params }: Props) {
         if (data?.event === 'infoDelivery' && data?.info) {
           if (data.info.currentTime !== undefined) setCurrentTime(data.info.currentTime)
           if (data.info.duration !== undefined && data.info.duration > 0) setDuration(data.info.duration)
-          if (data.info.playerState !== undefined) setIsPlaying(data.info.playerState === 1)
+          if (data.info.playerState !== undefined) {
+            setIsPlaying(data.info.playerState === 1)
+            if (data.info.playerState === 0) setHasEnded(true)
+          }
         }
       } catch {}
     }
@@ -738,18 +743,25 @@ export default function GamePage({ params }: Props) {
             </div>
           </div>
           {isCoach && (
-            <button
-              onClick={() => setShowShare(true)}
-              style={{
-                fontSize: 12, fontWeight: 600,
-                padding: '7px 16px', borderRadius: 8,
-                border: 'none', background: '#E8780A',
-                color: '#fff', cursor: 'pointer',
-                fontFamily: 'DM Sans, sans-serif', flexShrink: 0,
-              }}
-            >
-              Share highlights
-            </button>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <RecordExportButton
+                onStart={() => seekTo(0)}
+                isFinished={hasEnded}
+                resetFinished={() => setHasEnded(false)}
+              />
+              <button
+                onClick={() => setShowShare(true)}
+                style={{
+                  fontSize: 12, fontWeight: 600,
+                  padding: '7px 16px', borderRadius: 8,
+                  border: 'none', background: '#E8780A',
+                  color: '#fff', cursor: 'pointer',
+                  fontFamily: 'DM Sans, sans-serif', flexShrink: 0,
+                }}
+              >
+                Share highlights
+              </button>
+            </div>
           )}
         </div>
 
