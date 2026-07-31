@@ -740,6 +740,7 @@ export default function GamePage({ params }: Props) {
                   setDraftShapes(prev => prev.map(s => s.id === shapeId ? { ...s, ...patch } as Shape : s))
                 }
                 onRemoveShape={shapeId => setDraftShapes(prev => prev.filter(s => s.id !== shapeId))}
+                onToggleVideo={() => (isPlaying ? pauseVideo() : resumeVideo())}
               />
             </div>
 
@@ -1042,6 +1043,7 @@ export default function GamePage({ params }: Props) {
                   setDraftShapes(prev => prev.map(s => s.id === shapeId ? { ...s, ...patch } as Shape : s))
                 }
                 onRemoveShape={shapeId => setDraftShapes(prev => prev.filter(s => s.id !== shapeId))}
+                onToggleVideo={() => (isPlaying ? pauseVideo() : resumeVideo())}
               />
             </div>
 

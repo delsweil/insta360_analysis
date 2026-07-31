@@ -35,6 +35,8 @@ interface AnnotationCanvasProps {
   onUpdateShape: (id: string, patch: Partial<Shape>) => void
   onRemoveShape: (id: string) => void
   onRequestLabelText?: (pos: NPoint) => void
+  /** Called on click when not editable — lets a normal click on the video toggle play/pause via your own commands, instead of passing the click through to the iframe (which would re-trigger YouTube's own overlay). */
+  onToggleVideo?: () => void
 }
 
 const DEFAULTS = {
@@ -75,7 +77,7 @@ function bezierPoint(t: number, p0: [number, number], p1: [number, number], p2: 
 
 export default function AnnotationCanvas({
   shapes, editable, tool,
-  onAddShape, onUpdateShape, onRemoveShape, onRequestLabelText,
+  onAddShape, onUpdateShape, onRemoveShape, onRequestLabelText, onToggleVideo,
 }: AnnotationCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -384,7 +386,7 @@ export default function AnnotationCanvas({
           draw()
         }}
         onMouseDown={e => {
-          if (!editable) return
+          if (!editable) { onToggleVideo?.(); return }
           const [cx, cy] = xy(e)
 
           if (tool === 'select') {
