@@ -396,7 +396,8 @@ export default function GamePage({ params }: Props) {
         .single()
       data = res.data
       if (data) {
-        setAnnotations(prev => prev.map(a => a.id === editingAnnotationId ? data : a))
+        const updated = data
+        setAnnotations(prev => prev.map(a => a.id === editingAnnotationId ? updated : a))
       }
     } else {
       const res = await supabase
@@ -416,7 +417,8 @@ export default function GamePage({ params }: Props) {
         .single()
       data = res.data
       if (data) {
-        setAnnotations(prev => [...prev, data].sort((a, b) => a.timestamp_sec - b.timestamp_sec))
+        const inserted = data
+        setAnnotations(prev => [...prev, inserted].sort((a, b) => a.timestamp_sec - b.timestamp_sec))
       }
     }
 
