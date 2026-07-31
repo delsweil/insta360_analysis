@@ -381,7 +381,7 @@ export default function GamePage({ params }: Props) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setSaving(false); return }
 
-    let data
+    let data: Annotation | null = null
     if (editingAnnotationId) {
       const res = await supabase
         .from('annotations')
