@@ -311,7 +311,15 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
     return () => ro.disconnect()
   }, [draw])
   useEffect(() => { draw() }, [draw])
-  useEffect(() => { draftPoints.current = []; if (tool !== 'select') setSelectedId(null) }, [tool])
+  useEffect(() => {
+    if (draftPoints.current.length >= 3) {
+      // A zone was mid-draw (never double-clicked to close) and the tool
+      // just changed out from under it — commit it rather than losing it.
+      onAddShape({ id: Math.random().toString(36).slice(2, 10), type: 'zone', points: draftPoints.current, ...DEFAULTS.zone })
+    }
+    draftPoints.current = []
+    if (tool !== 'select') setSelectedId(null)
+  }, [tool, onAddShape])
   useEffect(() => { if (selectedId && !shapes.find(s => s.id === selectedId)) setSelectedId(null) }, [shapes, selectedId])
   useEffect(() => {
     const maxNum = shapes.filter((s): s is Extract<Shape, { type: 'number' }> => s.type === 'number')
