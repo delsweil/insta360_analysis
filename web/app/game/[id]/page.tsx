@@ -401,26 +401,31 @@ export default function GamePage({ params }: Props) {
     let data: Annotation | null = null
     setSaveError(null)
     if (editingAnnotationId) {
-      const res = await supabase
-        .from('annotations')
-        .update({
-          shapes: draftShapes.length ? draftShapes : null,
-          shapes_hold_sec: draftShapes.length ? holdSec : null,
-          auto_resume_sec: draftShapes.length ? autoResumeSec : null,
-          context_start_sec: draftShapes.length ? contextStartSec : null,
-          note: note.trim() || null,
-        })
-        .eq('id', editingAnnotationId)
-        .select('*, profiles(display_name)')
-        .single()
-      data = res.data
-      if (res.error) {
-        console.error('[handleRangeSave] update failed:', res.error)
-        setSaveError(res.error.message)
+      const patch = {
+        shapes: draftShapes.length ? draftShapes : null,
+        shapes_hold_sec: draftShapes.length ? holdSec : null,
+        auto_resume_sec: draftShapes.length ? autoResumeSec : null,
+        context_start_sec: draftShapes.length ? contextStartSec : null,
+        note: note.trim() || null,
       }
-      if (data) {
-        const updated = data
-        setAnnotations(prev => prev.map(a => a.id === editingAnnotationId ? updated : a))
+      const { error } = await supabase
+        .from('annotations')
+        .update(patch)
+        .eq('id', editingAnnotationId)
+      if (error) {
+        console.error('[handleRangeSave] update failed:', error)
+        setSaveError(error.message)
+      } else {
+        // Don't rely on reading the row back — RLS may (correctly) block
+        // reading annotations another coach created, even though the write
+        // itself succeeded. Merge the known patch into local state instead.
+        data = annotations.find(a => a.id === editingAnnotationId)
+          ? { ...annotations.find(a => a.id === editingAnnotationId)!, ...patch }
+          : null
+        if (data) {
+          const updated = data
+          setAnnotations(prev => prev.map(a => a.id === editingAnnotationId ? updated : a))
+        }
       }
     } else {
       const res = await supabase
