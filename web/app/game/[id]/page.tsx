@@ -54,6 +54,12 @@ export default function GamePage({ params }: Props) {
   const [isPlaying, setIsPlaying] = useState(true)
   const [hasEnded, setHasEnded] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
+  const [recordMode, setRecordMode] = useState<'current' | 'reel'>('current')
+  const [reelIdx, setReelIdx] = useState(0)
+  const [reelAutoPlay, setReelAutoPlay] = useState(false)
+  const [reelFinished, setReelFinished] = useState(false)
+  const reelStartedRef = useRef(false)
+  const REEL_PRE_ROLL_SEC = 2
   const [pausedAnnotationId, setPausedAnnotationId] = useState<string | null>(null)
   const [holdSec, setHoldSec] = useState(0) // grace period (seconds of playback) before shapes hide after resume
   const resumeAnchorRef = useRef<number | null>(null)
@@ -192,6 +198,35 @@ export default function GamePage({ params }: Props) {
       JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*'
     )
   }, [])
+
+  // Auto-advance through filteredAnnotations when the highlights-reel record
+  // mode is running — same pattern as the share page's "Play all".
+  useEffect(() => {
+    if (!reelAutoPlay || filteredAnnotations.length === 0) return
+    const ann = filteredAnnotations[reelIdx]
+    if (!ann) return
+
+    const endTime = ann.end_timestamp_sec ?? (ann.timestamp_sec + 10)
+    if (currentTime >= endTime) {
+      const nextIdx = reelIdx + 1
+      if (nextIdx < filteredAnnotations.length) {
+        setReelIdx(nextIdx)
+        seekTo(Math.max(0, filteredAnnotations[nextIdx].timestamp_sec - REEL_PRE_ROLL_SEC))
+      } else {
+        setReelAutoPlay(false)
+        if (reelStartedRef.current) setReelFinished(true)
+      }
+    }
+  }, [currentTime, reelAutoPlay, reelIdx, filteredAnnotations, seekTo])
+
+  const startReelForRecording = useCallback(() => {
+    if (filteredAnnotations.length === 0) return
+    reelStartedRef.current = true
+    setReelFinished(false)
+    setReelIdx(0)
+    seekTo(Math.max(0, filteredAnnotations[0].timestamp_sec - REEL_PRE_ROLL_SEC))
+    setReelAutoPlay(true)
+  }, [filteredAnnotations, seekTo])
 
   // Auto-pause the moment playback naturally crosses into a tactical
   // annotation that has shapes, so viewers get a beat to look at it.
@@ -747,10 +782,40 @@ export default function GamePage({ params }: Props) {
           </div>
           {isCoach && (
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div style={{
+                display: 'flex', border: '1px solid #E4E6EE', borderRadius: 8,
+                overflow: 'hidden', flexShrink: 0,
+              }}>
+                <button
+                  onClick={() => setRecordMode('current')}
+                  title="Record starting from wherever the video is now"
+                  style={{
+                    fontSize: 11, fontWeight: 600, padding: '6px 10px', border: 'none',
+                    background: recordMode === 'current' ? '#0f2972' : '#fff',
+                    color: recordMode === 'current' ? '#fff' : '#8A8F9E',
+                    cursor: 'pointer',
+                  }}
+                >
+                  From now
+                </button>
+                <button
+                  onClick={() => setRecordMode('reel')}
+                  disabled={filteredAnnotations.length === 0}
+                  title={filteredAnnotations.length === 0 ? 'No annotations match the current filter' : 'Record a reel of the currently filtered annotations'}
+                  style={{
+                    fontSize: 11, fontWeight: 600, padding: '6px 10px', border: 'none',
+                    background: recordMode === 'reel' ? '#0f2972' : '#fff',
+                    color: filteredAnnotations.length === 0 ? '#C0C4CE' : recordMode === 'reel' ? '#fff' : '#8A8F9E',
+                    cursor: filteredAnnotations.length === 0 ? 'default' : 'pointer',
+                  }}
+                >
+                  Highlights reel
+                </button>
+              </div>
               <RecordExportButton
-                onStart={() => seekTo(0)}
-                isFinished={hasEnded}
-                resetFinished={() => setHasEnded(false)}
+                onStart={recordMode === 'reel' ? startReelForRecording : () => seekTo(0)}
+                isFinished={recordMode === 'reel' ? reelFinished : hasEnded}
+                resetFinished={recordMode === 'reel' ? () => setReelFinished(false) : () => setHasEnded(false)}
                 onEnterFocusMode={() => setFocusMode(true)}
                 onExitFocusMode={() => setFocusMode(false)}
                 captureRegionRef={videoWrapperRef}
