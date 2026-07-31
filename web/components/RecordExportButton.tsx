@@ -74,17 +74,36 @@ export default function RecordExportButton({
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
-  const prevCursorRef = useRef<string>('')
+  const overlayRef = useRef<HTMLDivElement | null>(null)
 
-  const restoreCursor = useCallback(() => {
-    if (captureRegionRef?.current) captureRegionRef.current.style.cursor = prevCursorRef.current
+  // A cross-origin iframe (the YouTube embed) renders its own cursor —
+  // `cursor: none` on our wrapper div can't reach inside it, since it's a
+  // separate document. Instead, drop a transparent, pointer-capturing div on
+  // top of everything so the browser resolves hover to OUR element (which we
+  // can set cursor:none on) rather than the iframe beneath it. Nothing needs
+  // to be clickable during an automated recording anyway — playback is driven
+  // by postMessage commands, not real mouse interaction.
+  const addCursorOverlay = useCallback(() => {
+    if (!captureRegionRef?.current) return
+    const el = document.createElement('div')
+    Object.assign(el.style, {
+      position: 'absolute', inset: '0', zIndex: '999999',
+      background: 'transparent', cursor: 'none', pointerEvents: 'auto',
+    })
+    captureRegionRef.current.appendChild(el)
+    overlayRef.current = el
   }, [captureRegionRef])
 
+  const removeCursorOverlay = useCallback(() => {
+    overlayRef.current?.remove()
+    overlayRef.current = null
+  }, [])
+
   const cleanup = useCallback(() => {
-    restoreCursor()
+    removeCursorOverlay()
     onExitFocusMode()
     setStatus('idle')
-  }, [restoreCursor, onExitFocusMode])
+  }, [removeCursorOverlay, onExitFocusMode])
 
   const stopAndSave = useCallback(() => {
     if (recorderRef.current && recorderRef.current.state !== 'inactive') {
@@ -101,11 +120,7 @@ export default function RecordExportButton({
     // change in the parent, synchronous and unaffected by anything the
     // browser does with fullscreen/permission prompts afterward.
     onEnterFocusMode()
-
-    if (captureRegionRef?.current) {
-      prevCursorRef.current = captureRegionRef.current.style.cursor
-      captureRegionRef.current.style.cursor = 'none'
-    }
+    addCursorOverlay()
 
     try {
       // preferCurrentTab is Chrome-only; falls back to the normal picker elsewhere.
@@ -165,7 +180,7 @@ export default function RecordExportButton({
       console.error('Screen share was cancelled or failed:', err)
       cleanup()
     }
-  }, [onStart, resetFinished, stopAndSave, captureRegionRef, onEnterFocusMode, cleanup])
+  }, [onStart, resetFinished, stopAndSave, onEnterFocusMode, cleanup, addCursorOverlay])
 
   // Auto-stop the moment the tracked playback (full video or highlight reel) finishes.
   useEffect(() => {

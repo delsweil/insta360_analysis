@@ -60,6 +60,9 @@ export default function GamePage({ params }: Props) {
   const [reelFinished, setReelFinished] = useState(false)
   const reelStartedRef = useRef(false)
   const REEL_PRE_ROLL_SEC = 2
+  const [loopReel, setLoopReel] = useState(false)
+  const [loopDelaySec, setLoopDelaySec] = useState(5)
+  const loopTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [pausedAnnotationId, setPausedAnnotationId] = useState<string | null>(null)
   const [holdSec, setHoldSec] = useState(0) // grace period (seconds of playback) before shapes hide after resume
   const resumeAnchorRef = useRef<number | null>(null)
@@ -199,6 +202,15 @@ export default function GamePage({ params }: Props) {
     )
   }, [])
 
+  const startReelForRecording = useCallback(() => {
+    if (filteredAnnotations.length === 0) return
+    reelStartedRef.current = true
+    setReelFinished(false)
+    setReelIdx(0)
+    seekTo(Math.max(0, filteredAnnotations[0].timestamp_sec - REEL_PRE_ROLL_SEC))
+    setReelAutoPlay(true)
+  }, [filteredAnnotations, seekTo])
+
   // Auto-advance through filteredAnnotations when the highlights-reel record
   // mode is running — same pattern as the share page's "Play all".
   useEffect(() => {
@@ -214,19 +226,33 @@ export default function GamePage({ params }: Props) {
         seekTo(Math.max(0, filteredAnnotations[nextIdx].timestamp_sec - REEL_PRE_ROLL_SEC))
       } else {
         setReelAutoPlay(false)
+        // Signals "this pass is done" — RecordExportButton watches this and
+        // stops/saves immediately if a recording is in progress. The optional
+        // loop restart below is scheduled separately and happens afterward,
+        // so it never extends an in-progress recording — it just resumes
+        // normal (unrecorded) viewing once the delay elapses.
         if (reelStartedRef.current) setReelFinished(true)
+
+        if (loopReel) {
+          if (loopTimeoutRef.current) clearTimeout(loopTimeoutRef.current)
+          loopTimeoutRef.current = setTimeout(() => {
+            startReelForRecording()
+          }, loopDelaySec * 1000)
+        }
       }
     }
-  }, [currentTime, reelAutoPlay, reelIdx, filteredAnnotations, seekTo])
+  }, [currentTime, reelAutoPlay, reelIdx, filteredAnnotations, seekTo, loopReel, loopDelaySec, startReelForRecording])
 
-  const startReelForRecording = useCallback(() => {
-    if (filteredAnnotations.length === 0) return
-    reelStartedRef.current = true
-    setReelFinished(false)
-    setReelIdx(0)
-    seekTo(Math.max(0, filteredAnnotations[0].timestamp_sec - REEL_PRE_ROLL_SEC))
-    setReelAutoPlay(true)
-  }, [filteredAnnotations, seekTo])
+  // Cancel any pending loop restart if the coach turns Loop off mid-wait, or leaves the page.
+  useEffect(() => {
+    if (!loopReel && loopTimeoutRef.current) {
+      clearTimeout(loopTimeoutRef.current)
+      loopTimeoutRef.current = null
+    }
+    return () => {
+      if (loopTimeoutRef.current) clearTimeout(loopTimeoutRef.current)
+    }
+  }, [loopReel])
 
   // Auto-pause the moment playback naturally crosses into a tactical
   // annotation that has shapes, so viewers get a beat to look at it.
@@ -812,6 +838,31 @@ export default function GamePage({ params }: Props) {
                   Highlights reel
                 </button>
               </div>
+              {filteredAnnotations.length > 0 && (
+                <label style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  fontSize: 11, color: '#8A8F9E', flexShrink: 0,
+                }}>
+                  <input
+                    type="checkbox" checked={loopReel}
+                    onChange={e => setLoopReel(e.target.checked)}
+                    title="Automatically restart the highlights reel after it finishes"
+                  />
+                  Loop after
+                  <input
+                    type="number" min={0} max={120} value={loopDelaySec}
+                    disabled={!loopReel}
+                    onChange={e => setLoopDelaySec(Math.max(0, Number(e.target.value) || 0))}
+                    style={{
+                      width: 42, fontSize: 11, padding: '3px 5px',
+                      border: '1px solid #E4E6EE', borderRadius: 5,
+                      outline: 'none', fontFamily: 'DM Sans, sans-serif',
+                      opacity: loopReel ? 1 : 0.5,
+                    }}
+                  />
+                  sec
+                </label>
+              )}
               <RecordExportButton
                 onStart={recordMode === 'reel' ? startReelForRecording : () => seekTo(0)}
                 isFinished={recordMode === 'reel' ? reelFinished : hasEnded}
