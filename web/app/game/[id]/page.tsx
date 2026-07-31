@@ -53,6 +53,7 @@ export default function GamePage({ params }: Props) {
   const [draftShapes, setDraftShapes] = useState<Shape[]>([])
   const [isPlaying, setIsPlaying] = useState(true)
   const [hasEnded, setHasEnded] = useState(false)
+  const [focusMode, setFocusMode] = useState(false)
   const [pausedAnnotationId, setPausedAnnotationId] = useState<string | null>(null)
   const [holdSec, setHoldSec] = useState(0) // grace period (seconds of playback) before shapes hide after resume
   const resumeAnchorRef = useRef<number | null>(null)
@@ -715,10 +716,11 @@ export default function GamePage({ params }: Props) {
       minHeight: '100vh', background: '#F8F8F6',
       fontFamily: 'DM Sans, sans-serif', color: '#111318',
     }}>
-      <Topbar role={userRole} backHref="/" />
+      {!focusMode && <Topbar role={userRole} backHref="/" />}
 
       <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         {/* Game title bar */}
+        {!focusMode && (
         <div style={{
           background: '#fff', border: '1px solid #E4E6EE',
           borderRadius: 12, padding: '10px 14px',
@@ -749,6 +751,8 @@ export default function GamePage({ params }: Props) {
                 onStart={() => seekTo(0)}
                 isFinished={hasEnded}
                 resetFinished={() => setHasEnded(false)}
+                onEnterFocusMode={() => setFocusMode(true)}
+                onExitFocusMode={() => setFocusMode(false)}
                 captureRegionRef={videoWrapperRef}
               />
               <button
@@ -766,6 +770,7 @@ export default function GamePage({ params }: Props) {
             </div>
           )}
         </div>
+        )}
 
         {showShare && (
           <ShareModal
@@ -776,13 +781,16 @@ export default function GamePage({ params }: Props) {
           />
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: focusMode ? '1fr' : '1fr 300px', gap: 10 }}>
           {/* Left */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {/* Video */}
             <div
               ref={videoWrapperRef}
-              style={{
+              style={focusMode ? {
+                background: '#000', position: 'fixed', inset: 0,
+                width: '100vw', height: '100vh', zIndex: 9999,
+              } : {
                 background: '#091d52', borderRadius: 12,
                 overflow: 'hidden', aspectRatio: '16/9', position: 'relative',
               }}
@@ -807,6 +815,7 @@ export default function GamePage({ params }: Props) {
             </div>
 
             {/* Timeline card */}
+            {!focusMode && (
             <div style={{
               background: '#fff', border: '1px solid #E4E6EE',
               borderRadius: 12, padding: '12px 14px',
@@ -993,9 +1002,11 @@ export default function GamePage({ params }: Props) {
                 </span>
               </div>
             </div>
+            )}
           </div>
 
           {/* Right: annotations */}
+          {!focusMode && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{
               background: '#fff', border: '1px solid #E4E6EE',
@@ -1072,6 +1083,7 @@ export default function GamePage({ params }: Props) {
               </div>
             </div>
           </div>
+          )}
         </div>
       </div>
     </div>

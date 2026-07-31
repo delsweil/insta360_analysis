@@ -50,6 +50,7 @@ export default function SharePage({ params }: Props) {
   autoPlayRef.current = autoPlay
   const reelStartedRef = useRef(false)
   const [reelFinished, setReelFinished] = useState(false)
+  const [focusMode, setFocusMode] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -215,6 +216,7 @@ export default function SharePage({ params }: Props) {
       fontFamily: 'DM Sans, sans-serif', color: '#111318',
     }}>
       {/* Topbar */}
+      {!focusMode && (
       <div style={{
         background: '#0f2972',
         display: 'flex', alignItems: 'center',
@@ -253,9 +255,11 @@ export default function SharePage({ params }: Props) {
           Highlights
         </div>
       </div>
+      )}
 
       <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         {/* Game title */}
+        {!focusMode && (
         <div style={{
           background: '#fff', border: '1px solid #E4E6EE',
           borderRadius: 12, padding: '10px 14px',
@@ -280,6 +284,8 @@ export default function SharePage({ params }: Props) {
                 onStart={handlePlayAll}
                 isFinished={reelFinished}
                 resetFinished={() => setReelFinished(false)}
+                onEnterFocusMode={() => setFocusMode(true)}
+                onExitFocusMode={() => setFocusMode(false)}
                 captureRegionRef={videoWrapperRef}
               />
               <button
@@ -299,13 +305,17 @@ export default function SharePage({ params }: Props) {
             </div>
           )}
         </div>
+        )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: focusMode ? '1fr' : '1fr 280px', gap: 10 }}>
           {/* Left: video + timeline */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div
               ref={videoWrapperRef}
-              style={{
+              style={focusMode ? {
+                background: '#000', position: 'fixed', inset: 0,
+                width: '100vw', height: '100vh', zIndex: 9999,
+              } : {
                 background: '#091d52', borderRadius: 12,
                 overflow: 'hidden', aspectRatio: '16/9', position: 'relative',
               }}
@@ -331,6 +341,7 @@ export default function SharePage({ params }: Props) {
             </div>
 
             {/* Timeline */}
+            {!focusMode && (
             <div style={{
               background: '#fff', border: '1px solid #E4E6EE',
               borderRadius: 12, padding: '12px 14px',
@@ -413,9 +424,11 @@ export default function SharePage({ params }: Props) {
                 <span>{formatTime(duration)}</span>
               </div>
             </div>
+            )}
           </div>
 
           {/* Right: highlights list */}
+          {!focusMode && (
           <div style={{
             background: '#fff', border: '1px solid #E4E6EE',
             borderRadius: 12, padding: '12px 14px',
@@ -493,6 +506,7 @@ export default function SharePage({ params }: Props) {
               </div>
             ))}
           </div>
+          )}
         </div>
       </div>
     </div>
