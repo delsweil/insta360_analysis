@@ -4,7 +4,7 @@
 // Hand-rolled Canvas 2D overlay (no drawing library) — normalized 0..1
 // coords, resolution-independent between editor and playback.
 
-import { useRef, useEffect, useCallback, useState } from 'react'
+import { useRef, useEffect, useCallback, useState, forwardRef, useImperativeHandle } from 'react'
 import ShapeSettingsPanel from './ShapeSettingsPanel'
 
 export type NPoint = [number, number]
@@ -75,10 +75,15 @@ function bezierPoint(t: number, p0: [number, number], p1: [number, number], p2: 
   return [x, y] as [number, number]
 }
 
-export default function AnnotationCanvas({
+export interface AnnotationCanvasHandle {
+  /** Commits any in-progress geometry (a zone that hasn't been double-clicked to close yet) as a real shape, or discards it if incomplete. Call right before saving. */
+  finalizePending: () => void
+}
+
+const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProps>(function AnnotationCanvas({
   shapes, editable, tool,
   onAddShape, onUpdateShape, onRemoveShape, onRequestLabelText, onToggleVideo,
-}: AnnotationCanvasProps) {
+}, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const draftPoints = useRef<NPoint[]>([]) // in-progress zone/curve points
@@ -316,6 +321,18 @@ export default function AnnotationCanvas({
 
   const uid = () => Math.random().toString(36).slice(2, 10)
 
+  useImperativeHandle(ref, () => ({
+    finalizePending: () => {
+      if (tool === 'zone' && draftPoints.current.length >= 3) {
+        onAddShape({ id: uid(), type: 'zone', points: draftPoints.current, ...DEFAULTS.zone })
+      }
+      // A single placed curve-start point with no endpoint isn't a valid
+      // shape (needs 2 clicks minimum) — nothing meaningful to commit there,
+      // just discard it below.
+      draftPoints.current = []
+    },
+  }), [tool, onAddShape])
+
   const hitHandle = useCallback((cx: number, cy: number) => {
     const c = canvasRef.current!
     const scale = c.width / c.getBoundingClientRect().width
@@ -498,4 +515,6 @@ export default function AnnotationCanvas({
       )}
     </div>
   )
-}
+})
+
+export default AnnotationCanvas

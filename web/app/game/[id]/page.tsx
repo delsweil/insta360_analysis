@@ -9,7 +9,7 @@ import AnnotationShape from '@/components/AnnotationShape'
 import ShareModal from '@/components/ShareModal'
 import AnnotationFilter, { type FilterState, ALL_FILTERS, passesFilter } from '@/components/AnnotationFilter'
 import ClipRecorder from '@/components/ClipRecorder'
-import AnnotationCanvas, { type Shape, type Tool } from '@/components/AnnotationCanvas'
+import AnnotationCanvas, { type Shape, type Tool, type AnnotationCanvasHandle } from '@/components/AnnotationCanvas'
 import RecordExportButton from '@/components/RecordExportButton'
 import DrawTools from '@/components/DrawTools'
 
@@ -27,6 +27,8 @@ export default function GamePage({ params }: Props) {
   const { id } = React.use(params)
   const playerRef = useRef<HTMLIFrameElement>(null)
   const videoWrapperRef = useRef<HTMLDivElement>(null)
+  const mobileCanvasRef = useRef<AnnotationCanvasHandle>(null)
+  const desktopCanvasRef = useRef<AnnotationCanvasHandle>(null)
   const firedAnnotationIds = useRef<Set<string>>(new Set())
   const prevTimeRef = useRef(0)
 
@@ -732,6 +734,7 @@ export default function GamePage({ params }: Props) {
                 }} />
               )}
               <AnnotationCanvas
+                ref={mobileCanvasRef}
                 shapes={activeTacticalShapes}
                 editable={isDrawing}
                 tool={drawTool}
@@ -1035,6 +1038,7 @@ export default function GamePage({ params }: Props) {
                 }} />
               )}
               <AnnotationCanvas
+                ref={desktopCanvasRef}
                 shapes={activeTacticalShapes}
                 editable={isDrawing}
                 tool={drawTool}
@@ -1113,7 +1117,11 @@ export default function GamePage({ params }: Props) {
                         canUndo={draftShapes.length > 0}
                         onUndo={() => setDraftShapes(prev => prev.slice(0, -1))}
                         onClear={() => setDraftShapes([])}
-                        onDone={() => { setIsDrawing(false); setDrawTool('select'); setEditingAnnotationId(null); setMarkIn(null) }}
+                        onDone={() => {
+                          mobileCanvasRef.current?.finalizePending()
+                          desktopCanvasRef.current?.finalizePending()
+                          setIsDrawing(false); setDrawTool('select'); setEditingAnnotationId(null); setMarkIn(null)
+                        }}
                       />
                       <div style={{
                         display: 'flex', alignItems: 'center', gap: 6,
@@ -1181,7 +1189,11 @@ export default function GamePage({ params }: Props) {
                     {markIn !== null ? `Mark in: ${formatTime(markIn)}` : 'Mark in'}
                   </button>
                   <button
-                    onClick={handleRangeSave}
+                    onClick={() => {
+                      mobileCanvasRef.current?.finalizePending()
+                      desktopCanvasRef.current?.finalizePending()
+                      handleRangeSave()
+                    }}
                     disabled={markIn === null || saving}
                     style={{
                       flex: 1, fontSize: 11, fontWeight: 600,
