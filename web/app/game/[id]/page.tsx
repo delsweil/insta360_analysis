@@ -45,6 +45,7 @@ export default function GamePage({ params }: Props) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [isMobile, setIsMobile] = useState(false)
   const [showAnnotations, setShowAnnotations] = useState(false)
   const [showShare, setShowShare] = useState(false)
@@ -398,6 +399,7 @@ export default function GamePage({ params }: Props) {
     if (!user) { setSaving(false); return }
 
     let data: Annotation | null = null
+    setSaveError(null)
     if (editingAnnotationId) {
       const res = await supabase
         .from('annotations')
@@ -412,6 +414,10 @@ export default function GamePage({ params }: Props) {
         .select('*, profiles(display_name)')
         .single()
       data = res.data
+      if (res.error) {
+        console.error('[handleRangeSave] update failed:', res.error)
+        setSaveError(res.error.message)
+      }
       if (data) {
         const updated = data
         setAnnotations(prev => prev.map(a => a.id === editingAnnotationId ? updated : a))
@@ -434,6 +440,10 @@ export default function GamePage({ params }: Props) {
         .select('*, profiles(display_name)')
         .single()
       data = res.data
+      if (res.error) {
+        console.error('[handleRangeSave] insert failed:', res.error)
+        setSaveError(res.error.message)
+      }
       if (data) {
         const inserted = data
         setAnnotations(prev => [...prev, inserted].sort((a, b) => a.timestamp_sec - b.timestamp_sec))
@@ -1205,38 +1215,49 @@ export default function GamePage({ params }: Props) {
 
               {/* Mark in/out (coach) or quick save (player) */}
               {isCoach ? (
-                <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-                  <button
-                    onClick={() => setMarkIn(currentTime)}
-                    style={{
-                      flex: 1, fontSize: 11, fontWeight: 600,
-                      padding: '6px 8px', borderRadius: 6,
-                      border: `2px solid ${markIn !== null ? '#E8780A' : '#E4E6EE'}`,
-                      background: markIn !== null ? '#FEF0E0' : '#F8F8F6',
-                      color: markIn !== null ? '#E8780A' : '#8A8F9E',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {markIn !== null ? `Mark in: ${formatTime(markIn)}` : 'Mark in'}
-                  </button>
-                  <button
-                    onClick={() => {
-                      mobileCanvasRef.current?.finalizePending()
-                      desktopCanvasRef.current?.finalizePending()
-                      handleRangeSave()
-                    }}
-                    disabled={markIn === null || saving}
-                    style={{
-                      flex: 1, fontSize: 11, fontWeight: 600,
-                      padding: '6px 8px', borderRadius: 6, border: 'none',
-                      background: markIn !== null ? '#0f2972' : '#E4E6EE',
-                      color: markIn !== null ? '#fff' : '#8A8F9E',
-                      cursor: markIn !== null ? 'pointer' : 'default',
-                    }}
-                  >
-                    {editingAnnotationId ? 'Save changes' : 'Save annotation'}
-                  </button>
-                </div>
+                <>
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                    <button
+                      onClick={() => setMarkIn(currentTime)}
+                      style={{
+                        flex: 1, fontSize: 11, fontWeight: 600,
+                        padding: '6px 8px', borderRadius: 6,
+                        border: `2px solid ${markIn !== null ? '#E8780A' : '#E4E6EE'}`,
+                        background: markIn !== null ? '#FEF0E0' : '#F8F8F6',
+                        color: markIn !== null ? '#E8780A' : '#8A8F9E',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {markIn !== null ? `Mark in: ${formatTime(markIn)}` : 'Mark in'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        mobileCanvasRef.current?.finalizePending()
+                        desktopCanvasRef.current?.finalizePending()
+                        handleRangeSave()
+                      }}
+                      disabled={markIn === null || saving}
+                      style={{
+                        flex: 1, fontSize: 11, fontWeight: 600,
+                        padding: '6px 8px', borderRadius: 6, border: 'none',
+                        background: markIn !== null ? '#0f2972' : '#E4E6EE',
+                        color: markIn !== null ? '#fff' : '#8A8F9E',
+                        cursor: markIn !== null ? 'pointer' : 'default',
+                      }}
+                    >
+                      {editingAnnotationId ? 'Save changes' : 'Save annotation'}
+                    </button>
+                  </div>
+                  {saveError && (
+                    <div style={{
+                      fontSize: 11, color: '#b91c1c', background: '#fef2f2',
+                      border: '1px solid #fecaca', borderRadius: 6,
+                      padding: '6px 10px', marginTop: 6,
+                    }}>
+                    Save failed: {saveError}
+                  </div>
+                  )}
+                </>
               ) : (
                 <button
                   onClick={handleQuickSave}
