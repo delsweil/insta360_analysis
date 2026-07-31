@@ -728,7 +728,7 @@ export default function GamePage({ params }: Props) {
               {pausedAnnotationId && (
                 <div style={{
                   position: 'absolute', inset: 0,
-                  background: 'rgba(9, 29, 82, 0.68)', pointerEvents: 'none',
+                  background: 'rgba(9, 29, 82, 0.4)', pointerEvents: 'none',
                 }} />
               )}
               <AnnotationCanvas
@@ -1031,7 +1031,7 @@ export default function GamePage({ params }: Props) {
               {pausedAnnotationId && (
                 <div style={{
                   position: 'absolute', inset: 0,
-                  background: 'rgba(9, 29, 82, 0.68)', pointerEvents: 'none',
+                  background: 'rgba(9, 29, 82, 0.4)', pointerEvents: 'none',
                 }} />
               )}
               <AnnotationCanvas
