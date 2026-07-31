@@ -365,7 +365,15 @@ export default function AnnotationCanvas({
       ref={containerRef}
       style={{
         position: 'absolute', inset: 0,
-        pointerEvents: editable ? 'auto' : 'none',
+        // Always 'auto', not just while editing: the mouse must never
+        // actually reach the cross-origin iframe underneath, or YouTube's
+        // own hover-triggered play/pause overlay activates regardless of
+        // the controls=0 URL parameter (a real limitation of their embed,
+        // not something fixable via config). Clicks are effectively
+        // swallowed harmlessly here when !editable, since the mouse
+        // handlers below all early-return in that case — the app's own
+        // custom scrubber/controls remain the way to control playback.
+        pointerEvents: 'auto',
       }}
     >
       <canvas
