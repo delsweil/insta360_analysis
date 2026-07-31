@@ -65,7 +65,9 @@ export default function GamePage({ params }: Props) {
   const loopTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [pausedAnnotationId, setPausedAnnotationId] = useState<string | null>(null)
   const [holdSec, setHoldSec] = useState(0) // grace period (seconds of playback) before shapes hide after resume
+  const [autoResumeSec, setAutoResumeSec] = useState(0) // seconds to stay paused before auto-resuming on its own (0 = wait for manual play)
   const resumeAnchorRef = useRef<number | null>(null)
+  const autoResumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Shapes belonging to whichever tactical annotation is currently paused on
   // (or, while playing, still within its hold grace period). Tied to pause
@@ -202,6 +204,12 @@ export default function GamePage({ params }: Props) {
     )
   }, [])
 
+  const resumeVideo = useCallback(() => {
+    playerRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*'
+    )
+  }, [])
+
   const startReelForRecording = useCallback(() => {
     if (filteredAnnotations.length === 0) return
     reelStartedRef.current = true
@@ -309,6 +317,28 @@ export default function GamePage({ params }: Props) {
     }
   }, [isPlaying, currentTime, annotations, isDrawing, pausedAnnotationId, holdSec])
 
+  // Auto-resume playback on its own once auto_resume_sec elapses for the
+  // paused annotation, unless the viewer already resumed manually first.
+  useEffect(() => {
+    if (autoResumeTimeoutRef.current) {
+      clearTimeout(autoResumeTimeoutRef.current)
+      autoResumeTimeoutRef.current = null
+    }
+    if (isDrawing || isPlaying || !pausedAnnotationId) return
+
+    const ann = annotations.find(a => a.id === pausedAnnotationId)
+    const delay = ann?.auto_resume_sec ?? 0
+    if (delay > 0) {
+      autoResumeTimeoutRef.current = setTimeout(() => {
+        resumeVideo()
+      }, delay * 1000)
+    }
+
+    return () => {
+      if (autoResumeTimeoutRef.current) clearTimeout(autoResumeTimeoutRef.current)
+    }
+  }, [pausedAnnotationId, isPlaying, isDrawing, annotations, resumeVideo])
+
   const startDrawing = useCallback(() => {
     pauseVideo()
     setDraftShapes([])
@@ -361,6 +391,7 @@ export default function GamePage({ params }: Props) {
         note: note.trim() || null,
         shapes: draftShapes.length ? draftShapes : null,
         shapes_hold_sec: draftShapes.length ? holdSec : null,
+        auto_resume_sec: draftShapes.length ? autoResumeSec : null,
         is_public: true,
       })
       .select('*, profiles(display_name)')
@@ -377,9 +408,10 @@ export default function GamePage({ params }: Props) {
     setDraftShapes([])
     setIsDrawing(false)
     setHoldSec(0)
+    setAutoResumeSec(0)
     setNote('')
     setSaving(false)
-  }, [saving, markIn, currentTime, selectedLabel, note, draftShapes, holdSec, id])
+  }, [saving, markIn, currentTime, selectedLabel, note, draftShapes, holdSec, autoResumeSec, id])
 
   const handleDelete = useCallback(async (annId: string) => {
     await supabase.from('annotations').delete().eq('id', annId)
@@ -863,6 +895,21 @@ export default function GamePage({ params }: Props) {
                   sec
                 </label>
               )}
+              {filteredAnnotations.length > 0 && (
+                <button
+                  onClick={startReelForRecording}
+                  title="Play the highlights reel now, without recording"
+                  style={{
+                    fontSize: 11, fontWeight: 600, padding: '6px 10px',
+                    borderRadius: 8, border: '1px solid #E4E6EE',
+                    background: reelAutoPlay ? '#22c55e' : '#fff',
+                    color: reelAutoPlay ? '#fff' : '#0f2972',
+                    cursor: 'pointer', flexShrink: 0,
+                  }}
+                >
+                  {reelAutoPlay ? '▶ Playing reel...' : '▶ Play reel'}
+                </button>
+              )}
               <RecordExportButton
                 onStart={recordMode === 'reel' ? startReelForRecording : () => seekTo(0)}
                 isFinished={recordMode === 'reel' ? reelFinished : hasEnded}
@@ -1013,6 +1060,22 @@ export default function GamePage({ params }: Props) {
                           }}
                         />
                         <span>sec</span>
+                      </div>
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        fontSize: 11, color: '#8A8F9E', marginTop: 4,
+                      }}>
+                        <span>Auto-resume video after:</span>
+                        <input
+                          type="number" min={0} max={60} value={autoResumeSec}
+                          onChange={e => setAutoResumeSec(Math.max(0, Number(e.target.value) || 0))}
+                          style={{
+                            width: 46, fontSize: 11, padding: '3px 6px',
+                            border: '1px solid #E4E6EE', borderRadius: 5,
+                            outline: 'none', fontFamily: 'DM Sans, sans-serif',
+                          }}
+                        />
+                        <span>sec (0 = wait for manual play)</span>
                       </div>
                     </>
                   ) : (
