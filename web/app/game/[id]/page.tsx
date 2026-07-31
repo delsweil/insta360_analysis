@@ -66,6 +66,7 @@ export default function GamePage({ params }: Props) {
   const [pausedAnnotationId, setPausedAnnotationId] = useState<string | null>(null)
   const [holdSec, setHoldSec] = useState(0) // grace period (seconds of playback) before shapes hide after resume
   const [autoResumeSec, setAutoResumeSec] = useState(0) // seconds to stay paused before auto-resuming on its own (0 = wait for manual play)
+  const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null)
   const resumeAnchorRef = useRef<number | null>(null)
   const autoResumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -341,7 +342,6 @@ export default function GamePage({ params }: Props) {
 
   const startDrawing = useCallback(() => {
     pauseVideo()
-    setDraftShapes([])
     setDrawTool('select')
     setIsDrawing(true)
   }, [pauseVideo])
@@ -381,26 +381,46 @@ export default function GamePage({ params }: Props) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setSaving(false); return }
 
-    const { data } = await supabase
-      .from('annotations')
-      .insert({
-        game_id: id, user_id: user.id,
-        timestamp_sec: markIn,
-        end_timestamp_sec: currentTime > markIn + 1 ? currentTime : null,
-        label: selectedLabel,
-        note: note.trim() || null,
-        shapes: draftShapes.length ? draftShapes : null,
-        shapes_hold_sec: draftShapes.length ? holdSec : null,
-        auto_resume_sec: draftShapes.length ? autoResumeSec : null,
-        is_public: true,
-      })
-      .select('*, profiles(display_name)')
-      .single()
+    let data
+    if (editingAnnotationId) {
+      const res = await supabase
+        .from('annotations')
+        .update({
+          shapes: draftShapes.length ? draftShapes : null,
+          shapes_hold_sec: draftShapes.length ? holdSec : null,
+          auto_resume_sec: draftShapes.length ? autoResumeSec : null,
+          note: note.trim() || null,
+        })
+        .eq('id', editingAnnotationId)
+        .select('*, profiles(display_name)')
+        .single()
+      data = res.data
+      if (data) {
+        setAnnotations(prev => prev.map(a => a.id === editingAnnotationId ? data : a))
+      }
+    } else {
+      const res = await supabase
+        .from('annotations')
+        .insert({
+          game_id: id, user_id: user.id,
+          timestamp_sec: markIn,
+          end_timestamp_sec: currentTime > markIn + 1 ? currentTime : null,
+          label: selectedLabel,
+          note: note.trim() || null,
+          shapes: draftShapes.length ? draftShapes : null,
+          shapes_hold_sec: draftShapes.length ? holdSec : null,
+          auto_resume_sec: draftShapes.length ? autoResumeSec : null,
+          is_public: true,
+        })
+        .select('*, profiles(display_name)')
+        .single()
+      data = res.data
+      if (data) {
+        setAnnotations(prev => [...prev, data].sort((a, b) => a.timestamp_sec - b.timestamp_sec))
+      }
+    }
 
     if (data) {
-      setAnnotations(prev =>
-        [...prev, data].sort((a, b) => a.timestamp_sec - b.timestamp_sec)
-      )
       setSaved(true)
       setTimeout(() => setSaved(false), 1500)
     }
@@ -409,9 +429,10 @@ export default function GamePage({ params }: Props) {
     setIsDrawing(false)
     setHoldSec(0)
     setAutoResumeSec(0)
+    setEditingAnnotationId(null)
     setNote('')
     setSaving(false)
-  }, [saving, markIn, currentTime, selectedLabel, note, draftShapes, holdSec, autoResumeSec, id])
+  }, [saving, markIn, currentTime, selectedLabel, note, draftShapes, holdSec, autoResumeSec, editingAnnotationId, id])
 
   const handleDelete = useCallback(async (annId: string) => {
     await supabase.from('annotations').delete().eq('id', annId)
@@ -433,7 +454,15 @@ export default function GamePage({ params }: Props) {
         return (
           <button
             key={l.key}
-            onClick={() => !isDisabled && setSelectedLabel(l.key)}
+            onClick={() => {
+              if (isDisabled) return
+              const switchingToTactical = l.key === 'tactical' && selectedLabel !== 'tactical'
+              setSelectedLabel(l.key)
+              if (l.key === 'tactical' && isCoach) {
+                if (switchingToTactical) { setDraftShapes([]); setEditingAnnotationId(null) }
+                startDrawing()
+              }
+            }}
             disabled={isDisabled}
             title={isDisabled ? 'Coaches only' : undefined}
             style={{
@@ -562,6 +591,31 @@ export default function GamePage({ params }: Props) {
             {ann.profiles.display_name}
           </span>
         )}
+        {ann.label === 'tactical' && ann.shapes?.length && isCoach && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              seekTo(ann.timestamp_sec)
+              pauseVideo()
+              setSelectedLabel('tactical')
+              setMarkIn(ann.timestamp_sec)
+              setDraftShapes(ann.shapes ?? [])
+              setHoldSec(ann.shapes_hold_sec ?? 0)
+              setAutoResumeSec(ann.auto_resume_sec ?? 0)
+              setEditingAnnotationId(ann.id)
+              setDrawTool('select')
+              setIsDrawing(true)
+              if (isMobile) setShowAnnotations(false)
+            }}
+            style={{
+              fontSize: 10, color: '#0f2972', fontWeight: 600,
+              background: 'none', border: 'none',
+              cursor: 'pointer', padding: '2px 4px', flexShrink: 0,
+            }}
+          >
+            Edit
+          </button>
+        )}
         {(isCoach || ann.user_id === userId) && (
           <button
             onClick={(e) => { e.stopPropagation(); handleDelete(ann.id) }}
@@ -669,6 +723,12 @@ export default function GamePage({ params }: Props) {
                 allowFullScreen
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               />
+              {pausedAnnotationId && (
+                <div style={{
+                  position: 'absolute', inset: 0,
+                  background: 'rgba(9, 29, 82, 0.68)', pointerEvents: 'none',
+                }} />
+              )}
               <AnnotationCanvas
                 shapes={activeTacticalShapes}
                 editable={isDrawing}
@@ -965,6 +1025,12 @@ export default function GamePage({ params }: Props) {
                 allowFullScreen
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               />
+              {pausedAnnotationId && (
+                <div style={{
+                  position: 'absolute', inset: 0,
+                  background: 'rgba(9, 29, 82, 0.68)', pointerEvents: 'none',
+                }} />
+              )}
               <AnnotationCanvas
                 shapes={activeTacticalShapes}
                 editable={isDrawing}
@@ -1043,7 +1109,7 @@ export default function GamePage({ params }: Props) {
                         canUndo={draftShapes.length > 0}
                         onUndo={() => setDraftShapes(prev => prev.slice(0, -1))}
                         onClear={() => setDraftShapes([])}
-                        onDone={() => { setIsDrawing(false); setDrawTool('select') }}
+                        onDone={() => { setIsDrawing(false); setDrawTool('select'); setEditingAnnotationId(null); setMarkIn(null) }}
                       />
                       <div style={{
                         display: 'flex', alignItems: 'center', gap: 6,
@@ -1088,7 +1154,7 @@ export default function GamePage({ params }: Props) {
                         color: '#0f2972', cursor: 'pointer',
                       }}
                     >
-                      Draw on frame
+                      {draftShapes.length > 0 ? 'Resume editing' : 'Add tactical drawing'}
                     </button>
                   )}
                 </div>
@@ -1121,7 +1187,7 @@ export default function GamePage({ params }: Props) {
                       cursor: markIn !== null ? 'pointer' : 'default',
                     }}
                   >
-                    Save annotation
+                    {editingAnnotationId ? 'Save changes' : 'Save annotation'}
                   </button>
                 </div>
               ) : (

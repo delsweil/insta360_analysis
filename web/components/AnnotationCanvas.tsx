@@ -1,17 +1,16 @@
 'use client'
 
 // components/AnnotationCanvas.tsx
-// Draws/plays back spatial tactical shapes (zones, arrows, labels, highlights)
-// layered over the YouTube iframe. Hand-rolled Canvas 2D, matching
-// PitchCanvas.tsx's conventions — normalized 0..1 coords instead of
-// PitchCanvas's image-pixel coords (no "natural size" for a live video
-// overlay watched on different screens).
+// Hand-rolled Canvas 2D overlay (no drawing library) — normalized 0..1
+// coords, resolution-independent between editor and playback.
 
 import { useRef, useEffect, useCallback, useState } from 'react'
 import ShapeSettingsPanel from './ShapeSettingsPanel'
 
-export type NPoint = [number, number] // normalized 0..1, relative to video frame
+export type NPoint = [number, number]
 export type DashStyle = 'solid' | 'dashed' | 'dotted'
+export type CurveStyle = 'pass' | 'dribble'
+export type HighlightStyle = 'circle' | 'spotlight'
 
 interface StyleProps {
   color: string
@@ -20,12 +19,13 @@ interface StyleProps {
 }
 
 export type Shape =
-  | ({ id: string; type: 'zone'; points: NPoint[] } & StyleProps) // 4 corners, filled quad
-  | ({ id: string; type: 'arrow'; from: NPoint; to: NPoint } & StyleProps)
+  | ({ id: string; type: 'zone'; points: NPoint[] } & StyleProps) // freeform polygon, 3+ points
+  | ({ id: string; type: 'curve'; from: NPoint; control: NPoint; to: NPoint; style: CurveStyle } & StyleProps) // bezier pass/dribble line
   | { id: string; type: 'label'; pos: NPoint; text: string; color: string }
-  | ({ id: string; type: 'highlight'; pos: NPoint; radius: number; playerName?: string } & StyleProps) // spotlight circle on a player
+  | ({ id: string; type: 'highlight'; pos: NPoint; radiusX: number; radiusY: number; style: HighlightStyle; playerName?: string } & StyleProps)
+  | { id: string; type: 'number'; pos: NPoint; value: number; color: string }
 
-export type Tool = 'select' | 'zone' | 'arrow' | 'label' | 'highlight'
+export type Tool = 'select' | 'zone' | 'curve' | 'label' | 'highlight' | 'number'
 
 interface AnnotationCanvasProps {
   shapes: Shape[]
@@ -34,14 +34,13 @@ interface AnnotationCanvasProps {
   onAddShape: (s: Shape) => void
   onUpdateShape: (id: string, patch: Partial<Shape>) => void
   onRemoveShape: (id: string) => void
-  /** Called instead of a browser prompt() when the label tool places a point — lets the page render its own inline input. */
   onRequestLabelText?: (pos: NPoint) => void
 }
 
-const DEFAULTS: Record<'zone' | 'arrow' | 'highlight', StyleProps> = {
-  zone:      { color: '#4ade80', opacity: 0.3, dash: 'solid' },
-  arrow:     { color: '#ffffff', opacity: 1,   dash: 'solid' },
-  highlight: { color: '#facc15', opacity: 0.8, dash: 'dashed' },
+const DEFAULTS = {
+  zone: { color: '#4ade80', opacity: 0.3, dash: 'solid' as DashStyle },
+  curve: { color: '#ffffff', opacity: 1, dash: 'solid' as DashStyle, style: 'pass' as CurveStyle },
+  highlight: { color: '#facc15', opacity: 0.85, dash: 'solid' as DashStyle, style: 'circle' as HighlightStyle },
 }
 const LABEL_COLOR = '#ffffff'
 const HANDLE_RADIUS = 7
@@ -51,12 +50,7 @@ function setDash(ctx: CanvasRenderingContext2D, dash: DashStyle) {
   else if (dash === 'dotted') ctx.setLineDash([3, 7])
   else ctx.setLineDash([])
 }
-
-function dist2(ax: number, ay: number, bx: number, by: number) {
-  return (ax - bx) ** 2 + (ay - by) ** 2
-}
-
-// distance from point p to segment ab, squared
+function dist2(ax: number, ay: number, bx: number, by: number) { return (ax - bx) ** 2 + (ay - by) ** 2 }
 function distToSegment2(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
   const l2 = dist2(ax, ay, bx, by)
   if (l2 === 0) return dist2(px, py, ax, ay)
@@ -64,54 +58,51 @@ function distToSegment2(px: number, py: number, ax: number, ay: number, bx: numb
   t = Math.max(0, Math.min(1, t))
   return dist2(px, py, ax + t * (bx - ax), ay + t * (by - ay))
 }
-
 function pointInPolygon(px: number, py: number, pts: [number, number][]) {
   let inside = false
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-    const [xi, yi] = pts[i]
-    const [xj, yj] = pts[j]
+    const [xi, yi] = pts[i]; const [xj, yj] = pts[j]
     const intersect = yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi
     if (intersect) inside = !inside
   }
   return inside
+}
+function bezierPoint(t: number, p0: [number, number], p1: [number, number], p2: [number, number]) {
+  const x = (1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * p1[0] + t ** 2 * p2[0]
+  const y = (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * p1[1] + t ** 2 * p2[1]
+  return [x, y] as [number, number]
 }
 
 export default function AnnotationCanvas({
   shapes, editable, tool,
   onAddShape, onUpdateShape, onRemoveShape, onRequestLabelText,
 }: AnnotationCanvasProps) {
-  const canvasRef    = useRef<HTMLCanvasElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const draftPoints  = useRef<NPoint[]>([]) // in-progress zone/arrow points
-  const dragTarget   = useRef<{ shapeId: string; handle: 'from' | 'to' | 'move' | 'resize' | number } | null>(null)
-  const dragStartOffset = useRef<NPoint>([0, 0]) // for whole-shape moves
+  const draftPoints = useRef<NPoint[]>([]) // in-progress zone/curve points
+  const dragTarget = useRef<{ shapeId: string; handle: string | number } | null>(null)
+  const dragStartOffset = useRef<NPoint>([0, 0])
+  const numberCounter = useRef(1)
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selectedShape = shapes.find(s => s.id === selectedId) ?? null
 
-  // ── coordinate helpers ──────────────────────────────────────────
   const toCanvas = useCallback((p: NPoint): [number, number] => {
-    const c = canvasRef.current
-    if (!c) return [0, 0]
+    const c = canvasRef.current; if (!c) return [0, 0]
     return [p[0] * c.width, p[1] * c.height]
   }, [])
-
   const toNorm = useCallback((cx: number, cy: number): NPoint => {
-    const c = canvasRef.current
-    if (!c) return [0, 0]
+    const c = canvasRef.current; if (!c) return [0, 0]
     return [cx / c.width, cy / c.height]
   }, [])
-
   const xy = (e: React.MouseEvent<HTMLCanvasElement>): [number, number] => {
     const r = canvasRef.current!.getBoundingClientRect()
     const scale = canvasRef.current!.width / r.width
     return [(e.clientX - r.left) * scale, (e.clientY - r.top) * scale]
   }
 
-  // ── draw ─────────────────────────────────────────────────────────
   const draw = useCallback(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+    const canvas = canvasRef.current; if (!canvas) return
     const ctx = canvas.getContext('2d')!
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
@@ -134,23 +125,11 @@ export default function AnnotationCanvas({
         ctx.lineWidth = isSelected ? 3 : 2
         ctx.stroke()
         ctx.restore()
-
-        if (editable) {
-          cpts.forEach(([x, y]) => {
-            ctx.beginPath()
-            ctx.arc(x, y, HANDLE_RADIUS, 0, Math.PI * 2)
-            ctx.fillStyle = '#fff'
-            ctx.fill()
-            ctx.strokeStyle = s.color
-            ctx.lineWidth = 1.5
-            ctx.stroke()
-          })
-        }
+        if (editable) cpts.forEach(([x, y]) => drawHandle(ctx, x, y, s.color))
       }
 
-      if (s.type === 'arrow') {
-        const [fx, fy] = toCanvas(s.from)
-        const [tx, ty] = toCanvas(s.to)
+      if (s.type === 'curve') {
+        const p0 = toCanvas(s.from), p1 = toCanvas(s.control), p2 = toCanvas(s.to)
         ctx.save()
         ctx.globalAlpha = s.opacity
         ctx.shadowColor = 'rgba(0,0,0,0.6)'
@@ -159,13 +138,36 @@ export default function AnnotationCanvas({
         ctx.lineWidth = isSelected ? 6 : 4
         ctx.lineCap = 'round'
         setDash(ctx, s.dash)
-        ctx.beginPath()
-        ctx.moveTo(fx, fy)
-        ctx.lineTo(tx, ty)
-        ctx.stroke()
+
+        if (s.style === 'dribble') {
+          // sample the bezier and draw a wavy line by offsetting perpendicular to the path
+          const N = 40, amp = Math.max(4, canvas.width * 0.008)
+          ctx.beginPath()
+          for (let i = 0; i <= N; i++) {
+            const t = i / N
+            const [x, y] = bezierPoint(t, p0, p1, p2)
+            const [xa, ya] = bezierPoint(Math.max(0, t - 0.01), p0, p1, p2)
+            const [xb, yb] = bezierPoint(Math.min(1, t + 0.01), p0, p1, p2)
+            const dx = xb - xa, dy = yb - ya
+            const len = Math.hypot(dx, dy) || 1
+            const nx = -dy / len, ny = dx / len
+            const off = Math.sin(t * Math.PI * 8) * amp
+            const px = x + nx * off, py = y + ny * off
+            i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+          }
+          ctx.stroke()
+        } else {
+          ctx.beginPath()
+          ctx.moveTo(p0[0], p0[1])
+          ctx.quadraticCurveTo(p1[0], p1[1], p2[0], p2[1])
+          ctx.stroke()
+        }
         ctx.setLineDash([])
 
-        const angle = Math.atan2(ty - fy, tx - fx)
+        // arrowhead at the end, angled along the curve's final tangent
+        const [tx, ty] = p2
+        const [nearEndX, nearEndY] = bezierPoint(0.92, p0, p1, p2)
+        const angle = Math.atan2(ty - nearEndY, tx - nearEndX)
         const head = 14
         ctx.beginPath()
         ctx.moveTo(tx, ty)
@@ -177,28 +179,41 @@ export default function AnnotationCanvas({
         ctx.restore()
 
         if (editable) {
-          for (const [x, y] of [[fx, fy], [tx, ty]] as [number, number][]) {
-            ctx.beginPath()
-            ctx.arc(x, y, HANDLE_RADIUS, 0, Math.PI * 2)
-            ctx.fillStyle = '#fff'
-            ctx.fill()
-            ctx.strokeStyle = '#0f2972'
-            ctx.lineWidth = 1.5
-            ctx.stroke()
-          }
+          drawHandle(ctx, p0[0], p0[1], s.color)
+          drawHandle(ctx, p2[0], p2[1], s.color)
+          drawHandle(ctx, p1[0], p1[1], '#a78bfa') // control point, distinct color
         }
       }
 
       if (s.type === 'highlight') {
         const [x, y] = toCanvas(s.pos)
-        const r = s.radius * canvas.width
+        const rx = s.radiusX * canvas.width
+        const ry = s.radiusY * canvas.height
+
+        if (s.style === 'spotlight') {
+          ctx.save()
+          const grad = ctx.createLinearGradient(0, 0, 0, y)
+          grad.addColorStop(0, `${s.color}00`)
+          grad.addColorStop(1, `${s.color}55`)
+          ctx.fillStyle = grad
+          const topHalfWidth = rx * 0.35
+          ctx.beginPath()
+          ctx.moveTo(x - topHalfWidth, 0)
+          ctx.lineTo(x + topHalfWidth, 0)
+          ctx.lineTo(x + rx, y)
+          ctx.lineTo(x - rx, y)
+          ctx.closePath()
+          ctx.fill()
+          ctx.restore()
+        }
+
         ctx.save()
         ctx.globalAlpha = s.opacity
         setDash(ctx, s.dash)
         ctx.strokeStyle = s.color
         ctx.lineWidth = isSelected ? 4 : 3
         ctx.beginPath()
-        ctx.arc(x, y, r, 0, Math.PI * 2)
+        ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2)
         ctx.stroke()
         ctx.restore()
 
@@ -207,31 +222,17 @@ export default function AnnotationCanvas({
           ctx.font = `700 ${fontSize}px 'DM Sans', sans-serif`
           ctx.fillStyle = 'rgba(0,0,0,0.6)'
           const w = ctx.measureText(s.playerName).width
-          ctx.fillRect(x - w / 2 - 5, y + r + 4, w + 10, fontSize + 6)
+          ctx.fillRect(x - w / 2 - 5, y + ry + 4, w + 10, fontSize + 6)
           ctx.fillStyle = '#fff'
-          ctx.textAlign = 'center'
-          ctx.textBaseline = 'top'
-          ctx.fillText(s.playerName, x, y + r + 7)
+          ctx.textAlign = 'center'; ctx.textBaseline = 'top'
+          ctx.fillText(s.playerName, x, y + ry + 7)
           ctx.textAlign = 'left'
         }
 
         if (editable) {
-          // move handle (center) + resize handle (right edge of circle)
-          ctx.beginPath()
-          ctx.arc(x, y, HANDLE_RADIUS, 0, Math.PI * 2)
-          ctx.fillStyle = '#fff'
-          ctx.fill()
-          ctx.strokeStyle = s.color
-          ctx.lineWidth = 1.5
-          ctx.stroke()
-
-          ctx.beginPath()
-          ctx.arc(x + r, y, HANDLE_RADIUS, 0, Math.PI * 2)
-          ctx.fillStyle = '#fff'
-          ctx.fill()
-          ctx.strokeStyle = s.color
-          ctx.lineWidth = 1.5
-          ctx.stroke()
+          drawHandle(ctx, x, y, s.color) // move
+          drawHandle(ctx, x + rx, y, s.color) // width
+          drawHandle(ctx, x, y + ry, s.color) // height
         }
       }
 
@@ -246,60 +247,73 @@ export default function AnnotationCanvas({
         ctx.textBaseline = 'top'
         ctx.fillText(s.text, x, y - fontSize + 5)
       }
+
+      if (s.type === 'number') {
+        const [x, y] = toCanvas(s.pos)
+        const r = Math.max(12, canvas.height * 0.022)
+        ctx.beginPath()
+        ctx.arc(x, y, r, 0, Math.PI * 2)
+        ctx.fillStyle = s.color
+        ctx.fill()
+        ctx.strokeStyle = '#fff'
+        ctx.lineWidth = 2
+        ctx.stroke()
+        ctx.fillStyle = '#fff'
+        ctx.font = `700 ${r}px 'DM Sans', sans-serif`
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+        ctx.fillText(String(s.value), x, y + 1)
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'
+      }
     }
 
-    // in-progress zone preview
+    // in-progress previews
     if (editable && tool === 'zone' && draftPoints.current.length > 0) {
-      draftPoints.current.forEach(p => {
-        const [x, y] = toCanvas(p)
-        ctx.beginPath()
-        ctx.arc(x, y, HANDLE_RADIUS, 0, Math.PI * 2)
-        ctx.fillStyle = DEFAULTS.zone.color
-        ctx.fill()
-      })
-    }
-    // in-progress arrow start marker
-    if (editable && tool === 'arrow' && draftPoints.current.length === 1) {
-      const [x, y] = toCanvas(draftPoints.current[0])
+      const cpts = draftPoints.current.map(toCanvas)
       ctx.beginPath()
-      ctx.arc(x, y, HANDLE_RADIUS, 0, Math.PI * 2)
-      ctx.fillStyle = DEFAULTS.arrow.color
-      ctx.fill()
+      cpts.forEach(([x, y], i) => i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y))
+      ctx.strokeStyle = DEFAULTS.zone.color
+      ctx.lineWidth = 2
+      ctx.setLineDash([6, 6])
+      ctx.stroke()
+      ctx.setLineDash([])
+      cpts.forEach(([x, y]) => drawHandle(ctx, x, y, DEFAULTS.zone.color))
+    }
+    if (editable && tool === 'curve' && draftPoints.current.length === 1) {
+      const [x, y] = toCanvas(draftPoints.current[0])
+      drawHandle(ctx, x, y, DEFAULTS.curve.color)
     }
   }, [shapes, editable, tool, selectedId, toCanvas])
 
-  // resize canvas to match container, same pattern as PitchCanvas
+  function drawHandle(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) {
+    ctx.beginPath()
+    ctx.arc(x, y, HANDLE_RADIUS, 0, Math.PI * 2)
+    ctx.fillStyle = '#fff'
+    ctx.fill()
+    ctx.strokeStyle = color
+    ctx.lineWidth = 1.5
+    ctx.stroke()
+  }
+
   useEffect(() => {
-    const container = containerRef.current
-    const canvas = canvasRef.current
+    const container = containerRef.current, canvas = canvasRef.current
     if (!container || !canvas) return
-    const resize = () => {
-      canvas.width = container.clientWidth
-      canvas.height = container.clientHeight
-      draw()
-    }
+    const resize = () => { canvas.width = container.clientWidth; canvas.height = container.clientHeight; draw() }
     resize()
     const ro = new ResizeObserver(resize)
     ro.observe(container)
     return () => ro.disconnect()
   }, [draw])
-
   useEffect(() => { draw() }, [draw])
-
-  // reset in-progress drawing whenever the active tool changes; deselect too
+  useEffect(() => { draftPoints.current = []; if (tool !== 'select') setSelectedId(null) }, [tool])
+  useEffect(() => { if (selectedId && !shapes.find(s => s.id === selectedId)) setSelectedId(null) }, [shapes, selectedId])
   useEffect(() => {
-    draftPoints.current = []
-    if (tool !== 'select') setSelectedId(null)
-  }, [tool])
-
-  // deselect if the shape we had selected got removed/changed lists
-  useEffect(() => {
-    if (selectedId && !shapes.find(s => s.id === selectedId)) setSelectedId(null)
-  }, [shapes, selectedId])
+    const maxNum = shapes.filter((s): s is Extract<Shape, { type: 'number' }> => s.type === 'number')
+      .reduce((m, s) => Math.max(m, s.value), 0)
+    numberCounter.current = maxNum + 1
+  }, [shapes])
 
   const uid = () => Math.random().toString(36).slice(2, 10)
 
-  // hit-test handles first (for dragging), for select tool
   const hitHandle = useCallback((cx: number, cy: number) => {
     const c = canvasRef.current!
     const scale = c.width / c.getBoundingClientRect().width
@@ -311,23 +325,23 @@ export default function AnnotationCanvas({
           if (dist2(x, y, cx, cy) <= t2) return { shapeId: s.id, handle: i }
         }
       }
-      if (s.type === 'arrow') {
-        const [fx, fy] = toCanvas(s.from)
-        const [tx, ty] = toCanvas(s.to)
-        if (dist2(fx, fy, cx, cy) <= t2) return { shapeId: s.id, handle: 'from' as const }
-        if (dist2(tx, ty, cx, cy) <= t2) return { shapeId: s.id, handle: 'to' as const }
+      if (s.type === 'curve') {
+        const [fx, fy] = toCanvas(s.from), [tx, ty] = toCanvas(s.to), [cx2, cy2] = toCanvas(s.control)
+        if (dist2(fx, fy, cx, cy) <= t2) return { shapeId: s.id, handle: 'from' }
+        if (dist2(tx, ty, cx, cy) <= t2) return { shapeId: s.id, handle: 'to' }
+        if (dist2(cx2, cy2, cx, cy) <= t2) return { shapeId: s.id, handle: 'control' }
       }
       if (s.type === 'highlight') {
         const [x, y] = toCanvas(s.pos)
-        const r = s.radius * c.width
-        if (dist2(x, y, cx, cy) <= t2) return { shapeId: s.id, handle: 'move' as const }
-        if (dist2(x + r, y, cx, cy) <= t2) return { shapeId: s.id, handle: 'resize' as const }
+        const rx = s.radiusX * c.width, ry = s.radiusY * c.height
+        if (dist2(x, y, cx, cy) <= t2) return { shapeId: s.id, handle: 'move' }
+        if (dist2(x + rx, y, cx, cy) <= t2) return { shapeId: s.id, handle: 'radiusX' }
+        if (dist2(x, y + ry, cx, cy) <= t2) return { shapeId: s.id, handle: 'radiusY' }
       }
     }
     return null
   }, [shapes, toCanvas])
 
-  // hit-test shape bodies (for click-to-select, when not on a handle)
   const hitBody = useCallback((cx: number, cy: number): string | null => {
     const c = canvasRef.current!
     for (let i = shapes.length - 1; i >= 0; i--) {
@@ -336,68 +350,53 @@ export default function AnnotationCanvas({
         const cpts = s.points.map(toCanvas)
         if (pointInPolygon(cx, cy, cpts)) return s.id
       }
-      if (s.type === 'arrow') {
-        const [fx, fy] = toCanvas(s.from)
-        const [tx, ty] = toCanvas(s.to)
+      if (s.type === 'curve') {
+        const p0 = toCanvas(s.from), p1 = toCanvas(s.control), p2 = toCanvas(s.to)
         const scale = c.width / c.getBoundingClientRect().width
-        if (distToSegment2(cx, cy, fx, fy, tx, ty) <= (10 * scale) ** 2) return s.id
+        for (let t = 0; t <= 1; t += 0.05) {
+          const [x, y] = bezierPoint(t, p0, p1, p2)
+          if (dist2(x, y, cx, cy) <= (10 * scale) ** 2) return s.id
+        }
       }
       if (s.type === 'highlight') {
         const [x, y] = toCanvas(s.pos)
-        const r = s.radius * c.width
-        const d2 = dist2(x, y, cx, cy)
-        if (d2 <= r * r) return s.id
+        const rx = s.radiusX * c.width, ry = s.radiusY * c.height
+        const nx = (cx - x) / rx, ny = (cy - y) / ry
+        if (nx * nx + ny * ny <= 1) return s.id
       }
-      if (s.type === 'label') {
+      if (s.type === 'label' || s.type === 'number') {
         const [x, y] = toCanvas(s.pos)
-        const ctx = c.getContext('2d')!
-        const fontSize = Math.max(14, c.height * 0.035)
-        ctx.font = `700 ${fontSize}px 'DM Sans', sans-serif`
-        const w = ctx.measureText(s.text).width
-        if (cx >= x - 6 && cx <= x + w + 6 && cy >= y - fontSize && cy <= y + 10) return s.id
+        if (dist2(x, y, cx, cy) <= (25 * (c.width / c.getBoundingClientRect().width)) ** 2) return s.id
       }
     }
     return null
   }, [shapes, toCanvas])
 
   return (
-    <div
-      ref={containerRef}
-      style={{
-        position: 'absolute', inset: 0,
-        // Always 'auto', not just while editing: the mouse must never
-        // actually reach the cross-origin iframe underneath, or YouTube's
-        // own hover-triggered play/pause overlay activates regardless of
-        // the controls=0 URL parameter (a real limitation of their embed,
-        // not something fixable via config). Clicks are effectively
-        // swallowed harmlessly here when !editable, since the mouse
-        // handlers below all early-return in that case — the app's own
-        // custom scrubber/controls remain the way to control playback.
-        pointerEvents: 'auto',
-      }}
-    >
+    <div ref={containerRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'auto' }}>
       <canvas
         ref={canvasRef}
         style={{ display: 'block', width: '100%', height: '100%', cursor: editable && tool !== 'select' ? 'crosshair' : 'default' }}
+        onDoubleClick={() => {
+          if (!editable || tool !== 'zone' || draftPoints.current.length < 3) return
+          onAddShape({ id: uid(), type: 'zone', points: draftPoints.current, ...DEFAULTS.zone })
+          draftPoints.current = []
+          draw()
+        }}
         onMouseDown={e => {
           if (!editable) return
           const [cx, cy] = xy(e)
 
           if (tool === 'select') {
             const handleHit = hitHandle(cx, cy)
-            if (handleHit) {
-              dragTarget.current = handleHit
-              setSelectedId(handleHit.shapeId)
-              return
-            }
+            if (handleHit) { dragTarget.current = handleHit; setSelectedId(handleHit.shapeId); return }
             const bodyHit = hitBody(cx, cy)
             setSelectedId(bodyHit)
             if (bodyHit) {
               const shape = shapes.find(s => s.id === bodyHit)!
               const p = toNorm(cx, cy)
-              const anchor = shape.type === 'highlight' || shape.type === 'label' ? shape.pos
-                : shape.type === 'arrow' ? shape.from
-                : shape.points[0]
+              const anchor = shape.type === 'highlight' || shape.type === 'label' || shape.type === 'number' ? shape.pos
+                : shape.type === 'curve' ? shape.from : shape.points[0]
               dragStartOffset.current = [p[0] - anchor[0], p[1] - anchor[1]]
               dragTarget.current = { shapeId: bodyHit, handle: 'move' }
             }
@@ -405,39 +404,39 @@ export default function AnnotationCanvas({
           }
 
           if (tool === 'zone') {
-            const p = toNorm(cx, cy)
-            draftPoints.current = [...draftPoints.current, p]
-            if (draftPoints.current.length === 4) {
-              onAddShape({ id: uid(), type: 'zone', points: draftPoints.current, ...DEFAULTS.zone })
-              draftPoints.current = []
-            }
+            draftPoints.current = [...draftPoints.current, toNorm(cx, cy)]
             draw()
             return
           }
 
-          if (tool === 'arrow') {
+          if (tool === 'curve') {
             const p = toNorm(cx, cy)
-            if (draftPoints.current.length === 0) {
-              draftPoints.current = [p]
-            } else {
-              onAddShape({ id: uid(), type: 'arrow', from: draftPoints.current[0], to: p, ...DEFAULTS.arrow })
+            if (draftPoints.current.length === 0) { draftPoints.current = [p]; draw() }
+            else {
+              const from = draftPoints.current[0]
+              const control: NPoint = [(from[0] + p[0]) / 2, (from[1] + p[1]) / 2]
+              onAddShape({ id: uid(), type: 'curve', from, control, to: p, ...DEFAULTS.curve })
               draftPoints.current = []
             }
-            draw()
             return
           }
 
           if (tool === 'highlight') {
             const p = toNorm(cx, cy)
-            onAddShape({ id: uid(), type: 'highlight', pos: p, radius: 0.05, ...DEFAULTS.highlight })
+            onAddShape({ id: uid(), type: 'highlight', pos: p, radiusX: 0.05, radiusY: 0.07, ...DEFAULTS.highlight })
+            return
+          }
+
+          if (tool === 'number') {
+            const p = toNorm(cx, cy)
+            onAddShape({ id: uid(), type: 'number', pos: p, value: numberCounter.current, color: '#0f2972' })
             return
           }
 
           if (tool === 'label') {
             const p = toNorm(cx, cy)
-            if (onRequestLabelText) {
-              onRequestLabelText(p)
-            } else {
+            if (onRequestLabelText) onRequestLabelText(p)
+            else {
               const text = window.prompt('Label text')
               if (text) onAddShape({ id: uid(), type: 'label', pos: p, text, color: LABEL_COLOR })
             }
@@ -452,32 +451,35 @@ export default function AnnotationCanvas({
           if (!shape) return
 
           if (shape.type === 'zone' && typeof handle === 'number') {
-            const points = [...shape.points]
-            points[handle] = p
+            const points = [...shape.points]; points[handle] = p
             onUpdateShape(shapeId, { points } as Partial<Shape>)
-          }
-          if (shape.type === 'arrow' && (handle === 'from' || handle === 'to')) {
-            onUpdateShape(shapeId, { [handle]: p } as Partial<Shape>)
-          }
-          if (shape.type === 'highlight' && handle === 'move') {
-            onUpdateShape(shapeId, { pos: [p[0] - dragStartOffset.current[0], p[1] - dragStartOffset.current[1]] } as Partial<Shape>)
-          }
-          if (shape.type === 'highlight' && handle === 'resize') {
-            const r = Math.max(0.015, p[0] - shape.pos[0])
-            onUpdateShape(shapeId, { radius: r } as Partial<Shape>)
-          }
-          if ((shape.type === 'label') && handle === 'move') {
-            onUpdateShape(shapeId, { pos: [p[0] - dragStartOffset.current[0], p[1] - dragStartOffset.current[1]] } as Partial<Shape>)
           }
           if (shape.type === 'zone' && handle === 'move') {
             const dx = p[0] - dragStartOffset.current[0] - shape.points[0][0]
             const dy = p[1] - dragStartOffset.current[1] - shape.points[0][1]
             onUpdateShape(shapeId, { points: shape.points.map(([x, y]) => [x + dx, y + dy]) } as Partial<Shape>)
           }
-          if (shape.type === 'arrow' && handle === 'move') {
-            const dx = p[0] - dragStartOffset.current[0] - shape.from[0]
-            const dy = p[1] - dragStartOffset.current[1] - shape.from[1]
-            onUpdateShape(shapeId, { from: [shape.from[0] + dx, shape.from[1] + dy], to: [shape.to[0] + dx, shape.to[1] + dy] } as Partial<Shape>)
+          if (shape.type === 'curve') {
+            if (handle === 'from') onUpdateShape(shapeId, { from: p } as Partial<Shape>)
+            if (handle === 'to') onUpdateShape(shapeId, { to: p } as Partial<Shape>)
+            if (handle === 'control') onUpdateShape(shapeId, { control: p } as Partial<Shape>)
+            if (handle === 'move') {
+              const dx = p[0] - dragStartOffset.current[0] - shape.from[0]
+              const dy = p[1] - dragStartOffset.current[1] - shape.from[1]
+              onUpdateShape(shapeId, {
+                from: [shape.from[0] + dx, shape.from[1] + dy],
+                to: [shape.to[0] + dx, shape.to[1] + dy],
+                control: [shape.control[0] + dx, shape.control[1] + dy],
+              } as Partial<Shape>)
+            }
+          }
+          if (shape.type === 'highlight') {
+            if (handle === 'move') onUpdateShape(shapeId, { pos: [p[0] - dragStartOffset.current[0], p[1] - dragStartOffset.current[1]] } as Partial<Shape>)
+            if (handle === 'radiusX') onUpdateShape(shapeId, { radiusX: Math.max(0.015, p[0] - shape.pos[0]) } as Partial<Shape>)
+            if (handle === 'radiusY') onUpdateShape(shapeId, { radiusY: Math.max(0.015, p[1] - shape.pos[1]) } as Partial<Shape>)
+          }
+          if ((shape.type === 'label' || shape.type === 'number') && handle === 'move') {
+            onUpdateShape(shapeId, { pos: [p[0] - dragStartOffset.current[0], p[1] - dragStartOffset.current[1]] } as Partial<Shape>)
           }
         }}
         onMouseUp={() => { dragTarget.current = null }}
