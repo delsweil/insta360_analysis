@@ -29,6 +29,7 @@ export type Annotation = {
   shapes?: Shape[] | null   // NEW
   shapes_hold_sec?: number | null
   auto_resume_sec?: number | null
+  context_start_sec?: number | null
   is_public: boolean
   created_at: string
   profiles?: {

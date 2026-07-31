@@ -11,6 +11,7 @@ import AnnotationFilter, { type FilterState, ALL_FILTERS, passesFilter } from '@
 import ClipRecorder from '@/components/ClipRecorder'
 import AnnotationCanvas, { type Shape, type Tool, type AnnotationCanvasHandle } from '@/components/AnnotationCanvas'
 import RecordExportButton from '@/components/RecordExportButton'
+import TrimStrip from '@/components/TrimStrip'
 import DrawTools from '@/components/DrawTools'
 
 function formatTime(sec: number) {
@@ -68,6 +69,7 @@ export default function GamePage({ params }: Props) {
   const [pausedAnnotationId, setPausedAnnotationId] = useState<string | null>(null)
   const [holdSec, setHoldSec] = useState(0) // grace period (seconds of playback) before shapes hide after resume
   const [autoResumeSec, setAutoResumeSec] = useState(0) // seconds to stay paused before auto-resuming on its own (0 = wait for manual play)
+  const [contextStartSec, setContextStartSec] = useState<number | null>(null) // absolute video time the scene should start from when jumped to
   const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null)
   const resumeAnchorRef = useRef<number | null>(null)
   const autoResumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -201,6 +203,15 @@ export default function GamePage({ params }: Props) {
     )
   }, [])
 
+  // Moves the frame without forcing playback — used for live-scrubbing the
+  // preview while dragging the trim handle, since the video should stay
+  // paused (we're mid-edit) rather than start playing on every drag tick.
+  const scrubTo = useCallback((sec: number) => {
+    playerRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'seekTo', args: [sec, true] }), '*'
+    )
+  }, [])
+
   const pauseVideo = useCallback(() => {
     playerRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*'
@@ -213,12 +224,15 @@ export default function GamePage({ params }: Props) {
     )
   }, [])
 
+  const jumpSecFor = (ann: Annotation) =>
+    ann.label === 'tactical' && ann.context_start_sec != null ? ann.context_start_sec : ann.timestamp_sec
+
   const startReelForRecording = useCallback(() => {
     if (filteredAnnotations.length === 0) return
     reelStartedRef.current = true
     setReelFinished(false)
     setReelIdx(0)
-    seekTo(Math.max(0, filteredAnnotations[0].timestamp_sec - REEL_PRE_ROLL_SEC))
+    seekTo(Math.max(0, jumpSecFor(filteredAnnotations[0]) - REEL_PRE_ROLL_SEC))
     setReelAutoPlay(true)
   }, [filteredAnnotations, seekTo])
 
@@ -234,7 +248,7 @@ export default function GamePage({ params }: Props) {
       const nextIdx = reelIdx + 1
       if (nextIdx < filteredAnnotations.length) {
         setReelIdx(nextIdx)
-        seekTo(Math.max(0, filteredAnnotations[nextIdx].timestamp_sec - REEL_PRE_ROLL_SEC))
+        seekTo(Math.max(0, jumpSecFor(filteredAnnotations[nextIdx]) - REEL_PRE_ROLL_SEC))
       } else {
         setReelAutoPlay(false)
         // Signals "this pass is done" — RecordExportButton watches this and
@@ -391,6 +405,7 @@ export default function GamePage({ params }: Props) {
           shapes: draftShapes.length ? draftShapes : null,
           shapes_hold_sec: draftShapes.length ? holdSec : null,
           auto_resume_sec: draftShapes.length ? autoResumeSec : null,
+          context_start_sec: draftShapes.length ? contextStartSec : null,
           note: note.trim() || null,
         })
         .eq('id', editingAnnotationId)
@@ -413,6 +428,7 @@ export default function GamePage({ params }: Props) {
           shapes: draftShapes.length ? draftShapes : null,
           shapes_hold_sec: draftShapes.length ? holdSec : null,
           auto_resume_sec: draftShapes.length ? autoResumeSec : null,
+          context_start_sec: draftShapes.length ? contextStartSec : null,
           is_public: true,
         })
         .select('*, profiles(display_name)')
@@ -433,10 +449,11 @@ export default function GamePage({ params }: Props) {
     setIsDrawing(false)
     setHoldSec(0)
     setAutoResumeSec(0)
+    setContextStartSec(null)
     setEditingAnnotationId(null)
     setNote('')
     setSaving(false)
-  }, [saving, markIn, currentTime, selectedLabel, note, draftShapes, holdSec, autoResumeSec, editingAnnotationId, id])
+  }, [saving, markIn, currentTime, selectedLabel, note, draftShapes, holdSec, autoResumeSec, contextStartSec, editingAnnotationId, id])
 
   const handleDelete = useCallback(async (annId: string) => {
     await supabase.from('annotations').delete().eq('id', annId)
@@ -541,7 +558,11 @@ export default function GamePage({ params }: Props) {
         return (
           <div
             key={ann.id}
-            onClick={(e) => { e.stopPropagation(); seekTo(ann.timestamp_sec) }}
+            onClick={(e) => {
+              e.stopPropagation()
+              const jumpSec = ann.label === 'tactical' && ann.context_start_sec != null ? ann.context_start_sec : ann.timestamp_sec
+              seekTo(jumpSec)
+            }}
             style={{
               position: 'absolute', top: '50%',
               transform: 'translate(-50%, -50%)',
@@ -574,7 +595,8 @@ export default function GamePage({ params }: Props) {
         cursor: 'pointer',
       }}
       onClick={() => {
-        seekTo(ann.timestamp_sec)
+        const jumpSec = ann.label === 'tactical' && ann.context_start_sec != null ? ann.context_start_sec : ann.timestamp_sec
+        seekTo(jumpSec)
         if (isMobile) setShowAnnotations(false)
       }}
     >
@@ -606,6 +628,7 @@ export default function GamePage({ params }: Props) {
               setDraftShapes(ann.shapes ?? [])
               setHoldSec(ann.shapes_hold_sec ?? 0)
               setAutoResumeSec(ann.auto_resume_sec ?? 0)
+              setContextStartSec(ann.context_start_sec ?? null)
               setEditingAnnotationId(ann.id)
               setDrawTool('select')
               setIsDrawing(true)
@@ -1155,6 +1178,14 @@ export default function GamePage({ params }: Props) {
                         />
                         <span>sec (0 = wait for manual play)</span>
                       </div>
+                      {markIn !== null && (
+                        <TrimStrip
+                          timestampSec={markIn}
+                          value={contextStartSec ?? Math.max(0, markIn - 2)}
+                          onChange={setContextStartSec}
+                          onScrub={scrubTo}
+                        />
+                      )}
                     </>
                   ) : (
                     <button
