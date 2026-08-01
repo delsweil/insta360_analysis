@@ -27,6 +27,13 @@ export default function AdminUsersPage() {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState<string | null>(null)
 
+  const [newEmail, setNewEmail] = useState('')
+  const [newDisplayName, setNewDisplayName] = useState('')
+  const [newRole, setNewRole] = useState<'admin' | 'coach' | 'player'>('player')
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState('')
+  const [createSuccess, setCreateSuccess] = useState('')
+
   useEffect(() => {
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
@@ -90,6 +97,43 @@ export default function AdminUsersPage() {
     }
     setUsers(prev => prev.map(u => u.id === userId ? { ...u, role: newRole } : u))
     setSaving(null)
+  }
+
+  const handleCreateUser = async () => {
+    if (!newEmail.trim()) { setCreateError('Email is required'); return }
+    setCreating(true)
+    setCreateError('')
+    setCreateSuccess('')
+
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) { setCreateError('Your session expired — please refresh and log in again.'); setCreating(false); return }
+
+    try {
+      const res = await fetch('/api/admin/create-user', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ email: newEmail.trim(), displayName: newDisplayName.trim(), role: newRole }),
+      })
+      const result = await res.json()
+
+      if (!res.ok) {
+        setCreateError(result.error || 'Failed to create user')
+      } else {
+        setCreateSuccess(`Invited ${newEmail} — they'll get an email to set their password.`)
+        setUsers(prev => [...prev, {
+          id: result.userId, email: newEmail.trim(), created_at: '', role: newRole,
+        }])
+        setNewEmail('')
+        setNewDisplayName('')
+        setNewRole('player')
+      }
+    } catch {
+      setCreateError('Network error — please try again.')
+    }
+    setCreating(false)
   }
 
   if (loading) return (
@@ -225,13 +269,69 @@ export default function AdminUsersPage() {
           ))}
         </div>
 
+        {/* Add user */}
         <div style={{
-          marginTop: 16, padding: '12px 16px',
-          background: '#e8edf8', borderRadius: 10,
-          fontSize: 12, color: '#0f2972', lineHeight: 1.6,
+          background: '#fff', border: '1px solid #E4E6EE',
+          borderRadius: 12, padding: '16px 18px', marginBottom: 16,
         }}>
-          <strong>Neue Spieler einladen:</strong> Supabase → Authentication → Users → Add user.
-          Nach dem ersten Login erscheinen sie hier und können eine Rolle erhalten.
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#111318', marginBottom: 10 }}>
+            Add user
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input
+              type="email" placeholder="Email" value={newEmail}
+              onChange={e => setNewEmail(e.target.value)}
+              style={{
+                flex: '1 1 200px', fontSize: 13, padding: '8px 10px',
+                border: '1px solid #E4E6EE', borderRadius: 8, outline: 'none',
+                fontFamily: 'DM Sans, sans-serif',
+              }}
+            />
+            <input
+              type="text" placeholder="Display name (optional)" value={newDisplayName}
+              onChange={e => setNewDisplayName(e.target.value)}
+              style={{
+                flex: '1 1 160px', fontSize: 13, padding: '8px 10px',
+                border: '1px solid #E4E6EE', borderRadius: 8, outline: 'none',
+                fontFamily: 'DM Sans, sans-serif',
+              }}
+            />
+            <select
+              value={newRole}
+              onChange={e => setNewRole(e.target.value as 'admin' | 'coach' | 'player')}
+              style={{
+                fontSize: 13, padding: '8px 10px',
+                border: '1px solid #E4E6EE', borderRadius: 8, outline: 'none',
+                fontFamily: 'DM Sans, sans-serif', background: '#fff',
+              }}
+            >
+              <option value="player">Player</option>
+              <option value="coach">Coach</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button
+              onClick={handleCreateUser}
+              disabled={creating}
+              style={{
+                fontSize: 13, fontWeight: 600, padding: '8px 18px',
+                borderRadius: 8, border: 'none',
+                background: creating ? '#E4E6EE' : '#0f2972',
+                color: creating ? '#8A8F9E' : '#fff',
+                cursor: creating ? 'default' : 'pointer',
+              }}
+            >
+              {creating ? 'Sending invite…' : 'Invite'}
+            </button>
+          </div>
+          {createError && (
+            <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 8 }}>{createError}</div>
+          )}
+          {createSuccess && (
+            <div style={{ fontSize: 12, color: '#166534', marginTop: 8 }}>{createSuccess}</div>
+          )}
+          <div style={{ fontSize: 11, color: '#8A8F9E', marginTop: 8 }}>
+            They'll receive an email with a link to set their own password — no password to generate or share yourself.
+          </div>
         </div>
       </div>
     </div>
