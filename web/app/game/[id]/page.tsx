@@ -1100,12 +1100,35 @@ export default function GamePage({ params }: Props) {
                 display: 'flex', justifyContent: 'space-between',
                 alignItems: 'center', marginBottom: 8,
               }}>
-                <span style={{
-                  fontFamily: 'Bebas Neue, sans-serif',
-                  fontSize: 16, color: '#0f2972', letterSpacing: '0.04em',
-                }}>
-                  {formatTime(currentTime)} / {formatTime(duration)}
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <button
+                    onClick={() => (isPlaying ? pauseVideo() : resumeVideo())}
+                    title={isPlaying ? 'Pause' : 'Play'}
+                    style={{
+                      width: 28, height: 28, borderRadius: 8,
+                      border: '1px solid #E4E6EE', background: '#fff',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      cursor: 'pointer', color: '#0f2972', flexShrink: 0, padding: 0,
+                    }}
+                  >
+                    {isPlaying ? (
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                        <rect x="1" y="0" width="4" height="12" />
+                        <rect x="7" y="0" width="4" height="12" />
+                      </svg>
+                    ) : (
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                        <polygon points="1,0 11,6 1,12" />
+                      </svg>
+                    )}
+                  </button>
+                  <span style={{
+                    fontFamily: 'Bebas Neue, sans-serif',
+                    fontSize: 16, color: '#0f2972', letterSpacing: '0.04em',
+                  }}>
+                    {formatTime(currentTime)} / {formatTime(duration)}
+                  </span>
+                </div>
                 <span style={{ fontSize: 10, color: '#8A8F9E' }}>
                   {isCoach
                     ? markIn !== null ? `Mark in: ${formatTime(markIn)}` : 'Mark in/out for range'
