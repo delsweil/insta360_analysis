@@ -104,7 +104,7 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
     const c = canvasRef.current; if (!c) return [0, 0]
     return [cx / c.width, cy / c.height]
   }, [])
-  const xy = (e: React.MouseEvent<HTMLCanvasElement>): [number, number] => {
+  const xy = (e: React.PointerEvent<HTMLCanvasElement>): [number, number] => {
     const r = canvasRef.current!.getBoundingClientRect()
     const scale = canvasRef.current!.width / r.width
     return [(e.clientX - r.left) * scale, (e.clientY - r.top) * scale]
@@ -456,14 +456,14 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
     <div ref={containerRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'auto' }}>
       <canvas
         ref={canvasRef}
-        style={{ display: 'block', width: '100%', height: '100%', cursor: editable && tool !== 'select' ? 'crosshair' : 'default' }}
+        style={{ display: 'block', width: '100%', height: '100%', cursor: editable && tool !== 'select' ? 'crosshair' : 'default', touchAction: 'none' }}
         onDoubleClick={() => {
           if (!editable || tool !== 'zone' || draftPoints.current.length < 3) return
           onAddShape({ id: uid(), type: 'zone', points: draftPoints.current, ...DEFAULTS.zone })
           draftPoints.current = []
           draw()
         }}
-        onMouseDown={e => {
+        onPointerDown={e => {
           if (!editable) { onToggleVideo?.(); return }
           const [cx, cy] = xy(e)
 
@@ -537,7 +537,7 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
             }
           }
         }}
-        onMouseMove={e => {
+        onPointerMove={e => {
           if (!editable || !dragTarget.current) return
           const [cx, cy] = xy(e)
           const p = toNorm(cx, cy)
@@ -596,8 +596,8 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
             onUpdateShape(shapeId, { pos: [p[0] - dragStartOffset.current[0], p[1] - dragStartOffset.current[1]] } as Partial<Shape>)
           }
         }}
-        onMouseUp={() => { dragTarget.current = null }}
-        onMouseLeave={() => { dragTarget.current = null }}
+        onPointerUp={() => { dragTarget.current = null }}
+        onPointerLeave={() => { dragTarget.current = null }}
       />
 
       {editable && selectedShape && (
