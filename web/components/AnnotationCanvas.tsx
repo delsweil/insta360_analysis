@@ -24,8 +24,9 @@ export type Shape =
   | { id: string; type: 'label'; pos: NPoint; text: string; color: string }
   | ({ id: string; type: 'highlight'; pos: NPoint; radiusX: number; radiusY: number; style: HighlightStyle; playerName?: string } & StyleProps)
   | { id: string; type: 'number'; pos: NPoint; value: number; color: string }
+  | ({ id: string; type: 'cone'; pos: NPoint; angle: number; length: number; width: number } & StyleProps) // body shape / vision / passing-lane wedge
 
-export type Tool = 'select' | 'zone' | 'curve' | 'label' | 'highlight' | 'number'
+export type Tool = 'select' | 'zone' | 'curve' | 'label' | 'highlight' | 'number' | 'cone'
 
 interface AnnotationCanvasProps {
   shapes: Shape[]
@@ -43,6 +44,7 @@ const DEFAULTS = {
   zone: { color: '#4ade80', opacity: 0.3, dash: 'solid' as DashStyle },
   curve: { color: '#ffffff', opacity: 1, dash: 'solid' as DashStyle, style: 'pass' as CurveStyle },
   highlight: { color: '#facc15', opacity: 0.85, dash: 'solid' as DashStyle, style: 'circle' as HighlightStyle },
+  cone: { color: '#38bdf8', opacity: 0.35, dash: 'solid' as DashStyle },
 }
 const LABEL_COLOR = '#ffffff'
 const HANDLE_RADIUS = 7
@@ -243,6 +245,35 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
         }
       }
 
+      if (s.type === 'cone') {
+        const [ox, oy] = toCanvas(s.pos)
+        const r = s.length * canvas.width
+        const a0 = s.angle - s.width / 2
+        const a1 = s.angle + s.width / 2
+        ctx.save()
+        ctx.globalAlpha = s.opacity
+        ctx.fillStyle = s.color
+        ctx.beginPath()
+        ctx.moveTo(ox, oy)
+        ctx.arc(ox, oy, r, a0, a1)
+        ctx.closePath()
+        ctx.fill()
+        ctx.globalAlpha = 1
+        setDash(ctx, s.dash)
+        ctx.strokeStyle = s.color
+        ctx.lineWidth = isSelected ? 3 : 2
+        ctx.stroke()
+        ctx.restore()
+
+        if (editable) {
+          const tipX = ox + r * Math.cos(s.angle), tipY = oy + r * Math.sin(s.angle)
+          const wX = ox + r * Math.cos(a1), wY = oy + r * Math.sin(a1)
+          drawHandle(ctx, ox, oy, s.color) // move
+          drawHandle(ctx, tipX, tipY, s.color) // direction + length
+          drawHandle(ctx, wX, wY, '#a78bfa') // width, matches curve's control-point color
+        }
+      }
+
       if (s.type === 'label') {
         const [x, y] = toCanvas(s.pos)
         const fontSize = Math.max(14, canvas.height * 0.035)
@@ -365,6 +396,16 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
         if (dist2(x + rx, y, cx, cy) <= t2) return { shapeId: s.id, handle: 'radiusX' }
         if (dist2(x, y + ry, cx, cy) <= t2) return { shapeId: s.id, handle: 'radiusY' }
       }
+      if (s.type === 'cone') {
+        const [ox, oy] = toCanvas(s.pos)
+        const r = s.length * c.width
+        const tipX = ox + r * Math.cos(s.angle), tipY = oy + r * Math.sin(s.angle)
+        const a1 = s.angle + s.width / 2
+        const wX = ox + r * Math.cos(a1), wY = oy + r * Math.sin(a1)
+        if (dist2(ox, oy, cx, cy) <= t2) return { shapeId: s.id, handle: 'move' }
+        if (dist2(tipX, tipY, cx, cy) <= t2) return { shapeId: s.id, handle: 'direction' }
+        if (dist2(wX, wY, cx, cy) <= t2) return { shapeId: s.id, handle: 'width' }
+      }
     }
     return null
   }, [shapes, toCanvas])
@@ -390,6 +431,18 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
         const rx = s.radiusX * c.width, ry = s.radiusY * c.height
         const nx = (cx - x) / rx, ny = (cy - y) / ry
         if (nx * nx + ny * ny <= 1) return s.id
+      }
+      if (s.type === 'cone') {
+        const [ox, oy] = toCanvas(s.pos)
+        const r = s.length * c.width
+        const dx = cx - ox, dy = cy - oy
+        const dist = Math.hypot(dx, dy)
+        if (dist <= r) {
+          let a = Math.atan2(dy, dx) - s.angle
+          while (a > Math.PI) a -= 2 * Math.PI
+          while (a < -Math.PI) a += 2 * Math.PI
+          if (Math.abs(a) <= s.width / 2) return s.id
+        }
       }
       if (s.type === 'label' || s.type === 'number') {
         const [x, y] = toCanvas(s.pos)
@@ -422,7 +475,7 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
             if (bodyHit) {
               const shape = shapes.find(s => s.id === bodyHit)!
               const p = toNorm(cx, cy)
-              const anchor = shape.type === 'highlight' || shape.type === 'label' || shape.type === 'number' ? shape.pos
+              const anchor = shape.type === 'highlight' || shape.type === 'label' || shape.type === 'number' || shape.type === 'cone' ? shape.pos
                 : shape.type === 'curve' ? shape.from : shape.points[0]
               dragStartOffset.current = [p[0] - anchor[0], p[1] - anchor[1]]
               dragTarget.current = { shapeId: bodyHit, handle: 'move' }
@@ -451,6 +504,21 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
           if (tool === 'highlight') {
             const p = toNorm(cx, cy)
             onAddShape({ id: uid(), type: 'highlight', pos: p, radiusX: 0.05, radiusY: 0.07, ...DEFAULTS.highlight })
+            return
+          }
+
+          if (tool === 'cone') {
+            if (draftPoints.current.length === 0) {
+              draftPoints.current = [toNorm(cx, cy)]
+              draw()
+            } else {
+              const originNorm = draftPoints.current[0]
+              const [ox, oy] = toCanvas(originNorm)
+              const angle = Math.atan2(cy - oy, cx - ox)
+              const length = Math.max(0.03, Math.hypot(cx - ox, cy - oy) / canvasRef.current!.width)
+              onAddShape({ id: uid(), type: 'cone', pos: originNorm, angle, length, width: Math.PI / 3, ...DEFAULTS.cone })
+              draftPoints.current = []
+            }
             return
           }
 
@@ -504,6 +572,25 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
             if (handle === 'move') onUpdateShape(shapeId, { pos: [p[0] - dragStartOffset.current[0], p[1] - dragStartOffset.current[1]] } as Partial<Shape>)
             if (handle === 'radiusX') onUpdateShape(shapeId, { radiusX: Math.max(0.015, p[0] - shape.pos[0]) } as Partial<Shape>)
             if (handle === 'radiusY') onUpdateShape(shapeId, { radiusY: Math.max(0.015, p[1] - shape.pos[1]) } as Partial<Shape>)
+          }
+          if (shape.type === 'cone') {
+            if (handle === 'move') {
+              onUpdateShape(shapeId, { pos: [p[0] - dragStartOffset.current[0], p[1] - dragStartOffset.current[1]] } as Partial<Shape>)
+            }
+            if (handle === 'direction') {
+              const dx = p[0] - shape.pos[0], dy = p[1] - shape.pos[1]
+              const angle = Math.atan2(dy, dx)
+              const length = Math.max(0.03, Math.hypot(dx, dy))
+              onUpdateShape(shapeId, { angle, length } as Partial<Shape>)
+            }
+            if (handle === 'width') {
+              const dx = p[0] - shape.pos[0], dy = p[1] - shape.pos[1]
+              let a = Math.atan2(dy, dx) - shape.angle
+              while (a > Math.PI) a -= 2 * Math.PI
+              while (a < -Math.PI) a += 2 * Math.PI
+              const width = Math.max(0.15, Math.min(Math.PI * 0.9, Math.abs(a) * 2))
+              onUpdateShape(shapeId, { width } as Partial<Shape>)
+            }
           }
           if ((shape.type === 'label' || shape.type === 'number') && handle === 'move') {
             onUpdateShape(shapeId, { pos: [p[0] - dragStartOffset.current[0], p[1] - dragStartOffset.current[1]] } as Partial<Shape>)
