@@ -128,8 +128,8 @@ export default function TimingStrip({
   // this only changes where the little boxes are drawn.
   const MIN_PX_GAP = 12
   const ordered: { key: 'start' | 'pin' | 'removed' | 'end'; x: number }[] = [
-    { key: 'start', x: startXRaw }, { key: 'pin', x: pinXRaw },
-    { key: 'removed', x: removedXRaw }, { key: 'end', x: endXRaw },
+    { key: 'start' as const, x: startXRaw }, { key: 'pin' as const, x: pinXRaw },
+    { key: 'removed' as const, x: removedXRaw }, { key: 'end' as const, x: endXRaw },
   ].sort((a, b) => a.x - b.x)
   for (let i = 1; i < ordered.length; i++) {
     if (ordered[i].x - ordered[i - 1].x < MIN_PX_GAP) {
