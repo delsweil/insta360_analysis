@@ -94,7 +94,7 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
   const dragTarget = useRef<{ shapeId: string; handle: string | number } | null>(null)
   const dragStartOffset = useRef<NPoint>([0, 0])
   const numberCounter = useRef(1)
-  const connectorFromRef = useRef<string | null>(null)
+  const [connectorFrom, setConnectorFrom] = useState<string | null>(null)
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selectedShape = shapes.find(s => s.id === selectedId) ?? null
@@ -346,7 +346,22 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
       const [x, y] = toCanvas(draftPoints.current[0])
       drawHandle(ctx, x, y, DEFAULTS.curve.color)
     }
-  }, [shapes, editable, tool, selectedId, toCanvas])
+    if (editable && tool === 'connector' && connectorFrom) {
+      const fromShape = shapes.find(s => s.id === connectorFrom)
+      if (fromShape?.type === 'highlight') {
+        const [x, y] = toCanvas(fromShape.pos)
+        const r = Math.max(fromShape.radiusX * canvas.width, fromShape.radiusY * canvas.height) + 8
+        ctx.save()
+        ctx.strokeStyle = DEFAULTS.connector.color
+        ctx.lineWidth = 3
+        ctx.setLineDash([5, 5])
+        ctx.beginPath()
+        ctx.arc(x, y, r, 0, Math.PI * 2)
+        ctx.stroke()
+        ctx.restore()
+      }
+    }
+  }, [shapes, editable, tool, selectedId, connectorFrom, toCanvas])
 
   function drawHandle(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) {
     ctx.beginPath()
@@ -375,7 +390,7 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
       onAddShape({ id: Math.random().toString(36).slice(2, 10), type: 'zone', points: draftPoints.current, ...DEFAULTS.zone })
     }
     draftPoints.current = []
-    connectorFromRef.current = null
+    setConnectorFrom(null)
     if (tool !== 'select') setSelectedId(null)
   }, [tool, onAddShape])
   useEffect(() => { if (selectedId && !shapes.find(s => s.id === selectedId)) setSelectedId(null) }, [shapes, selectedId])
@@ -579,14 +594,31 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
           }
 
           if (tool === 'connector') {
-            const hitId = hitBody(cx, cy)
-            const hitShape = hitId ? shapes.find(s => s.id === hitId) : null
-            if (hitShape?.type !== 'highlight') return // only highlights can be linked
-            if (!connectorFromRef.current) {
-              connectorFromRef.current = hitId
-            } else if (hitId && hitId !== connectorFromRef.current) {
-              onAddShape({ id: uid(), type: 'connector', fromId: connectorFromRef.current, toId: hitId, ...DEFAULTS.connector })
-              connectorFromRef.current = null
+            // Generous "nearest highlight" search rather than requiring an
+            // exact hit inside the drawn ellipse — much easier to hit
+            // reliably when several highlights are close together.
+            const c = canvasRef.current!
+            let nearest: string | null = null
+            let nearestDist = Infinity
+            for (const s of shapes) {
+              if (s.type !== 'highlight') continue
+              const [hx, hy] = toCanvas(s.pos)
+              const d = Math.hypot(hx - cx, hy - cy)
+              const reach = Math.max(s.radiusX * c.width, s.radiusY * c.height) * 1.8 + 20
+              if (d <= reach && d < nearestDist) { nearest = s.id; nearestDist = d }
+            }
+
+            if (!nearest) {
+              setConnectorFrom(null) // clicked empty space — cancel rather than get stuck
+              return
+            }
+            if (!connectorFrom) {
+              setConnectorFrom(nearest)
+            } else if (nearest !== connectorFrom) {
+              const fromShape = shapes.find(s => s.id === connectorFrom)
+              const color = fromShape?.type === 'highlight' ? fromShape.color : DEFAULTS.connector.color
+              onAddShape({ id: uid(), type: 'connector', fromId: connectorFrom, toId: nearest, ...DEFAULTS.connector, color })
+              setConnectorFrom(null)
             }
             return
           }
