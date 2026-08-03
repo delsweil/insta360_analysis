@@ -336,13 +336,17 @@ export default function GamePage({ params }: Props) {
   }, [isPlaying, currentTime, annotations, isDrawing, pausedAnnotationId, holdSec])
 
   // Auto-resume playback on its own once auto_resume_sec elapses for the
-  // paused annotation, unless the viewer already resumed manually first.
+  // paused annotation — for viewers watching hands-free only. Never for
+  // coaches: a coach pausing near an existing annotation is very often
+  // actually pausing to start a *new* one, and having playback yank itself
+  // forward mid-thought was the actual bug behind "it restarts before I can
+  // annotate" — this feature and coaching are fundamentally different intents.
   useEffect(() => {
     if (autoResumeTimeoutRef.current) {
       clearTimeout(autoResumeTimeoutRef.current)
       autoResumeTimeoutRef.current = null
     }
-    if (isDrawing || isPlaying || !pausedAnnotationId) return
+    if (isCoach || isDrawing || isPlaying || !pausedAnnotationId) return
 
     const ann = annotations.find(a => a.id === pausedAnnotationId)
     const delay = ann?.auto_resume_sec ?? 0
@@ -355,7 +359,7 @@ export default function GamePage({ params }: Props) {
     return () => {
       if (autoResumeTimeoutRef.current) clearTimeout(autoResumeTimeoutRef.current)
     }
-  }, [pausedAnnotationId, isPlaying, isDrawing, annotations, resumeVideo])
+  }, [pausedAnnotationId, isPlaying, isDrawing, isCoach, annotations, resumeVideo])
 
   const startDrawing = useCallback(() => {
     pauseVideo()
@@ -533,17 +537,22 @@ export default function GamePage({ params }: Props) {
   )
 
   // Timeline with shapes
-  const Timeline = ({ height = 24, mobileSize = false }: { height?: number, mobileSize?: boolean }) => (
+  const Timeline = ({ height = 24, mobileSize = false }: { height?: number, mobileSize?: boolean }) => {
+    const scrub = (e: React.PointerEvent<HTMLDivElement>) => {
+      const rect = e.currentTarget.getBoundingClientRect()
+      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+      scrubTo(ratio * duration) // moves the frame without forcing playback — lets you land somewhere and stay paused
+    }
+
+    return (
     <div
       style={{
         position: 'relative', height,
         background: '#F8F8F6', borderRadius: 4,
-        border: '1px solid #E4E6EE', cursor: 'pointer',
+        border: '1px solid #E4E6EE', cursor: 'pointer', touchAction: 'none',
       }}
-      onClick={(e) => {
-        const rect = e.currentTarget.getBoundingClientRect()
-        seekTo(((e.clientX - rect.left) / rect.width) * duration)
-      }}
+      onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); scrub(e) }}
+      onPointerMove={(e) => { if (e.buttons === 1) scrub(e) }}
     >
       {/* Progress fill */}
       <div style={{
@@ -595,7 +604,8 @@ export default function GamePage({ params }: Props) {
         )
       })}
     </div>
-  )
+    )
+  }
 
   // Annotation row
   const AnnRow = ({ ann, compact = false }: { ann: Annotation, compact?: boolean }) => (
