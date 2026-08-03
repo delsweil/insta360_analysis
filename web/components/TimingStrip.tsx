@@ -116,10 +116,28 @@ export default function TimingStrip({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragging])
 
-  const pinX = secToX(local.timestamp)
-  const startX = secToX(local.contextStart)
-  const removedX = secToX(local.annotationEnd)
-  const endX = secToX(local.clipEnd)
+  const pinXRaw = secToX(local.timestamp)
+  const startXRaw = secToX(local.contextStart)
+  const removedXRaw = secToX(local.annotationEnd)
+  const endXRaw = secToX(local.clipEnd)
+
+  // De-collision pass: if two handles land within a few px of each other
+  // (e.g. "removed" dragged to the same instant as "clip end"), nudge their
+  // *displayed* positions apart so neither is fully hidden underneath the
+  // other — the underlying values (and dragging/scrubbing) are unaffected,
+  // this only changes where the little boxes are drawn.
+  const MIN_PX_GAP = 12
+  const ordered: { key: 'start' | 'pin' | 'removed' | 'end'; x: number }[] = [
+    { key: 'start', x: startXRaw }, { key: 'pin', x: pinXRaw },
+    { key: 'removed', x: removedXRaw }, { key: 'end', x: endXRaw },
+  ].sort((a, b) => a.x - b.x)
+  for (let i = 1; i < ordered.length; i++) {
+    if (ordered[i].x - ordered[i - 1].x < MIN_PX_GAP) {
+      ordered[i].x = ordered[i - 1].x + MIN_PX_GAP
+    }
+  }
+  const displayX = Object.fromEntries(ordered.map(o => [o.key, o.x])) as Record<string, number>
+  const pinX = displayX.pin, startX = displayX.start, removedX = displayX.removed, endX = displayX.end
 
   const Handle = ({ x, color, keyName }: { x: number; color: string; keyName: HandleKey }) => (
     <div
