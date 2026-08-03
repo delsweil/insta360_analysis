@@ -39,6 +39,18 @@ interface AnnotationCanvasProps {
   onRequestLabelText?: (pos: NPoint) => void
   /** Called on click when not editable — lets a normal click on the video toggle play/pause via your own commands, instead of passing the click through to the iframe (which would re-trigger YouTube's own overlay). */
   onToggleVideo?: () => void
+  /**
+   * The four pitch calibration corners (normalized 0..1), if this game has
+   * been calibrated. Used to make new highlights default to a size that
+   * roughly matches perspective — bigger near the bottom of the calibrated
+   * area (closer to camera), smaller near the top (farther away) — rather
+   * than always placing a fixed-size circle regardless of where on the
+   * pitch it lands. Approximates depth via vertical position within the
+   * polygon's Y range, which holds well for the pitch-side/drone angles
+   * used throughout this app; omit or pass null to fall back to a fixed
+   * default size.
+   */
+  pitchPolygon?: NPoint[] | null
 }
 
 const DEFAULTS = {
@@ -86,7 +98,7 @@ export interface AnnotationCanvasHandle {
 
 const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProps>(function AnnotationCanvas({
   shapes, editable, tool,
-  onAddShape, onUpdateShape, onRemoveShape, onRequestLabelText, onToggleVideo,
+  onAddShape, onUpdateShape, onRemoveShape, onRequestLabelText, onToggleVideo, pitchPolygon,
 }, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -568,7 +580,25 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
 
           if (tool === 'highlight') {
             const p = toNorm(cx, cy)
-            onAddShape({ id: uid(), type: 'highlight', pos: p, radiusX: 0.05, radiusY: 0.07, ...DEFAULTS.highlight })
+            const FAR_RX = 0.028, NEAR_RX = 0.075
+            const FAR_RY = 0.04, NEAR_RY = 0.10
+            let t: number // 0 = far, 1 = near
+
+            if (pitchPolygon && pitchPolygon.length >= 3) {
+              // Calibrated: use the actual pitch corners for a more precise depth estimate.
+              const ys = pitchPolygon.map(pt => pt[1])
+              const minY = Math.min(...ys), maxY = Math.max(...ys)
+              t = maxY > minY ? Math.max(0, Math.min(1, (p[1] - minY) / (maxY - minY))) : 0.5
+            } else {
+              // Uncalibrated (the common case): fall back to raw frame position.
+              // Top of frame = far, bottom = near — holds for the pitch-side/
+              // drone angles this app is built around, no calibration needed.
+              t = Math.max(0, Math.min(1, p[1]))
+            }
+
+            const radiusX = FAR_RX + (NEAR_RX - FAR_RX) * t
+            const radiusY = FAR_RY + (NEAR_RY - FAR_RY) * t
+            onAddShape({ id: uid(), type: 'highlight', pos: p, radiusX, radiusY, ...DEFAULTS.highlight })
             return
           }
 
