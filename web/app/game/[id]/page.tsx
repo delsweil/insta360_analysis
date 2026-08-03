@@ -11,7 +11,7 @@ import AnnotationFilter, { type FilterState, ALL_FILTERS, passesFilter } from '@
 import ClipRecorder from '@/components/ClipRecorder'
 import AnnotationCanvas, { type Shape, type Tool, type AnnotationCanvasHandle } from '@/components/AnnotationCanvas'
 import RecordExportButton from '@/components/RecordExportButton'
-import TrimStrip from '@/components/TrimStrip'
+import TimingStrip from '@/components/TimingStrip'
 import DrawTools from '@/components/DrawTools'
 
 function formatTime(sec: number) {
@@ -67,21 +67,25 @@ export default function GamePage({ params }: Props) {
   const [loopReel, setLoopReel] = useState(false)
   const [loopDelaySec, setLoopDelaySec] = useState(5)
   const loopTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [pausedAnnotationId, setPausedAnnotationId] = useState<string | null>(null)
-  const [holdSec, setHoldSec] = useState(0) // grace period (seconds of playback) before shapes hide after resume
   const [autoResumeSec, setAutoResumeSec] = useState(0) // seconds to stay paused before auto-resuming on its own (0 = wait for manual play)
-  const [contextStartSec, setContextStartSec] = useState<number | null>(null) // absolute video time the scene should start from when jumped to
+  const [contextStartSec, setContextStartSec] = useState<number | null>(null) // clip starts — absolute video time playback begins from when jumped to
+  const [annotationEndSec, setAnnotationEndSec] = useState<number | null>(null) // annotation removed — absolute video time the shapes stop showing
+  const [clipEndSec, setClipEndSec] = useState<number | null>(null) // clip ends — absolute video time this annotation's range finishes
   const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null)
-  const resumeAnchorRef = useRef<number | null>(null)
   const autoResumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Shapes belonging to whichever tactical annotation is currently paused on
-  // (or, while playing, still within its hold grace period). Tied to pause
-  // state rather than a fixed clock window, so shapes vanish as soon as the
-  // action resumes instead of lingering over a situation that's moved on.
+  // Shapes belonging to whichever tactical annotation's [shown, removed]
+  // window currently contains playback — a pure time-range check now, not
+  // tied to pause state. "Shown" = timestamp_sec, "removed" = the explicit
+  // annotation_end_sec a coach sets on the timing strip (falls back to a
+  // brief 1.5s window if never set, e.g. on older annotations).
   const activeTacticalShapes: Shape[] = isDrawing
     ? draftShapes
-    : annotations.find(a => a.id === pausedAnnotationId)?.shapes ?? []
+    : annotations.find(a =>
+        a.label === 'tactical' && a.shapes?.length &&
+        currentTime >= a.timestamp_sec &&
+        currentTime <= (a.annotation_end_sec ?? a.timestamp_sec + 1.5)
+      )?.shapes ?? []
 
   // Filtered annotations
   const filteredAnnotations = annotations.filter(a => passesFilter(a.label, filter))
@@ -297,47 +301,10 @@ export default function GamePage({ params }: Props) {
       if (hit) {
         firedAnnotationIds.current.add(hit.id)
         pauseVideo()
-        setPausedAnnotationId(hit.id)
-        resumeAnchorRef.current = null
       }
     }
     prevTimeRef.current = currentTime
   }, [currentTime, annotations, isDrawing, pauseVideo])
-
-  // Keep pausedAnnotationId in sync with actual play state:
-  // - if paused (auto or manual) and currentTime lands inside a tactical
-  //   annotation's window, show it
-  // - once playing resumes, keep showing for `holdSec` seconds of
-  //   playback (grace period), then hide
-  useEffect(() => {
-    if (isDrawing) return
-
-    if (!isPlaying) {
-      const hit = annotations.find(a => {
-        if (a.label !== 'tactical' || !a.shapes?.length) return false
-        if (currentTime < a.timestamp_sec) return false
-        // Only match an explicit marked-out range, or landing right on the
-        // pinned frame itself — not a loose multi-second catch-all, which
-        // was showing stale diagrams minutes after play had moved on.
-        const upper = a.end_timestamp_sec ?? (a.timestamp_sec + 1.5)
-        return currentTime <= upper
-      })
-      if (hit) {
-        setPausedAnnotationId(hit.id)
-        resumeAnchorRef.current = null
-      }
-      return
-    }
-
-    // isPlaying === true
-    if (pausedAnnotationId) {
-      if (resumeAnchorRef.current === null) resumeAnchorRef.current = currentTime
-      if (currentTime - resumeAnchorRef.current > holdSec) {
-        setPausedAnnotationId(null)
-        resumeAnchorRef.current = null
-      }
-    }
-  }, [isPlaying, currentTime, annotations, isDrawing, pausedAnnotationId, holdSec])
 
   // Auto-resume playback on its own once auto_resume_sec elapses for the
   // paused annotation — for viewers watching hands-free only. Never for
@@ -350,11 +317,15 @@ export default function GamePage({ params }: Props) {
       clearTimeout(autoResumeTimeoutRef.current)
       autoResumeTimeoutRef.current = null
     }
-    if (isCoach || isDrawing || isPlaying || !pausedAnnotationId) return
+    if (isCoach || isDrawing || isPlaying) return
 
-    const ann = annotations.find(a => a.id === pausedAnnotationId)
+    const ann = annotations.find(a =>
+      a.label === 'tactical' && a.shapes?.length &&
+      currentTime >= a.timestamp_sec &&
+      currentTime <= (a.annotation_end_sec ?? a.timestamp_sec + 1.5)
+    )
     const delay = ann?.auto_resume_sec ?? 0
-    if (delay > 0) {
+    if (ann && delay > 0) {
       autoResumeTimeoutRef.current = setTimeout(() => {
         resumeVideo()
       }, delay * 1000)
@@ -363,7 +334,7 @@ export default function GamePage({ params }: Props) {
     return () => {
       if (autoResumeTimeoutRef.current) clearTimeout(autoResumeTimeoutRef.current)
     }
-  }, [pausedAnnotationId, isPlaying, isDrawing, isCoach, annotations, resumeVideo])
+  }, [currentTime, isPlaying, isDrawing, isCoach, annotations, resumeVideo])
 
   const startDrawing = useCallback(() => {
     pauseVideo()
@@ -411,7 +382,8 @@ export default function GamePage({ params }: Props) {
     if (editingAnnotationId) {
       const patch = {
         shapes: draftShapes.length ? draftShapes : null,
-        shapes_hold_sec: draftShapes.length ? holdSec : null,
+        annotation_end_sec: draftShapes.length ? annotationEndSec : null,
+        end_timestamp_sec: draftShapes.length ? clipEndSec : null,
         auto_resume_sec: draftShapes.length ? autoResumeSec : null,
         context_start_sec: draftShapes.length ? contextStartSec : null,
         note: note.trim() || null,
@@ -441,11 +413,11 @@ export default function GamePage({ params }: Props) {
         .insert({
           game_id: id, user_id: user.id,
           timestamp_sec: markIn,
-          end_timestamp_sec: currentTime > markIn + 1 ? currentTime : null,
+          end_timestamp_sec: draftShapes.length ? clipEndSec : (currentTime > markIn + 1 ? currentTime : null),
           label: selectedLabel,
           note: note.trim() || null,
           shapes: draftShapes.length ? draftShapes : null,
-          shapes_hold_sec: draftShapes.length ? holdSec : null,
+          annotation_end_sec: draftShapes.length ? annotationEndSec : null,
           auto_resume_sec: draftShapes.length ? autoResumeSec : null,
           context_start_sec: draftShapes.length ? contextStartSec : null,
           is_public: true,
@@ -470,13 +442,14 @@ export default function GamePage({ params }: Props) {
     setMarkIn(null)
     setDraftShapes([])
     setIsDrawing(false)
-    setHoldSec(0)
     setAutoResumeSec(0)
     setContextStartSec(null)
+    setAnnotationEndSec(null)
+    setClipEndSec(null)
     setEditingAnnotationId(null)
     setNote('')
     setSaving(false)
-  }, [saving, markIn, currentTime, selectedLabel, note, draftShapes, holdSec, autoResumeSec, contextStartSec, editingAnnotationId, id])
+  }, [saving, markIn, currentTime, selectedLabel, note, draftShapes, annotationEndSec, clipEndSec, autoResumeSec, contextStartSec, editingAnnotationId, id])
 
   const handleDelete = useCallback(async (annId: string) => {
     await supabase.from('annotations').delete().eq('id', annId)
@@ -655,7 +628,8 @@ export default function GamePage({ params }: Props) {
               setSelectedLabel('tactical')
               setMarkIn(ann.timestamp_sec)
               setDraftShapes(ann.shapes ?? [])
-              setHoldSec(ann.shapes_hold_sec ?? 0)
+              setAnnotationEndSec(ann.annotation_end_sec ?? null)
+              setClipEndSec(ann.end_timestamp_sec ?? null)
               setAutoResumeSec(ann.auto_resume_sec ?? 0)
               setContextStartSec(ann.context_start_sec ?? null)
               setEditingAnnotationId(ann.id)
@@ -779,7 +753,7 @@ export default function GamePage({ params }: Props) {
                 allowFullScreen
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               />
-              {pausedAnnotationId && (
+              {activeTacticalShapes.length > 0 && (
                 <div style={{
                   position: 'absolute', inset: 0,
                   background: 'rgba(9, 29, 82, 0.4)', pointerEvents: 'none',
@@ -1087,7 +1061,7 @@ export default function GamePage({ params }: Props) {
                 allowFullScreen
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               />
-              {pausedAnnotationId && (
+              {activeTacticalShapes.length > 0 && (
                 <div style={{
                   position: 'absolute', inset: 0,
                   background: 'rgba(9, 29, 82, 0.4)', pointerEvents: 'none',
@@ -1204,24 +1178,9 @@ export default function GamePage({ params }: Props) {
                           mobileCanvasRef.current?.finalizePending()
                           desktopCanvasRef.current?.finalizePending()
                           setIsDrawing(false); setDrawTool('select'); setEditingAnnotationId(null); setMarkIn(null)
+                          setAnnotationEndSec(null); setClipEndSec(null)
                         }}
                       />
-                      <div style={{
-                        display: 'flex', alignItems: 'center', gap: 6,
-                        fontSize: 11, color: '#8A8F9E', marginTop: 4,
-                      }}>
-                        <span>Keep visible after resume:</span>
-                        <input
-                          type="number" min={0} max={30} value={holdSec}
-                          onChange={e => setHoldSec(Math.max(0, Number(e.target.value) || 0))}
-                          style={{
-                            width: 46, fontSize: 11, padding: '3px 6px',
-                            border: '1px solid #E4E6EE', borderRadius: 5,
-                            outline: 'none', fontFamily: 'DM Sans, sans-serif',
-                          }}
-                        />
-                        <span>sec</span>
-                      </div>
                       <div style={{
                         display: 'flex', alignItems: 'center', gap: 6,
                         fontSize: 11, color: '#8A8F9E', marginTop: 4,
@@ -1239,10 +1198,14 @@ export default function GamePage({ params }: Props) {
                         <span>sec (0 = wait for manual play)</span>
                       </div>
                       {markIn !== null && (
-                        <TrimStrip
+                        <TimingStrip
                           timestampSec={markIn}
-                          value={contextStartSec ?? Math.max(0, markIn - 2)}
-                          onChange={setContextStartSec}
+                          contextStart={contextStartSec ?? Math.max(0, markIn - 2)}
+                          annotationEnd={annotationEndSec ?? (markIn + 1.5)}
+                          clipEnd={clipEndSec ?? (markIn + 5)}
+                          onChangeContextStart={setContextStartSec}
+                          onChangeAnnotationEnd={setAnnotationEndSec}
+                          onChangeClipEnd={setClipEndSec}
                           onScrub={scrubTo}
                         />
                       )}

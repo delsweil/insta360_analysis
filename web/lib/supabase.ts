@@ -28,6 +28,7 @@ export type Annotation = {
   note?: string
   shapes?: Shape[] | null   // NEW
   shapes_hold_sec?: number | null
+  annotation_end_sec?: number | null
   auto_resume_sec?: number | null
   context_start_sec?: number | null
   is_public: boolean
