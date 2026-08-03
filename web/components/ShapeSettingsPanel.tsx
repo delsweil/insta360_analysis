@@ -30,7 +30,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 export default function ShapeSettingsPanel({ shape, onChange, onRemove, onClose }: Props) {
-  const hasStyle = shape.type === 'zone' || shape.type === 'curve' || shape.type === 'highlight' || shape.type === 'cone'
+  const hasStyle = shape.type === 'zone' || shape.type === 'curve' || shape.type === 'highlight' || shape.type === 'cone' || shape.type === 'connector'
 
   return (
     <div style={{

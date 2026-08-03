@@ -25,8 +25,9 @@ export type Shape =
   | ({ id: string; type: 'highlight'; pos: NPoint; radiusX: number; radiusY: number; style: HighlightStyle; playerName?: string } & StyleProps)
   | { id: string; type: 'number'; pos: NPoint; value: number; color: string }
   | ({ id: string; type: 'cone'; pos: NPoint; angle: number; length: number; width: number } & StyleProps) // body shape / vision / passing-lane wedge
+  | ({ id: string; type: 'connector'; fromId: string; toId: string } & StyleProps) // line between two highlights, tracks their positions live
 
-export type Tool = 'select' | 'zone' | 'curve' | 'label' | 'highlight' | 'number' | 'cone'
+export type Tool = 'select' | 'zone' | 'curve' | 'label' | 'highlight' | 'number' | 'cone' | 'connector'
 
 interface AnnotationCanvasProps {
   shapes: Shape[]
@@ -45,6 +46,7 @@ const DEFAULTS = {
   curve: { color: '#ffffff', opacity: 1, dash: 'solid' as DashStyle, style: 'pass' as CurveStyle },
   highlight: { color: '#facc15', opacity: 0.85, dash: 'solid' as DashStyle, style: 'circle' as HighlightStyle },
   cone: { color: '#38bdf8', opacity: 0.35, dash: 'solid' as DashStyle },
+  connector: { color: '#f472b6', opacity: 0.9, dash: 'dashed' as DashStyle },
 }
 const LABEL_COLOR = '#ffffff'
 const HANDLE_RADIUS = 7
@@ -92,6 +94,7 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
   const dragTarget = useRef<{ shapeId: string; handle: string | number } | null>(null)
   const dragStartOffset = useRef<NPoint>([0, 0])
   const numberCounter = useRef(1)
+  const connectorFromRef = useRef<string | null>(null)
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selectedShape = shapes.find(s => s.id === selectedId) ?? null
@@ -274,6 +277,29 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
         }
       }
 
+      if (s.type === 'connector') {
+        const from = shapes.find(x => x.id === s.fromId)
+        const to = shapes.find(x => x.id === s.toId)
+        if (from?.type === 'highlight' && to?.type === 'highlight') {
+          const [fx, fy] = toCanvas(from.pos)
+          const [tx, ty] = toCanvas(to.pos)
+          ctx.save()
+          ctx.globalAlpha = s.opacity
+          setDash(ctx, s.dash)
+          ctx.strokeStyle = s.color
+          ctx.lineWidth = isSelected ? 4 : 2.5
+          ctx.beginPath()
+          ctx.moveTo(fx, fy)
+          ctx.lineTo(tx, ty)
+          ctx.stroke()
+          ctx.restore()
+          if (editable) {
+            const mx = (fx + tx) / 2, my = (fy + ty) / 2
+            drawHandle(ctx, mx, my, s.color) // click near the middle to select/remove
+          }
+        }
+      }
+
       if (s.type === 'label') {
         const [x, y] = toCanvas(s.pos)
         const fontSize = Math.max(14, canvas.height * 0.035)
@@ -349,6 +375,7 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
       onAddShape({ id: Math.random().toString(36).slice(2, 10), type: 'zone', points: draftPoints.current, ...DEFAULTS.zone })
     }
     draftPoints.current = []
+    connectorFromRef.current = null
     if (tool !== 'select') setSelectedId(null)
   }, [tool, onAddShape])
   useEffect(() => { if (selectedId && !shapes.find(s => s.id === selectedId)) setSelectedId(null) }, [shapes, selectedId])
@@ -406,6 +433,15 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
         if (dist2(tipX, tipY, cx, cy) <= t2) return { shapeId: s.id, handle: 'direction' }
         if (dist2(wX, wY, cx, cy) <= t2) return { shapeId: s.id, handle: 'width' }
       }
+      if (s.type === 'connector') {
+        const from = shapes.find(x => x.id === s.fromId)
+        const to = shapes.find(x => x.id === s.toId)
+        if (from?.type === 'highlight' && to?.type === 'highlight') {
+          const [fx, fy] = toCanvas(from.pos), [tx, ty] = toCanvas(to.pos)
+          const mx = (fx + tx) / 2, my = (fy + ty) / 2
+          if (dist2(mx, my, cx, cy) <= t2) return { shapeId: s.id, handle: 'select' }
+        }
+      }
     }
     return null
   }, [shapes, toCanvas])
@@ -447,6 +483,15 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
       if (s.type === 'label' || s.type === 'number') {
         const [x, y] = toCanvas(s.pos)
         if (dist2(x, y, cx, cy) <= (25 * (c.width / c.getBoundingClientRect().width)) ** 2) return s.id
+      }
+      if (s.type === 'connector') {
+        const from = shapes.find(x => x.id === s.fromId)
+        const to = shapes.find(x => x.id === s.toId)
+        if (from?.type === 'highlight' && to?.type === 'highlight') {
+          const [fx, fy] = toCanvas(from.pos), [tx, ty] = toCanvas(to.pos)
+          const scale = c.width / c.getBoundingClientRect().width
+          if (distToSegment2(cx, cy, fx, fy, tx, ty) <= (10 * scale) ** 2) return s.id
+        }
       }
     }
     return null
@@ -525,6 +570,19 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
           if (tool === 'number') {
             const p = toNorm(cx, cy)
             onAddShape({ id: uid(), type: 'number', pos: p, value: numberCounter.current, color: '#0f2972' })
+            return
+          }
+
+          if (tool === 'connector') {
+            const hitId = hitBody(cx, cy)
+            const hitShape = hitId ? shapes.find(s => s.id === hitId) : null
+            if (hitShape?.type !== 'highlight') return // only highlights can be linked
+            if (!connectorFromRef.current) {
+              connectorFromRef.current = hitId
+            } else if (hitId && hitId !== connectorFromRef.current) {
+              onAddShape({ id: uid(), type: 'connector', fromId: connectorFromRef.current, toId: hitId, ...DEFAULTS.connector })
+              connectorFromRef.current = null
+            }
             return
           }
 

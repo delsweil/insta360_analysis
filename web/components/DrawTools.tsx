@@ -20,6 +20,7 @@ const TOOLS: { key: Tool; label: string; icon: string }[] = [
   { key: 'select', label: 'Select', icon: '↖' },
   { key: 'zone', label: 'Zone', icon: '▭' },
   { key: 'curve', label: 'Line', icon: '↝' },
+  { key: 'connector', label: 'Connect', icon: '⌇' },
   { key: 'cone', label: 'Body shape', icon: '◣' },
   { key: 'highlight', label: 'Highlight', icon: '◎' },
   { key: 'label', label: 'Label', icon: 'T' },

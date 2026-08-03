@@ -313,11 +313,15 @@ export default function GamePage({ params }: Props) {
     if (isDrawing) return
 
     if (!isPlaying) {
-      const hit = annotations.find(a =>
-        a.label === 'tactical' && a.shapes?.length &&
-        currentTime >= a.timestamp_sec &&
-        currentTime <= (a.end_timestamp_sec ?? a.timestamp_sec + 8)
-      )
+      const hit = annotations.find(a => {
+        if (a.label !== 'tactical' || !a.shapes?.length) return false
+        if (currentTime < a.timestamp_sec) return false
+        // Only match an explicit marked-out range, or landing right on the
+        // pinned frame itself — not a loose multi-second catch-all, which
+        // was showing stale diagrams minutes after play had moved on.
+        const upper = a.end_timestamp_sec ?? (a.timestamp_sec + 1.5)
+        return currentTime <= upper
+      })
       if (hit) {
         setPausedAnnotationId(hit.id)
         resumeAnchorRef.current = null
