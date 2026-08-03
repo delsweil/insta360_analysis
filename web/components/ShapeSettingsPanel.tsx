@@ -5,6 +5,7 @@
 // (color, opacity, dash, style variants) so the always-visible DrawTools bar
 // can stay small — this panel only exists when something's actually selected.
 
+import { useState, useRef, useCallback, useEffect } from 'react'
 import type { Shape, DashStyle, CurveStyle, HighlightStyle } from './AnnotationCanvas'
 
 interface Props {
@@ -32,17 +33,67 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 export default function ShapeSettingsPanel({ shape, onChange, onRemove, onClose }: Props) {
   const hasStyle = shape.type === 'zone' || shape.type === 'curve' || shape.type === 'highlight' || shape.type === 'cone' || shape.type === 'connector'
 
+  // Draggable via the header — defaults to the top-right corner, but stays
+  // wherever the coach last moved it (e.g. out of the way of zone/highlight
+  // handles it would otherwise cover), rather than resetting per shape.
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const dragOffset = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  const applyDrag = useCallback((clientX: number, clientY: number) => {
+    const panel = panelRef.current
+    if (!panel) return
+    const parent = panel.offsetParent as HTMLElement | null
+    if (!parent) return
+    const parentRect = parent.getBoundingClientRect()
+    const panelRect = panel.getBoundingClientRect()
+    const left = clientX - dragOffset.current.x - parentRect.left
+    const top = clientY - dragOffset.current.y - parentRect.top
+    const right = parentRect.width - left - panelRect.width
+    setPos({
+      top: Math.max(4, Math.min(parentRect.height - 40, top)),
+      right: Math.max(4, Math.min(parentRect.width - 40, right)),
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!dragging) return
+    const onMove = (e: PointerEvent) => applyDrag(e.clientX, e.clientY)
+    const onUp = (e: PointerEvent) => { applyDrag(e.clientX, e.clientY); setDragging(false) }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp, { once: true })
+    return () => window.removeEventListener('pointermove', onMove)
+  }, [dragging, applyDrag])
+
+  const onHeaderPointerDown = useCallback((e: React.PointerEvent) => {
+    e.stopPropagation()
+    const rect = panelRef.current!.getBoundingClientRect()
+    dragOffset.current = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+    setDragging(true)
+  }, [])
+
   return (
-    <div style={{
-      position: 'absolute', top: 12, right: 12, width: 200,
-      background: '#1a1d2b', borderRadius: 10,
-      border: '1px solid rgba(255,255,255,0.12)',
-      boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-      padding: '10px 12px', fontFamily: 'DM Sans, sans-serif', color: '#fff', zIndex: 5,
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+    <div
+      ref={panelRef}
+      style={{
+        position: 'absolute', top: pos?.top ?? 12, right: pos?.right ?? 12, width: 200,
+        background: '#1a1d2b', borderRadius: 10,
+        border: '1px solid rgba(255,255,255,0.12)',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+        padding: '10px 12px', fontFamily: 'DM Sans, sans-serif', color: '#fff', zIndex: 5,
+      }}
+    >
+      <div
+        onPointerDown={onHeaderPointerDown}
+        style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8,
+          cursor: 'grab', margin: '-10px -12px 8px', padding: '10px 12px',
+          borderBottom: '1px solid rgba(255,255,255,0.08)', touchAction: 'none',
+        }}
+      >
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', opacity: 0.6 }}>
-          {shape.type} settings
+          ⠿ {shape.type} settings
         </span>
         <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#8A8F9E', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}>✕</button>
       </div>

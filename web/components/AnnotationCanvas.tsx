@@ -580,8 +580,8 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
 
           if (tool === 'highlight') {
             const p = toNorm(cx, cy)
-            const FAR_RX = 0.028, NEAR_RX = 0.075
-            const FAR_RY = 0.04, NEAR_RY = 0.10
+            const FAR_RX = 0.016, NEAR_RX = 0.042
+            const FAR_RY = 0.032, NEAR_RY = 0.068
             let t: number // 0 = far, 1 = near
 
             if (pitchPolygon && pitchPolygon.length >= 3) {
