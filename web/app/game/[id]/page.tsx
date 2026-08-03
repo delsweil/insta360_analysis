@@ -400,7 +400,7 @@ export default function GamePage({ params }: Props) {
         // reading annotations another coach created, even though the write
         // itself succeeded. Merge the known patch into local state instead.
         data = annotations.find(a => a.id === editingAnnotationId)
-          ? { ...annotations.find(a => a.id === editingAnnotationId)!, ...patch, note: patch.note ?? undefined }
+          ? { ...annotations.find(a => a.id === editingAnnotationId)!, ...patch, note: patch.note ?? undefined, end_timestamp_sec: patch.end_timestamp_sec ?? undefined }
           : null
         if (data) {
           const updated = data
