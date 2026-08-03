@@ -794,7 +794,11 @@ export default function GamePage({ params }: Props) {
                 onUpdateShape={(shapeId, patch) =>
                   setDraftShapes(prev => prev.map(s => s.id === shapeId ? { ...s, ...patch } as Shape : s))
                 }
-                onRemoveShape={shapeId => setDraftShapes(prev => prev.filter(s => s.id !== shapeId))}
+                onRemoveShape={shapeId => setDraftShapes(prev =>
+                  prev.filter(s => s.id !== shapeId)
+                    // cascade delete: drop any connector that referenced the removed shape
+                    .filter(s => !(s.type === 'connector' && (s.fromId === shapeId || s.toId === shapeId)))
+                )}
                 onToggleVideo={() => (isPlaying ? pauseVideo() : resumeVideo())}
               />
             </div>
@@ -1098,7 +1102,11 @@ export default function GamePage({ params }: Props) {
                 onUpdateShape={(shapeId, patch) =>
                   setDraftShapes(prev => prev.map(s => s.id === shapeId ? { ...s, ...patch } as Shape : s))
                 }
-                onRemoveShape={shapeId => setDraftShapes(prev => prev.filter(s => s.id !== shapeId))}
+                onRemoveShape={shapeId => setDraftShapes(prev =>
+                  prev.filter(s => s.id !== shapeId)
+                    // cascade delete: drop any connector that referenced the removed shape
+                    .filter(s => !(s.type === 'connector' && (s.fromId === shapeId || s.toId === shapeId)))
+                )}
                 onToggleVideo={() => (isPlaying ? pauseVideo() : resumeVideo())}
               />
             </div>

@@ -519,6 +519,11 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
             setSelectedId(bodyHit)
             if (bodyHit) {
               const shape = shapes.find(s => s.id === bodyHit)!
+              if (shape.type === 'connector') {
+                // Selectable, but not draggable as a whole — its position
+                // comes from the two highlights it links, not its own coords.
+                return
+              }
               const p = toNorm(cx, cy)
               const anchor = shape.type === 'highlight' || shape.type === 'label' || shape.type === 'number' || shape.type === 'cone' ? shape.pos
                 : shape.type === 'curve' ? shape.from : shape.points[0]
