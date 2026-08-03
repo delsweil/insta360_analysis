@@ -1,25 +1,23 @@
 'use client'
 
 // components/TimingStrip.tsx
-// Replaces TrimStrip with a fuller timing model: four distinct, explicit
-// points instead of tangled implicit logic (a fixed "hold seconds after
-// resume" heuristic, a dual-purpose end_timestamp_sec, etc).
+// All four points are draggable, including the "shown" pin — moving it
+// re-anchors which frame the annotation is considered to be drawn on. The
+// coach is the judge of whether the diagram still applies to a nearby frame,
+// not something the tool should lock away; if it's dragged past a neighbor,
+// that neighbor gets pushed along with it rather than allowing an invalid
+// (out-of-order) state.
 //
-//   clip start ──────► [ANNOTATION SHOWN] ──────► annotation removed ──────► clip end
-//   (draggable,          (fixed pin — where           (draggable,              (draggable,
-//    ≤ pin)                shapes are drawn)            ≥ pin)                   ≥ removed)
-//
-// Dragging any handle live-scrubs the video preview via onScrub, and commits
-// via onChange when released — same pattern as the old TrimStrip.
+//   clip start ──────► annotation shown ──────► annotation removed ──────► clip end
 
 import { useRef, useState, useCallback, useEffect } from 'react'
 
 interface TimingStripProps {
-  /** The annotation's fixed frame — where the shapes are drawn, never moves. */
   timestampSec: number
   contextStart: number
   annotationEnd: number
   clipEnd: number
+  onChangeTimestamp: (sec: number) => void
   onChangeContextStart: (sec: number) => void
   onChangeAnnotationEnd: (sec: number) => void
   onChangeClipEnd: (sec: number) => void
@@ -27,11 +25,12 @@ interface TimingStripProps {
   onScrub: (sec: number) => void
 }
 
-type HandleKey = 'contextStart' | 'annotationEnd' | 'clipEnd'
+type HandleKey = 'contextStart' | 'timestamp' | 'annotationEnd' | 'clipEnd'
+type Local = { contextStart: number; timestamp: number; annotationEnd: number; clipEnd: number }
 
 const STRIP_WIDTH = 320
-const LEFT_PAD_SEC = 3   // minimum room shown before the earliest point
-const RIGHT_PAD_SEC = 3  // minimum room shown after the latest point
+const LEFT_PAD_SEC = 3
+const RIGHT_PAD_SEC = 3
 
 function fmt(sec: number) {
   const s = Math.max(0, Math.round(sec))
@@ -42,18 +41,18 @@ function fmt(sec: number) {
 
 export default function TimingStrip({
   timestampSec, contextStart, annotationEnd, clipEnd,
-  onChangeContextStart, onChangeAnnotationEnd, onChangeClipEnd, onScrub,
+  onChangeTimestamp, onChangeContextStart, onChangeAnnotationEnd, onChangeClipEnd, onScrub,
 }: TimingStripProps) {
   const stripRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState<HandleKey | null>(null)
-  const [local, setLocal] = useState({ contextStart, annotationEnd, clipEnd })
+  const [local, setLocal] = useState<Local>({ contextStart, timestamp: timestampSec, annotationEnd, clipEnd })
 
   useEffect(() => {
-    if (!dragging) setLocal({ contextStart, annotationEnd, clipEnd })
-  }, [contextStart, annotationEnd, clipEnd, dragging])
+    if (!dragging) setLocal({ contextStart, timestamp: timestampSec, annotationEnd, clipEnd })
+  }, [contextStart, timestampSec, annotationEnd, clipEnd, dragging])
 
-  const rangeStart = Math.min(contextStart, local.contextStart) - LEFT_PAD_SEC
-  const rangeEnd = Math.max(clipEnd, local.clipEnd) + RIGHT_PAD_SEC
+  const rangeStart = Math.min(contextStart, local.contextStart, local.timestamp) - LEFT_PAD_SEC
+  const rangeEnd = Math.max(clipEnd, local.clipEnd, local.timestamp) + RIGHT_PAD_SEC
   const rangeLen = Math.max(1, rangeEnd - rangeStart)
 
   const secToX = useCallback((sec: number) => {
@@ -70,17 +69,29 @@ export default function TimingStrip({
     const rect = stripRef.current!.getBoundingClientRect()
     const raw = xToSec(clientX - rect.left)
     setLocal(prev => {
-      let next = { ...prev }
-      if (key === 'contextStart') next.contextStart = Math.min(raw, timestampSec)
-      if (key === 'annotationEnd') next.annotationEnd = Math.max(raw, timestampSec, prev.contextStart)
-      if (key === 'clipEnd') next.clipEnd = Math.max(raw, next.annotationEnd)
-      // keep dependent order sane if a middle handle got dragged past a neighbor
-      next.annotationEnd = Math.max(next.annotationEnd, timestampSec)
+      const next = { ...prev }
+      if (key === 'contextStart') {
+        next.contextStart = Math.min(raw, next.timestamp)
+      }
+      if (key === 'timestamp') {
+        // moving the pin can push its neighbors along, rather than being blocked by them
+        next.timestamp = raw
+        if (next.contextStart > raw) next.contextStart = raw
+        if (next.annotationEnd < raw) next.annotationEnd = raw
+      }
+      if (key === 'annotationEnd') {
+        next.annotationEnd = Math.max(raw, next.timestamp)
+      }
+      if (key === 'clipEnd') {
+        next.clipEnd = Math.max(raw, next.annotationEnd)
+      }
+      // keep dependent order sane after any of the above
+      next.annotationEnd = Math.max(next.annotationEnd, next.timestamp)
       next.clipEnd = Math.max(next.clipEnd, next.annotationEnd)
       onScrub(raw)
       return next
     })
-  }, [xToSec, timestampSec, onScrub])
+  }, [xToSec, onScrub])
 
   useEffect(() => {
     if (!dragging) return
@@ -99,12 +110,13 @@ export default function TimingStrip({
   useEffect(() => {
     if (dragging) return
     if (local.contextStart !== contextStart) onChangeContextStart(local.contextStart)
+    if (local.timestamp !== timestampSec) onChangeTimestamp(local.timestamp)
     if (local.annotationEnd !== annotationEnd) onChangeAnnotationEnd(local.annotationEnd)
     if (local.clipEnd !== clipEnd) onChangeClipEnd(local.clipEnd)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragging])
 
-  const pinX = secToX(timestampSec)
+  const pinX = secToX(local.timestamp)
   const startX = secToX(local.contextStart)
   const removedX = secToX(local.annotationEnd)
   const endX = secToX(local.clipEnd)
@@ -125,10 +137,15 @@ export default function TimingStrip({
     <div style={{ marginTop: 6 }}>
       <div style={{ display: 'flex', gap: 10, fontSize: 10, color: '#8A8F9E', marginBottom: 4, flexWrap: 'wrap' }}>
         <span><span style={{ color: '#0f2972', fontWeight: 700 }}>●</span> Start {fmt(local.contextStart)}</span>
-        <span><span style={{ color: '#4ade80', fontWeight: 700 }}>●</span> Shown {fmt(timestampSec)}</span>
+        <span><span style={{ color: '#4ade80', fontWeight: 700 }}>●</span> Shown {fmt(local.timestamp)}</span>
         <span><span style={{ color: '#f97316', fontWeight: 700 }}>●</span> Removed {fmt(local.annotationEnd)}</span>
         <span><span style={{ color: '#b91c1c', fontWeight: 700 }}>●</span> Clip end {fmt(local.clipEnd)}</span>
       </div>
+      {local.timestamp !== timestampSec && dragging === null && (
+        <div style={{ fontSize: 10, color: '#f97316', marginBottom: 4 }}>
+          Moved off the original drawn frame — double check the shapes still match before saving.
+        </div>
+      )}
       <div
         ref={stripRef}
         style={{
@@ -155,13 +172,8 @@ export default function TimingStrip({
           background: 'rgba(185, 28, 28, 0.08)',
         }} />
 
-        {/* fixed pin */}
-        <div style={{
-          position: 'absolute', top: 1, bottom: 1, left: pinX - 1.5, width: 3,
-          background: '#4ade80', borderRadius: 2, zIndex: 2,
-        }} />
-
         <Handle x={startX} color="#0f2972" keyName="contextStart" />
+        <Handle x={pinX} color="#4ade80" keyName="timestamp" />
         <Handle x={removedX} color="#f97316" keyName="annotationEnd" />
         <Handle x={endX} color="#b91c1c" keyName="clipEnd" />
       </div>

@@ -381,6 +381,7 @@ export default function GamePage({ params }: Props) {
     setSaveError(null)
     if (editingAnnotationId) {
       const patch = {
+        timestamp_sec: markIn ?? undefined,
         shapes: draftShapes.length ? draftShapes : null,
         annotation_end_sec: draftShapes.length ? annotationEndSec : null,
         end_timestamp_sec: draftShapes.length ? clipEndSec : null,
@@ -400,7 +401,7 @@ export default function GamePage({ params }: Props) {
         // reading annotations another coach created, even though the write
         // itself succeeded. Merge the known patch into local state instead.
         data = annotations.find(a => a.id === editingAnnotationId)
-          ? { ...annotations.find(a => a.id === editingAnnotationId)!, ...patch, note: patch.note ?? undefined, end_timestamp_sec: patch.end_timestamp_sec ?? undefined }
+          ? { ...annotations.find(a => a.id === editingAnnotationId)!, ...patch, note: patch.note ?? undefined, end_timestamp_sec: patch.end_timestamp_sec ?? undefined, timestamp_sec: patch.timestamp_sec ?? annotations.find(a => a.id === editingAnnotationId)!.timestamp_sec }
           : null
         if (data) {
           const updated = data
@@ -1203,6 +1204,7 @@ export default function GamePage({ params }: Props) {
                           contextStart={contextStartSec ?? Math.max(0, markIn - 2)}
                           annotationEnd={annotationEndSec ?? (markIn + 1.5)}
                           clipEnd={clipEndSec ?? (markIn + 5)}
+                          onChangeTimestamp={setMarkIn}
                           onChangeContextStart={setContextStartSec}
                           onChangeAnnotationEnd={setAnnotationEndSec}
                           onChangeClipEnd={setClipEndSec}
