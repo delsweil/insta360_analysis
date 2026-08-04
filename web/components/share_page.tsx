@@ -44,6 +44,7 @@ export default function SharePage({ params }: Props) {
   const [duration, setDuration] = useState(0)
   const [currentIdx, setCurrentIdx] = useState(0)
   const [autoPlay, setAutoPlay] = useState(false)
+  const [isPlaying, setIsPlaying] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const autoPlayRef = useRef(autoPlay)
@@ -51,6 +52,16 @@ export default function SharePage({ params }: Props) {
   const reelStartedRef = useRef(false)
   const [reelFinished, setReelFinished] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
+
+  // Shapes belonging to whichever tactical annotation's [shown, removed]
+  // window currently contains playback — same pure time-range rule as the
+  // coach page, so it works whether someone's watching normally, scrubbing,
+  // or stepping through the reel — not tied to which row is selected.
+  const activeTacticalShapes = annotations.find(a =>
+    a.label === 'tactical' && a.shapes?.length &&
+    currentTime >= a.timestamp_sec &&
+    currentTime <= (a.annotation_end_sec ?? a.timestamp_sec + 1.5)
+  )?.shapes ?? []
 
   useEffect(() => {
     async function load() {
@@ -117,6 +128,7 @@ export default function SharePage({ params }: Props) {
         if (data?.event === 'infoDelivery' && data?.info) {
           if (data.info.currentTime !== undefined) setCurrentTime(data.info.currentTime)
           if (data.info.duration !== undefined && data.info.duration > 0) setDuration(data.info.duration)
+          if (data.info.playerState !== undefined) setIsPlaying(data.info.playerState === 1)
         }
       } catch {}
     }
@@ -157,6 +169,18 @@ export default function SharePage({ params }: Props) {
     playerRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: 'seekTo', args: [sec, true] }), '*'
     )
+    playerRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*'
+    )
+  }, [])
+
+  const pauseVideo = useCallback(() => {
+    playerRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*'
+    )
+  }, [])
+
+  const resumeVideo = useCallback(() => {
     playerRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*'
     )
@@ -329,14 +353,16 @@ export default function SharePage({ params }: Props) {
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 />
               )}
-              {/* Read-only tactical overlay for whichever clip is currently playing in the reel */}
+              {/* Read-only tactical overlay — pure time-range check, works during
+                  normal playback/scrubbing as well as the auto-advancing reel */}
               <AnnotationCanvas
-                shapes={annotations[currentIdx]?.label === 'tactical' ? annotations[currentIdx]?.shapes ?? [] : []}
+                shapes={activeTacticalShapes}
                 editable={false}
                 tool="select"
                 onAddShape={() => {}}
                 onUpdateShape={() => {}}
                 onRemoveShape={() => {}}
+                onToggleVideo={() => (isPlaying ? pauseVideo() : resumeVideo())}
               />
             </div>
 
