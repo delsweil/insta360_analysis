@@ -13,6 +13,7 @@ import AnnotationCanvas, { type Shape, type Tool, type AnnotationCanvasHandle } 
 import RecordExportButton from '@/components/RecordExportButton'
 import TimingStrip from '@/components/TimingStrip'
 import DrawTools from '@/components/DrawTools'
+import VeoImportModal from '@/components/VeoImportModal'
 
 function formatTime(sec: number) {
   const m = Math.floor(sec / 60)
@@ -73,6 +74,7 @@ export default function GamePage({ params }: Props) {
   const [clipEndSec, setClipEndSec] = useState<number | null>(null) // clip ends — absolute video time this annotation's range finishes
   const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null)
   const autoResumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [showVeoImport, setShowVeoImport] = useState(false)
 
   // Shapes belonging to whichever tactical annotation's [shown, removed]
   // window currently contains playback — a pure time-range check now, not
@@ -1041,6 +1043,26 @@ export default function GamePage({ params }: Props) {
           />
         )}
 
+        {showVeoImport && isCoach && userId && (
+          <VeoImportModal
+            gameId={id}
+            homeTeam={game.home_team}
+            awayTeam={game.away_team}
+            userId={userId}
+            onClose={() => setShowVeoImport(false)}
+            onImported={(count) => {
+              setShowVeoImport(false)
+              // Reload annotations to pick up the new batch
+              supabase
+                .from('annotations')
+                .select('*, profiles(display_name)')
+                .eq('game_id', id)
+                .order('timestamp_sec')
+                .then(({ data }) => { if (data) setAnnotations(data) })
+            }}
+          />
+        )}
+
         <div style={{ display: 'grid', gridTemplateColumns: focusMode ? '1fr' : '1fr 300px', gap: 10 }}>
           {/* Left */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1348,14 +1370,32 @@ export default function GamePage({ params }: Props) {
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               }}>
                 Annotations
-                <span style={{
-                  fontFamily: 'DM Sans, sans-serif',
-                  fontSize: 10, fontWeight: 700,
-                  padding: '2px 8px', borderRadius: 99,
-                  background: '#e8edf8', color: '#0f2972',
-                }}>
-                  {annotations.length}
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {isCoach && (
+                    <button
+                      onClick={() => setShowVeoImport(true)}
+                      title="Import timestamps from a Veo highlights export"
+                      style={{
+                        fontSize: 10, fontWeight: 600,
+                        padding: '3px 8px', borderRadius: 99,
+                        border: '1.5px solid #E4E6EE',
+                        background: '#fff', color: '#4A4F5C',
+                        cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      + Veo import
+                    </button>
+                  )}
+                  <span style={{
+                    fontFamily: 'DM Sans, sans-serif',
+                    fontSize: 10, fontWeight: 700,
+                    padding: '2px 8px', borderRadius: 99,
+                    background: '#e8edf8', color: '#0f2972',
+                  }}>
+                    {annotations.length}
+                  </span>
+                </div>
               </div>
 
               {annotations.length === 0 && (
