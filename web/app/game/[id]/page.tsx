@@ -75,6 +75,7 @@ export default function GamePage({ params }: Props) {
   const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null)
   const autoResumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [showVeoImport, setShowVeoImport] = useState(false)
+  const [editingLabelId, setEditingLabelId] = useState<string | null>(null)
 
   // Shapes belonging to whichever tactical annotation's [shown, removed]
   // window currently contains playback — a pure time-range check now, not
@@ -274,6 +275,19 @@ export default function GamePage({ params }: Props) {
       }
     }
   }, [currentTime, reelAutoPlay, reelIdx, filteredAnnotations, seekTo, loopReel, loopDelaySec, startReelForRecording])
+
+  // Close the label dropdown when the user clicks anywhere outside it
+  useEffect(() => {
+    if (!editingLabelId) return
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-label-dropdown]')) {
+        setEditingLabelId(null)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [editingLabelId])
 
   // Cancel any pending loop restart if the coach turns Loop off mid-wait, or leaves the page.
   useEffect(() => {
@@ -587,8 +601,24 @@ export default function GamePage({ params }: Props) {
     )
   }
 
+  // Patch a single annotation's label in DB + local state
+  const handleLabelChange = useCallback(async (annId: string, newLabel: string) => {
+    setEditingLabelId(null)
+    const { error } = await supabase
+      .from('annotations')
+      .update({ label: newLabel })
+      .eq('id', annId)
+    if (!error) {
+      setAnnotations(prev => prev.map(a => a.id === annId ? { ...a, label: newLabel } : a))
+    }
+  }, [])
+
   // Annotation row
-  const AnnRow = ({ ann, compact = false }: { ann: Annotation, compact?: boolean }) => (
+  const AnnRow = ({ ann, compact = false }: { ann: Annotation, compact?: boolean }) => {
+    const isLabelOpen = editingLabelId === ann.id
+    const color = labelColor(ann.label)
+
+    return (
     <div
       style={{
         padding: compact ? '8px 10px' : '7px 0',
@@ -598,8 +628,10 @@ export default function GamePage({ params }: Props) {
         background: compact ? '#fff' : 'transparent',
         border: compact ? '1px solid #E4E6EE' : undefined,
         cursor: 'pointer',
+        position: 'relative',
       }}
       onClick={() => {
+        if (isLabelOpen) return
         const jumpSec = ann.label === 'tactical' && ann.context_start_sec != null ? ann.context_start_sec : ann.timestamp_sec
         seekTo(jumpSec)
         if (isMobile) setShowAnnotations(false)
@@ -614,9 +646,82 @@ export default function GamePage({ params }: Props) {
         }}>
           {formatTime(ann.timestamp_sec)}
         </span>
-        <span style={{ fontSize: compact ? 13 : 12, color: '#111318', flex: 1 }}>
-          {labelDisplay(ann.label, game?.home_team, game?.away_team)}
-        </span>
+
+        {/* Label — clickable badge for coaches */}
+        {isCoach && ann.label !== 'tactical' ? (
+          <div style={{ position: 'relative', flex: 1 }}>
+            <button
+              data-label-dropdown
+              onClick={(e) => {
+                e.stopPropagation()
+                setEditingLabelId(isLabelOpen ? null : ann.id)
+              }}
+              title="Click to change label"
+              style={{
+                fontSize: compact ? 12 : 11, fontWeight: 600,
+                padding: '2px 8px', borderRadius: 99,
+                border: `1.5px solid ${color}`,
+                background: `${color}18`,
+                color, cursor: 'pointer',
+                fontFamily: 'DM Sans, sans-serif',
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+              }}
+            >
+              {labelDisplay(ann.label, game?.home_team, game?.away_team)}
+              <span style={{ fontSize: 9, opacity: 0.6 }}>▾</span>
+            </button>
+
+            {/* Dropdown */}
+            {isLabelOpen && (
+              <div
+                data-label-dropdown
+                onClick={e => e.stopPropagation()}
+                style={{
+                  position: 'absolute', top: '100%', left: 0, zIndex: 200,
+                  marginTop: 4, background: '#fff',
+                  border: '1px solid #E4E6EE', borderRadius: 10,
+                  boxShadow: '0 8px 24px rgba(15,41,114,0.14)',
+                  minWidth: 160, overflow: 'hidden',
+                  fontFamily: 'DM Sans, sans-serif',
+                }}
+              >
+                {LABEL_DEFS.filter(l => l.key !== 'tactical').map(l => {
+                  const lc = labelColor(l.key)
+                  const isActive = l.key === ann.label
+                  return (
+                    <button
+                      key={l.key}
+                      onClick={() => handleLabelChange(ann.id, l.key)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 7,
+                        width: '100%', padding: '7px 12px',
+                        border: 'none', background: isActive ? `${lc}12` : 'transparent',
+                        cursor: 'pointer', textAlign: 'left',
+                        fontSize: 12, fontWeight: isActive ? 700 : 400,
+                        color: isActive ? lc : '#111318',
+                        borderBottom: '1px solid #F8F8F6',
+                      }}
+                    >
+                      <AnnotationShape labelKey={l.key} size={10} />
+                      {l.display}
+                      {l.team !== 'none' && (
+                        <span style={{ fontSize: 10, opacity: 0.55, marginLeft: 'auto' }}>
+                          {l.team === 'home' ? game?.home_team ?? 'Home' : game?.away_team ?? 'Away'}
+                        </span>
+                      )}
+                      {isActive && <span style={{ marginLeft: 'auto', fontSize: 10, color: lc }}>✓</span>}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        ) : (
+          <span style={{ fontSize: compact ? 13 : 12, color: '#111318', flex: 1 }}>
+            {labelDisplay(ann.label, game?.home_team, game?.away_team)}
+          </span>
+        )}
+
         {ann.profiles?.display_name && (
           <span style={{ fontSize: 10, color: '#8A8F9E', flexShrink: 0 }}>
             {ann.profiles.display_name}
@@ -673,7 +778,8 @@ export default function GamePage({ params }: Props) {
         </div>
       )}
     </div>
-  )
+    )
+  }
 
   if (loading) return (
     <div style={{
