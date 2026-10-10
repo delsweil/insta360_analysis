@@ -57,11 +57,29 @@ export default function SharePage({ params }: Props) {
   // window currently contains playback — same pure time-range rule as the
   // coach page, so it works whether someone's watching normally, scrubbing,
   // or stepping through the reel — not tied to which row is selected.
-  const activeTacticalShapes = annotations.find(a =>
+  const tacticalWithShapes = annotations.filter(a => a.label === 'tactical' && a.shapes?.length)
+  const activeTacticalAnnotation = annotations.find(a =>
     a.label === 'tactical' && a.shapes?.length &&
     currentTime >= a.timestamp_sec &&
     currentTime <= (a.annotation_end_sec ?? a.timestamp_sec + 1.5)
-  )?.shapes ?? []
+  )
+  const activeTacticalShapes = activeTacticalAnnotation?.shapes ?? []
+
+  useEffect(() => {
+    console.log('[share] total annotations loaded:', annotations.length)
+    console.log('[share] tactical annotations with shapes:', tacticalWithShapes.map(a => ({
+      id: a.id,
+      timestamp_sec: a.timestamp_sec,
+      annotation_end_sec: a.annotation_end_sec,
+      shapeCount: a.shapes?.length,
+    })))
+  }, [annotations])
+
+  useEffect(() => {
+    if (tacticalWithShapes.length > 0) {
+      console.log('[share] currentTime:', currentTime.toFixed(2), 'active match:', activeTacticalAnnotation?.id ?? 'none')
+    }
+  }, [currentTime])
 
   useEffect(() => {
     async function load() {
@@ -145,26 +163,6 @@ export default function SharePage({ params }: Props) {
     return () => clearInterval(interval)
   }, [])
 
-  // Auto-advance: when current annotation's end time is reached, jump to next
-  useEffect(() => {
-    if (!autoPlay || annotations.length === 0) return
-    const ann = annotations[currentIdx]
-    if (!ann) return
-
-    const endTime = ann.end_timestamp_sec ?? (ann.timestamp_sec + 10)
-    if (currentTime >= endTime) {
-      const nextIdx = currentIdx + 1
-      if (nextIdx < annotations.length) {
-        setCurrentIdx(nextIdx)
-        seekTo(annotations[nextIdx].timestamp_sec)
-      } else {
-        // End of highlights
-        setAutoPlay(false)
-        if (reelStartedRef.current) setReelFinished(true)
-      }
-    }
-  }, [currentTime, autoPlay, currentIdx, annotations])
-
   const seekTo = useCallback((sec: number) => {
     playerRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: 'seekTo', args: [sec, true] }), '*'
@@ -185,6 +183,28 @@ export default function SharePage({ params }: Props) {
       JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*'
     )
   }, [])
+
+  // Auto-advance: when current annotation's end time is reached, jump to next
+  useEffect(() => {
+    if (!autoPlay || annotations.length === 0) return
+    const ann = annotations[currentIdx]
+    if (!ann) return
+
+    const endTime = ann.end_timestamp_sec ?? (ann.timestamp_sec + 10)
+    if (currentTime >= endTime) {
+      const nextIdx = currentIdx + 1
+      if (nextIdx < annotations.length) {
+        setCurrentIdx(nextIdx)
+        seekTo(annotations[nextIdx].timestamp_sec)
+      } else {
+        // End of highlights — actually pause, not just stop tracking, or
+        // playback keeps rolling straight into whatever footage follows.
+        setAutoPlay(false)
+        pauseVideo()
+        if (reelStartedRef.current) setReelFinished(true)
+      }
+    }
+  }, [currentTime, autoPlay, currentIdx, annotations, seekTo, pauseVideo])
 
   const handleSelectAnnotation = (idx: number) => {
     setCurrentIdx(idx)

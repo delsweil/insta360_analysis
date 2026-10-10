@@ -13,6 +13,7 @@ interface VeoEvent {
   start: number
   type: string          // 'goal' | 'shot_on_goal' | …
   thumbnail?: string
+  duration?: number     // clip length in seconds (e.g. 25)
   tags?: { name: string; slug: string }[]
 }
 
@@ -20,7 +21,7 @@ interface ImportRow {
   start: number
   type: string
   thumbnail?: string
-  // which team the coach assigns — null = unset (rendered as pending)
+  duration: number      // clip length — becomes end_timestamp_sec
   team: 'home' | 'away'
 }
 
@@ -69,11 +70,20 @@ export default function VeoImportModal({ gameId, homeTeam, awayTeam, userId, onC
         return
       }
 
+      // Veo records both a 'goal' and a 'shot_on_goal' at the same second for
+      // each goal. Drop the shot when a goal exists within 2s of it.
+      const goalTimestamps = supported.filter(e => e.type === 'goal').map(e => e.start)
+      const deduped = supported.filter(e => {
+        if (e.type !== 'shot_on_goal') return true
+        return !goalTimestamps.some(g => Math.abs(g - e.start) <= 2)
+      })
+
       setRows(
-        supported.map(e => ({
+        deduped.map(e => ({
           start: e.start,
           type: e.type,
           thumbnail: e.thumbnail,
+          duration: e.duration ?? 25, // default 25s if not provided
           team: 'home', // default — coach will correct
         }))
       )
@@ -88,6 +98,10 @@ export default function VeoImportModal({ gameId, homeTeam, awayTeam, userId, onC
     )
   }
 
+  function removeRow(idx: number) {
+    setRows(prev => prev!.filter((_, i) => i !== idx))
+  }
+
   async function handleImport() {
     if (!rows) return
     setImporting(true)
@@ -97,6 +111,7 @@ export default function VeoImportModal({ gameId, homeTeam, awayTeam, userId, onC
       game_id: gameId,
       user_id: userId,
       timestamp_sec: r.start,
+      end_timestamp_sec: r.start + r.duration,
       label: `${baseLabel(r.type)}_${r.team}`,
       note: `Veo import · ${r.type === 'goal' ? 'Goal' : 'Shot on goal'}`,
       is_public: true,
@@ -251,7 +266,7 @@ export default function VeoImportModal({ gameId, homeTeam, awayTeam, userId, onC
                           fontFamily: 'Bebas Neue, sans-serif',
                           fontSize: 13, color: '#0f2972', letterSpacing: '0.04em',
                         }}>
-                          {formatTime(row.start)}
+                          {formatTime(row.start)} → {formatTime(row.start + row.duration)}
                         </div>
                       </div>
 
@@ -270,6 +285,20 @@ export default function VeoImportModal({ gameId, homeTeam, awayTeam, userId, onC
                       >
                         {teamLabel} ⇄
                       </button>
+
+                      {/* Remove this row */}
+                      <button
+                        onClick={() => removeRow(idx)}
+                        title="Remove from import"
+                        style={{
+                          fontSize: 14, color: '#C0C4CE',
+                          background: 'none', border: 'none',
+                          cursor: 'pointer', padding: '2px 4px',
+                          lineHeight: 1, flexShrink: 0,
+                        }}
+                      >
+                        ✕
+                      </button>
                     </div>
                   )
                 })}
@@ -277,7 +306,7 @@ export default function VeoImportModal({ gameId, homeTeam, awayTeam, userId, onC
 
               <div style={{ marginTop: 10, fontSize: 11, color: '#8A8F9E' }}>
                 {rows.length} event{rows.length !== 1 ? 's' : ''} ready to import.
-                Click a team button to toggle between {homeTeam} and {awayTeam}.
+                Toggle team or click ✕ to remove an event before importing.
               </div>
 
               {importError && (

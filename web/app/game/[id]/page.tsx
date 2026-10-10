@@ -592,7 +592,7 @@ export default function GamePage({ params }: Props) {
           >
             <AnnotationShape
               labelKey={ann.label}
-              size={mobileSize ? 14 : 11}
+              size={mobileSize ? 10 : 7}
             />
           </div>
         )
