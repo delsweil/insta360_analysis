@@ -251,6 +251,7 @@ class Annotator:
         self._path_cache = (None, None)
         self._curve_cache = (None, None)
         self._pv_cache = (None, None, None)
+        self._last_wheel = -1.0
         self._canvas = np.zeros((self.size[1], self.size[0], 3), np.uint8)
         self.dirty = True
 
@@ -601,8 +602,10 @@ class Annotator:
                 delta = cv2.getMouseWheelDelta(flags)
             except AttributeError:
                 delta = ctypes_signed16(flags >> 16)
-            if delta:
-                self.zoom(0.97 if delta > 0 else 1 / 0.97)
+            now = time.perf_counter()
+            if delta and now - self._last_wheel >= 0.04:     # trackpads fire bursts of events
+                self._last_wheel = now
+                self.zoom(0.99 if delta > 0 else 1 / 0.99)
 
     def _drag_crop(self, x):
         lon, _ = self._mouse_lonlat(x, 0)

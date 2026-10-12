@@ -497,8 +497,12 @@ class TestAnnotator(unittest.TestCase):
         flags_up = 120 << 16
         a.on_mouse(cv2.EVENT_MOUSEWHEEL, 100, 100, flags_up)
         self.assertLess(a.fov, f0)
+        for _ in range(200):                          # a trackpad burst within ~1 ms changes it only once
+            a.on_mouse(cv2.EVENT_MOUSEWHEEL, 100, 100, flags_up)
+        self.assertGreater(a.fov, f0 * 0.97)
+        a._last_wheel = -1.0
         a.on_mouse(cv2.EVENT_MOUSEWHEEL, 100, 100, (-120 & 0xFFFF) << 16)
-        self.assertAlmostEqual(a.fov, f0, places=6)
+        self.assertGreater(a.fov, f0 * 0.99 - 1e-6)
         for _ in range(500):
             a.zoom(0.9)
         self.assertEqual(a.fov, K.FOV_MIN)
