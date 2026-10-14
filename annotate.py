@@ -214,7 +214,8 @@ class Annotator:
                  disp_w: int = 1440, legacy_fov: bool = False, interp: str = "pchip",
                  projection: Optional[str] = None,
                  gap_warn: float = 20.0, rec_interval: float = 0.5,
-                 out_w: int = K.OUT_W, out_h: int = K.OUT_H, start: Optional[float] = None):
+                 out_w: int = K.OUT_W, out_h: int = K.OUT_H, start: Optional[float] = None,
+                 fov_max: Optional[float] = None):
         self.video = video
         self.kf_path = kf_path or (os.path.splitext(video)[0] + ".keyframes.json")
         self.src = FrameSource(video, disp_w)
@@ -236,6 +237,8 @@ class Annotator:
         self.rec_interval = rec_interval
 
         meta = K.load_meta(self.kf_path)
+        fm = _opt_float(fov_max if fov_max is not None else meta.get("fov_max"))
+        self.fov_max = float(min(K.FOV_HARD_MAX, max(60.0, fm))) if fm is not None else K.FOV_MAX    # widest zoom-out allowed
         self.base_tilt = float(tilt if tilt is not None else meta.get("tilt_deg", 0.0))   # project tilt
         self.tilt = self.base_tilt                                  # tilt of the view being shown / edited
         # a project saved before projections existed was annotated in the flat view; new ones start cylindrical
@@ -403,7 +406,7 @@ class Annotator:
         if pan is not None:
             self.pan = float(K.wrap180(pan))
         if fov is not None:
-            self.fov = float(min(K.FOV_MAX, max(K.FOV_MIN, fov)))
+            self.fov = float(min(self.fov_max, max(K.FOV_MIN, fov)))
         kf = self.kf_here()
         if kf is not None and not self.playing:
             self.kfs.upsert(K.Keyframe(kf.t, self.pan, self.fov, self._kf_tilt()))      # live edit
@@ -513,6 +516,7 @@ class Annotator:
             self.kfs.save(self.kf_path)
             self._saved_version = self.kfs.version
         K.save_meta(self.kf_path, tilt_deg=round(self.base_tilt, 3), legacy_fov=self.legacy_fov, projection=self.projection,
+                    fov_max=self.fov_max,
                     interp=self.interp, video=os.path.basename(self.video), fps=self.fps,
                     last_t=round(self.t, 3), trim_in=self.trim_in, trim_out=self.trim_out)
         self._meta_dirty = False
@@ -960,6 +964,9 @@ def main(argv=None) -> int:
     p.add_argument("--projection", choices=K.PROJECTIONS, default=None,
                    help="output view: flat (rectilinear) or cylindrical (straight verticals, far less "
                         "edge stretch at wide fov). Default: the saved choice, else cylindrical")
+    p.add_argument("--fov-max", type=float, default=None,
+                   help=f"widest zoom-out the editor allows, in degrees (default {K.FOV_MAX:g}, saved with the project; "
+                        f"at most {K.FOV_HARD_MAX:g}). The lens covers about +/-100 deg, so very wide crops show the blank edges")
     p.add_argument("--gap-warn", type=float, default=20.0,
                    help="flag stretches without a keyframe longer than this many seconds (0 = off)")
     p.add_argument("--rec-interval", type=float, default=0.5, help="REC keyframe spacing in seconds")
@@ -970,7 +977,8 @@ def main(argv=None) -> int:
     if tilt is None and a.calib:
         tilt = K.tilt_from_calib(a.calib)
     app = Annotator(a.video, a.keyframes, tilt=tilt, disp_w=a.width, legacy_fov=a.legacy_fov, projection=a.projection,
-                    interp=a.interp, gap_warn=a.gap_warn, rec_interval=a.rec_interval, start=a.start)
+                    interp=a.interp, gap_warn=a.gap_warn, rec_interval=a.rec_interval, start=a.start,
+                    fov_max=a.fov_max)
     print(f"{a.video}: {app.n} frames @ {app.fps:.3f} fps ({K.fmt_time(app.duration)})")
     print(f"keyframes -> {app.kf_path}  ({len(app.kfs)} loaded)   tilt {app.tilt:+.1f} deg   press H for keys")
     run(app)

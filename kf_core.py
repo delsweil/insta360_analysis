@@ -44,7 +44,8 @@ import numpy as np
 # ── Defaults ──────────────────────────────────────────────────────────────────
 OUT_W, OUT_H = 1280, 720          # same as autopan_infer.py
 DEFAULT_FOV = 80.0                # autopan_infer.OUTPUT_FOV
-FOV_MIN, FOV_MAX = 20.0, 140.0
+FOV_MIN, FOV_MAX = 20.0, 140.0       # FOV_MAX: the default widest zoom-out of the editor
+FOV_HARD_MAX = 175.0                  # what --fov-max may raise it to
 PAN_SIGN = -1.0                   # centre longitude = PAN_SIGN * pan_deg
 
 

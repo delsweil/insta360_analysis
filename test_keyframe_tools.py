@@ -27,7 +27,8 @@ import kf_core as K           # noqa: E402
 import make_proxy             # noqa: E402
 import render_keyframes as R  # noqa: E402
 import extract_detections as X  # noqa: E402
-import auto_keyframes as AK  # noqa: E402
+import auto_keyframes as AK
+import tune_auto as TU  # noqa: E402
 
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 try:
@@ -736,6 +737,24 @@ class TestAnnotator(unittest.TestCase):
         self.assertAlmostEqual(b.tilt, -7.0)
         self.assertEqual(b.idx, 45)                              # resumed where we left off
 
+    def test_widest_zoom_out_is_140_unless_raised_and_is_remembered(self):
+        a = self.app("fovmax_default")
+        a.set_crop(fov=170.0)
+        self.assertEqual(a.fov, 140.0)                                   # unchanged default
+        b = self.app("fovmax_wide", fov_max=170.0)
+        b.set_crop(fov=165.0)
+        self.assertEqual(b.fov, 165.0)
+        b.set_crop(fov=400.0)
+        self.assertEqual(b.fov, 170.0)
+        self.assertEqual(b.render().shape, (b.size[1], b.size[0], 3))
+        b.goto(10); b.hold = True; b.handle_key(ord("k"))
+        b.save(force=True)
+        self.assertEqual(K.load_meta(b.kf_path)["fov_max"], 170.0)
+        c = A.Annotator(self.video, b.kf_path, disp_w=640)               # reopened without the flag: remembered
+        self.assertEqual(c.fov_max, 170.0)
+        d = A.Annotator(self.video, b.kf_path, disp_w=640, fov_max=999)  # absurd values are capped
+        self.assertEqual(d.fov_max, K.FOV_HARD_MAX)
+
     def test_cylindrical_projection_persists_and_renders(self):
         a = self.app("cyl", projection="cylindrical")
         a.goto(20); a.hold = True; a.handle_key(ord("k"))
@@ -1282,6 +1301,130 @@ class TestKeyframeTilt(unittest.TestCase):
         self.assertTrue(path.has_tilt)
         self.assertAlmostEqual(path.tilt_at(5.0), -15.0, delta=0.3)
         self.assertLess(path.tilt_at(45.0), -20.0)
+
+
+class TestLeadAndProfile(unittest.TestCase):
+    def test_lead_shift(self):
+        y = np.arange(5.0)
+        self.assertEqual(list(AK.lead_shift(y, 2)), [2, 3, 4, 4, 4])
+        self.assertEqual(list(AK.lead_shift(y, -2)), [0, 0, 0, 1, 2])
+        self.assertEqual(list(AK.lead_shift(y, 0)), list(y))
+        self.assertEqual(len(AK.lead_shift(y, 99)), 5)
+
+    def test_lead_makes_the_camera_arrive_before_the_play(self):
+        f = lambda t: 0.0 if t < 60 else 25.0                            # noqa: E731
+        header, frames = TestAutoKeyframes.make(f)
+        base = AK.build_path(header, frames, deadband=0.0, smooth_s=4.0)
+        led = AK.build_path(header, frames, deadband=0.0, smooth_s=4.0, lead_s=2.0)
+        again = AK.build_path(header, frames, deadband=0.0, smooth_s=4.0, lead_s=0.0)
+        self.assertTrue(np.array_equal(base["pan"], again["pan"]))        # lead 0 changes nothing
+        i = int(np.argmin(np.abs(base["t"] - 58)))
+        self.assertLess(led["pan"][i], base["pan"][i] - 3.0)              # already well on its way, ahead of the jump
+
+    def test_profile_is_loaded_and_command_line_flags_win(self):
+        header, frames = TestAutoKeyframes.make(lambda t: 10.0, seconds=60)
+        with tempfile.TemporaryDirectory() as d:
+            det = os.path.join(d, "g.detections.jsonl")
+            with open(det, "w") as fh:
+                fh.write(json.dumps(header) + "\n")
+                for fr in frames:
+                    fh.write(json.dumps(fr) + "\n")
+            prof = os.path.join(d, "p.json")
+            with open(prof, "w") as fh:
+                json.dump({"settings": {"smooth": 9.0, "lead": 1.0, "tilt": -12.0, "bogus": 1}}, fh)
+            a, b = os.path.join(d, "a.json"), os.path.join(d, "b.json")
+            self.assertEqual(AK.main(["--detections", det, "--out", a, "--profile", prof]), 0)
+            self.assertEqual(K.load_meta(a)["tilt_deg"], -12.0)            # the profile's tilt is used ...
+            self.assertEqual(AK.main(["--detections", det, "--out", b, "--profile", prof, "--tilt", "-5"]), 0)
+            self.assertEqual(K.load_meta(b)["tilt_deg"], -5.0)             # ... unless a flag says otherwise
+            with self.assertRaises(SystemExit):
+                AK.main(["--detections", det, "--out", a, "--profile", os.path.join(d, "missing.json")])
+
+
+class TestTuner(unittest.TestCase):
+    """The tuner must recover settings from a reference that was made with known ones."""
+
+    @staticmethod
+    def _case(d, seconds, truth, tilt_truth=None, near=False, seed=7):
+        centre = lambda t: 25 * np.sin(2 * np.pi * t / 70) + 10 * np.sin(2 * np.pi * t / 23)    # noqa: E731
+        header, frames = TestAutoKeyframes.make(centre, seconds=seconds, seed=seed)
+        for fr in frames:
+            k = 0.6 + 0.8 * (np.sin(fr["t"] / 40) + 1) / 2
+            c = centre(fr["t"])
+            fr["players"] = [[c + (p[0] - c) * k, p[1], p[2], p[3], p[4]] for p in fr["players"]]
+            if near and seconds * 0.3 <= fr["t"] < seconds * 0.6:
+                fr["players"].append([c, -55.0, 120.0, 0.9, None])
+        header["tilt"] = -10.0
+        det = os.path.join(d, f"g{seed}.detections.jsonl")
+        with open(det, "w") as fh:
+            fh.write(json.dumps(header) + "\n")
+            for f in frames:
+                fh.write(json.dumps(f) + "\n")
+        kw = dict(deadband=truth["deadband"], smooth_s=truth["smooth"], zoom_s=truth["zoom_smooth"],
+                  fov_a=truth["fov_a"], fov_b=truth["fov_b"], lead_s=truth["lead"])
+        if tilt_truth:
+            kw.update(adaptive_tilt_on=True, base_tilt=-10.0, tilt_margin=tilt_truth["tilt_margin"],
+                      max_dip=tilt_truth["max_dip"])
+        r = AK.build_path(header, frames, **kw)
+        idx = AK.simplify(r["t"], r["pan"], r["fov"], 0.3, 0.6, 0.5, tilt=r["tilt"], tol_tilt=0.5, base_tilt=-10.0)
+        ref = os.path.join(d, f"ref{seed}.keyframes.json")
+        AK.write_keyframes(ref, r["t"], r["pan"], r["fov"], idx, -10.0, "cylindrical", tilt_path=r["tilt"])
+        return det, ref
+
+    TRUTH = dict(deadband=2.0, smooth=6.0, zoom_smooth=8.0, fov_a=0.5, fov_b=80.0, lead=2.0)
+
+    def test_recovers_pan_and_zoom_settings_and_beats_the_defaults_on_held_out_data(self):
+        with tempfile.TemporaryDirectory() as d:
+            det, ref = self._case(d, 150, self.TRUTH)
+            out = os.path.join(d, "p.json")
+            self.assertEqual(TU.main(["--detections", det, "--reference", ref, "--out", out]), 0)
+            j = json.load(open(out))
+            s, rep = j["settings"], j["report"]
+            self.assertFalse(rep["tilt_fitted"])
+            self.assertNotIn("adaptive_tilt", s)                          # no tilt in the reference -> no tilt fitted
+            self.assertLess(rep["tuned"]["pan"], 0.5 * rep["defaults"]["pan"])
+            self.assertLess(rep["heldout_tuned"]["pan"], 0.6 * rep["heldout_defaults"]["pan"])
+            self.assertGreaterEqual(s["lead"], 1.0)                       # it found that the operator leads the play
+            self.assertAlmostEqual(s["fov_a"], 0.5, delta=0.15)
+            # the profile it wrote is accepted by auto_keyframes and gives a path close to the reference
+            outk = os.path.join(d, "auto.json")
+            self.assertEqual(AK.main(["--detections", det, "--profile", out, "--out", outk, "--compare", ref]), 0)
+
+    def test_fits_tilt_only_when_the_reference_uses_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            det, ref = self._case(d, 120, self.TRUTH, tilt_truth=dict(tilt_margin=6, max_dip=30), near=True, seed=11)
+            self.assertTrue(any(k.tilt_deg is not None for k in K.KeyframeSet.load(ref)))
+            out = os.path.join(d, "p.json")
+            self.assertEqual(TU.main(["--detections", det, "--reference", ref, "--out", out]), 0)
+            j = json.load(open(out))
+            self.assertTrue(j["report"]["tilt_fitted"])
+            self.assertTrue(j["settings"]["adaptive_tilt"])
+            self.assertEqual(j["settings"]["tilt"], -10.0)
+            self.assertLess(j["report"]["tuned"]["tilt"], j["report"]["defaults"]["tilt"])
+            self.assertGreaterEqual(j["settings"]["max_dip"], 30)         # needs the deeper dip the operator used
+
+    def test_two_games_can_be_fitted_together_and_a_mismatched_pair_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            d1, r1 = self._case(d, 90, self.TRUTH, seed=3)
+            d2, r2 = self._case(d, 90, self.TRUTH, seed=4)
+            out = os.path.join(d, "p.json")
+            self.assertEqual(TU.main(["--detections", d1, d2, "--reference", r1, r2, "--out", out]), 0)
+            with open(out) as fh:
+                samples = json.load(fh)["report"]["samples"]
+            self.assertEqual(samples, 2 * len(
+                [1 for r in AK.load_detections(d1)[1] if r["t"] >= K.KeyframeSet.load(r1).items[0].t
+                 and r["t"] <= K.KeyframeSet.load(r1).items[-1].t]))
+            with self.assertRaises(SystemExit):
+                TU.main(["--detections", d1, d2, "--reference", r1])
+
+    def test_reference_that_does_not_overlap_the_detections_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            det, _ = self._case(d, 60, self.TRUTH, seed=5)
+            far = os.path.join(d, "far.keyframes.json")
+            with open(far, "w") as fh:
+                json.dump([{"t": 500, "pan_deg": 0, "fov_deg": 90}, {"t": 520, "pan_deg": 5, "fov_deg": 90}], fh)
+            with self.assertRaises(SystemExit):
+                TU.main(["--detections", det, "--reference", far, "--out", os.path.join(d, "x.json")])
 
 
 if __name__ == "__main__":
