@@ -1045,5 +1045,201 @@ class TestAutoKeyframes(unittest.TestCase):
             self.assertEqual(AK.main(["--detections", det, "--out", out + "2", "--compare", out]), 0)
 
 
+class TestKeyframeTilt(unittest.TestCase):
+    """Optional per-keyframe tilt: file format, interpolation, FFmpeg render, annotator keys, auto pass."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="kftilt_")
+        W, H, fps, n = 1440, 720, 30, 150
+        col = np.round(np.arange(H) / (H - 1) * 65535).astype("<u2")           # value encodes latitude (rows)
+        frame = np.tile(col[:, None], (1, W))
+        cls.src = os.path.join(cls.tmp, "lat16.mkv")
+        ffmpeg_write_gray(cls.src, (frame for _ in range(n)), W, H, fps, pix="gray16le")
+        cls.H, cls.fps = H, fps
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    # -- file format ---------------------------------------------------------
+    def test_files_without_tilt_are_unchanged_and_tilt_round_trips(self):
+        old = K.KeyframeSet.from_list([{"t": 1, "pan_deg": 2, "fov_deg": 90}])
+        self.assertEqual(set(old.to_list()[0]), {"t", "pan_deg", "fov_deg"})       # nothing new in old files
+        self.assertIsNone(old.items[0].tilt_deg)
+        new = K.KeyframeSet.from_list([{"t": 1, "pan_deg": 2, "fov_deg": 90, "tilt_deg": -31.5},
+                                       {"t": 3, "pan_deg": 2, "fov_deg": 90, "tilt_deg": None}])
+        self.assertEqual(new.items[0].tilt_deg, -31.5)
+        self.assertIsNone(new.items[1].tilt_deg)
+        d = os.path.join(self.tmp, "rt.json")
+        new.save(d)
+        self.assertEqual(K.KeyframeSet.load(d).items, new.items)
+        with self.assertRaises(ValueError):
+            K.KeyframeSet.from_list([{"t": 1, "pan_deg": 2, "fov_deg": 90, "tilt_deg": float("nan")}])
+
+    # -- interpolation -------------------------------------------------------
+    def test_tilt_path_dips_and_eases_back_without_overshoot(self):
+        kfs = [K.Keyframe(0, 0, 100), K.Keyframe(10, 0, 100, -30.0), K.Keyframe(20, 0, 100), K.Keyframe(30, 0, 100)]
+        path = K.Path(kfs, "pchip", base_tilt=-15.0)
+        self.assertTrue(path.has_tilt)
+        self.assertAlmostEqual(path.tilt_at(0.0), -15.0)
+        self.assertAlmostEqual(path.tilt_at(10.0), -30.0)
+        self.assertAlmostEqual(path.tilt_at(20.0), -15.0)
+        self.assertAlmostEqual(path.tilt_at(99.0), -15.0)                           # holds after the last keyframe
+        ts = np.linspace(0, 30, 601)
+        tl = path.tilt_at(ts)
+        self.assertGreaterEqual(tl.min(), -30.0 - 1e-9)
+        self.assertLessEqual(tl.max(), -15.0 + 1e-9)
+        plain = K.Path([K.Keyframe(0, 0, 100), K.Keyframe(10, 5, 90)], "pchip", base_tilt=-7.0)
+        self.assertFalse(plain.has_tilt)
+        self.assertTrue(np.all(plain.tilt_at(ts) == -7.0))
+        self.assertEqual(K.Path([], "pchip", base_tilt=-7.0).tilt_at(1.0), -7.0)
+
+    # -- renderer ------------------------------------------------------------
+    def test_sendcmd_is_unchanged_without_tilt_and_varies_with_it(self):
+        plain = K.Path([K.Keyframe(0, 12, 80), K.Keyframe(10, -12, 100)], "pchip")
+        text, n, first = R.build_sendcmd(plain, -15.0, 300, 30.0, 0.0, 1280, 720, False, projection="cylindrical")
+        self.assertNotIn("pitch", text)                                              # constant tilt: no pitch commands
+        self.assertAlmostEqual(first["pitch"], -15.0)
+        tilted = K.Path([K.Keyframe(0, 12, 80), K.Keyframe(5, 12, 80, -30.0), K.Keyframe(10, 12, 80)],
+                        "pchip", base_tilt=-15.0)
+        text, n, first = R.build_sendcmd(tilted, -15.0, 300, 30.0, 0.0, 1280, 720, False, projection="cylindrical")
+        self.assertIn("pitch", text)
+        vals = [float(l.split("pitch")[1].split(",")[0].split(";")[0]) for l in text.splitlines() if "pitch" in l]
+        self.assertAlmostEqual(min(vals), -30.0, delta=0.2)
+
+    def test_render_follows_per_keyframe_tilt_frame_by_frame(self):
+        kf = os.path.join(self.tmp, "t.keyframes.json")
+        with open(kf, "w") as fh:
+            json.dump([{"t": 0.5, "pan_deg": 0, "fov_deg": 90},
+                       {"t": 2.5, "pan_deg": 0, "fov_deg": 90, "tilt_deg": -35.0},
+                       {"t": 4.5, "pan_deg": 0, "fov_deg": 90}], fh)
+        K.save_meta(kf, tilt_deg=-10.0, interp="pchip", legacy_fov=False, projection="cylindrical")
+        out = os.path.join(self.tmp, "t.mkv")
+        rc = R.main(["--input", self.src, "--keyframes", kf, "--output", out, "--encoder", "ffv1",
+                     "--interp-filter", "nearest"])
+        self.assertEqual(rc, 0)
+        frames = decode_gray16(out, 1280, 720)
+        self.assertEqual(len(frames), 150)
+        path = K.Path(K.KeyframeSet.load(kf).items, "pchip", base_tilt=-10.0)
+        H = self.H
+        lat = lambda v: (0.5 - (v / 65535 * (H - 1) + 0.5) / H) * 180.0              # noqa: E731
+        worst = 0.0
+        for i, f in enumerate(frames):
+            c = 0.5 * (f[359, 640].astype(np.float64) + f[360, 640].astype(np.float64))
+            worst = max(worst, abs(lat(c) - path.tilt_at(i / self.fps)))
+        self.assertLess(worst, 0.7, f"tilt error {worst:.3f} deg")
+        self.assertAlmostEqual(path.tilt_at(2.5), -35.0)
+
+    # -- annotator -----------------------------------------------------------
+    def test_annotator_tilts_one_keyframe_and_leaves_the_project_tilt_alone(self):
+        d = tempfile.mkdtemp(dir=self.tmp)
+        video = os.path.join(d, "v.mp4")
+        ffmpeg_write_gray(video, [np.full((320, 640), 2 * i + 4, np.uint8) for i in range(120)], 640, 320, 30,
+                          pix="gray", codec=("-c:v", "libx264", "-preset", "veryfast", "-crf", "10", "-g", "10",
+                                             "-bf", "0", "-pix_fmt", "yuv420p"))
+        a = A.Annotator(video, os.path.join(d, "v.keyframes.json"), tilt=-12.0, disp_w=640)
+        for idx in (0, 60, 119):
+            a.goto(idx); a.hold = True; a.handle_key(ord("k"))
+        self.assertTrue(all(k.tilt_deg is None for k in a.kfs))                     # no tilt written by default
+        a.goto(60)
+        for _ in range(8):
+            a.handle_key(ord("b"))                                                  # tilt this keyframe down 4 deg
+        self.assertAlmostEqual(a.tilt, -16.0)
+        self.assertAlmostEqual(a.base_tilt, -12.0)
+        self.assertAlmostEqual(a.kfs.at(60 / 30).tilt_deg, -16.0)
+        self.assertIsNone(a.kfs.at(0).tilt_deg)
+        a.goto(30)                                                                   # half way: eased, between both
+        self.assertTrue(-16.0 < a.tilt < -12.0)
+        a.goto(119)
+        self.assertAlmostEqual(a.tilt, -12.0)
+        a.goto(60)
+        a.handle_key(ord("x"))                                                       # clear it
+        self.assertIsNone(a.kfs.at(60 / 30).tilt_deg)
+        for _ in range(2):
+            a.handle_key(ord("t"))
+        self.assertAlmostEqual(a.kfs.at(60 / 30).tilt_deg, -11.0)
+        a.handle_key(ord("w"))                                                       # W/S still change the project tilt
+        self.assertAlmostEqual(a.base_tilt, -11.5)
+        self.assertAlmostEqual(a.kfs.at(60 / 30).tilt_deg, -11.0)                    # an explicit keyframe tilt stays
+        self.assertEqual(a.render().shape, (a.size[1], a.size[0], 3))
+        a.save(force=True)
+        self.assertEqual(K.load_meta(a.kf_path)["tilt_deg"], -11.5)
+        b = A.Annotator(video, a.kf_path, disp_w=640)
+        self.assertAlmostEqual(b.base_tilt, -11.5)
+        b.goto(60)
+        self.assertAlmostEqual(b.tilt, -11.0)
+
+    def test_old_project_still_behaves_as_before_in_the_annotator(self):
+        d = tempfile.mkdtemp(dir=self.tmp)
+        video = os.path.join(d, "v.mp4")
+        ffmpeg_write_gray(video, [np.full((320, 640), 2 * i + 4, np.uint8) for i in range(60)], 640, 320, 30,
+                          pix="gray", codec=("-c:v", "libx264", "-preset", "veryfast", "-crf", "10", "-g", "10",
+                                             "-bf", "0", "-pix_fmt", "yuv420p"))
+        kfp = os.path.join(d, "v.keyframes.json")
+        with open(kfp, "w") as fh:
+            json.dump([{"t": 0.5, "pan_deg": 3, "fov_deg": 90}, {"t": 1.5, "pan_deg": -3, "fov_deg": 100}], fh)
+        K.save_meta(kfp, tilt_deg=-9.0, interp="pchip", legacy_fov=False, projection="cylindrical")
+        a = A.Annotator(video, kfp, disp_w=640)
+        for idx in (0, 20, 40):
+            a.goto(idx)
+            self.assertAlmostEqual(a.tilt, -9.0)
+        a.save(force=True)
+        with open(kfp) as fh:
+            rows = json.load(fh)
+        self.assertTrue(all(set(r) == {"t", "pan_deg", "fov_deg"} for r in rows))
+
+    # -- automatic pass ------------------------------------------------------
+    @staticmethod
+    def _detections(near_feet_lat, seconds=90, rate=3.0, near_from=30, near_to=60):
+        """Players around lat -20, plus (between near_from and near_to) one player close to the camera."""
+        rng = np.random.default_rng(5)
+        frames = []
+        for i in range(int(seconds * rate)):
+            t = i / rate
+            pl = [[float(o), -20.0 + float(rng.normal(0, 1)), 30.0, 0.7, None] for o in np.linspace(-20, 20, 10)]
+            if near_from <= t < near_to:
+                pl.append([0.0, near_feet_lat, 120.0, 0.9, None])
+            frames.append({"t": t, "players": pl, "balls": []})
+        return {"type": "header", "fps": rate, "tilt": -15.0, "video": "x.mp4"}, frames
+
+    def test_adaptive_tilt_dips_only_while_the_near_player_would_be_cut_off(self):
+        header, frames = self._detections(near_feet_lat=-50.0)
+        flat = AK.build_path(header, frames, fov_fixed=110, deadband=0.0)
+        self.assertIsNone(flat["tilt"])                                              # off by default
+        r = AK.build_path(header, frames, fov_fixed=110, deadband=0.0, adaptive_tilt_on=True, base_tilt=-15.0)
+        t, tilt = r["t"], r["tilt"]
+        self.assertAlmostEqual(float(tilt[t < 15].mean()), -15.0, delta=0.3)          # before: untouched
+        self.assertAlmostEqual(float(tilt[t > 75].mean()), -15.0, delta=0.3)          # after: back to base
+        self.assertLess(float(tilt[(t > 38) & (t < 52)].mean()), -20.0)               # dips while he is there
+        self.assertGreaterEqual(float(tilt.min()), -15.0 - 20.0 - 1e-9)               # never beyond max_dip
+        self.assertLessEqual(float(tilt.max()), -15.0 + 1e-9)                         # never tilts above base
+        c0 = AK.feet_coverage(frames, t, r["pan"], r["fov"], np.full(len(t), -15.0), "cylindrical")
+        c1 = AK.feet_coverage(frames, t, r["pan"], r["fov"], tilt, "cylindrical")
+        self.assertGreater(c1, c0 + 0.01)
+        self.assertGreater(c1, 0.98)
+
+    def test_adaptive_tilt_main_writes_a_file_the_renderer_and_annotator_read(self):
+        header, frames = self._detections(near_feet_lat=-50.0)
+        d = tempfile.mkdtemp(dir=self.tmp)
+        det = os.path.join(d, "g.detections.jsonl")
+        with open(det, "w") as fh:
+            fh.write(json.dumps(header) + "\n")
+            for fr in frames:
+                fh.write(json.dumps(fr) + "\n")
+        plain, adapt = os.path.join(d, "plain.json"), os.path.join(d, "adapt.json")
+        self.assertEqual(AK.main(["--detections", det, "--out", plain, "--fov", "110"]), 0)
+        self.assertEqual(AK.main(["--detections", det, "--out", adapt, "--fov", "110", "--adaptive-tilt"]), 0)
+        with open(plain) as fh:
+            self.assertTrue(all("tilt_deg" not in r for r in json.load(fh)))          # default output has no tilt
+        kfs = K.KeyframeSet.load(adapt)
+        self.assertTrue(any(k.tilt_deg is not None and k.tilt_deg < -20 for k in kfs))
+        self.assertEqual(K.load_meta(adapt)["tilt_deg"], -15.0)
+        path = K.Path(kfs.items, "pchip", base_tilt=-15.0)
+        self.assertTrue(path.has_tilt)
+        self.assertAlmostEqual(path.tilt_at(5.0), -15.0, delta=0.3)
+        self.assertLess(path.tilt_at(45.0), -20.0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -19,7 +19,10 @@ Steps
   4. Zoom: the spread of the players sets a slow zoom (default 0.36 * spread + 90 deg, from your
                             annotated footage; clamp --fov-min/--fov-max, or fix it with --fov).
   5. Keep the picture inside the lens: the crop never reaches past --edge-limit degrees.
-  6. Simplify to a few keyframes (a pchip path through them reproduces the smooth path to within
+  6. Tilt (only with --adaptive-tilt): dip the view when the nearest players' feet would fall
+                            out of the bottom of the frame, and come back up afterwards. Without the
+                            flag the output carries no tilt at all, exactly as before.
+  7. Simplify to a few keyframes (a pchip path through them reproduces the smooth path to within
                             --tol-pan / --tol-fov), so there is something you can actually edit.
 
 Writes <out> (+ the .meta.json sidecar annotate.py and render_keyframes.py read: tilt, cylindrical).
@@ -134,16 +137,29 @@ def smooth_series(y: np.ndarray, rate: float, seconds: float) -> np.ndarray:
     return np.asarray(spsolve(A, y))
 
 
+def _kf_tilt(tilt: Optional[np.ndarray], i: int, base: float) -> Optional[float]:
+    """Tilt a keyframe should carry: None when it is (nearly) the project tilt."""
+    if tilt is None or abs(float(tilt[i]) - base) < 0.25:
+        return None
+    return float(tilt[i])
+
+
 def simplify(t: np.ndarray, pan: np.ndarray, fov: np.ndarray, tol_pan: float, tol_fov: float,
-             min_gap: float, method: str = "pchip") -> List[int]:
+             min_gap: float, method: str = "pchip", tilt: Optional[np.ndarray] = None,
+             tol_tilt: float = 1.5, base_tilt: float = 0.0) -> List[int]:
     """Greedy keyframe picking: start with the two ends, repeatedly add the sample where the
-    path through the chosen keyframes is furthest from the target, until all within tolerance."""
+    path through the chosen keyframes is furthest from the target, until all within tolerance.
+    With `tilt`, the tilt path has to stay within `tol_tilt` degrees as well."""
     n = len(t)
     chosen = [0, n - 1] if n > 1 else [0]
     while True:
-        items = [K.Keyframe(float(t[i]), float(pan[i]), float(fov[i])) for i in chosen]
-        p, f = K.Path(items, method).at(t) if len(items) > 1 else (np.full(n, pan[0]), np.full(n, fov[0]))
+        items = [K.Keyframe(float(t[i]), float(pan[i]), float(fov[i]), _kf_tilt(tilt, i, base_tilt)) for i in chosen]
+        path = K.Path(items, method, base_tilt=base_tilt)
+        p, f = path.at(t) if len(items) > 1 else (np.full(n, pan[0]), np.full(n, fov[0]))
         err = np.maximum(np.abs(p - pan) / tol_pan, np.abs(f - fov) / tol_fov)
+        if tilt is not None:
+            tt = path.tilt_at(t) if len(items) > 1 else np.full(n, items[0].tilt_deg if items[0].tilt_deg is not None else base_tilt)
+            err = np.maximum(err, np.abs(tt - tilt) / tol_tilt)
         for i in chosen:                                  # taken
             err[i] = 0
         ct = t[chosen]
@@ -157,12 +173,64 @@ def simplify(t: np.ndarray, pan: np.ndarray, fov: np.ndarray, tol_pan: float, to
     return chosen
 
 
+# ── tilt ─────────────────────────────────────────────────────────────────────
+
+def adaptive_tilt(frames: List[dict], centre: np.ndarray, fov: np.ndarray, rate: float, *,
+                  base: float, projection: str, min_conf=0.3, margin=3.0, head_allow=5.0,
+                  max_dip=20.0, smooth_s=3.0, max_gap=24) -> np.ndarray:
+    """Per-sample tilt: the project tilt, dipping lower only while the feet of the players inside
+    the crop would otherwise be cut off at the bottom of the frame.
+
+    A player's foot point is at latitude `lat`; the crop shows tilt +/- vfov/2, so the feet are in
+    when  tilt <= lat + vfov/2 - margin.  Dipping must not push the far players' heads
+    (foot lat + head_allow) out of the top, which sets a floor. Never tilts above `base`,
+    never dips more than `max_dip` degrees, and moves as smoothly as the pan."""
+    n = len(frames)
+    foot_lo = np.full(n, np.nan)
+    foot_hi = np.full(n, np.nan)
+    for i, r in enumerate(frames):
+        half = fov[i] / 2.0
+        lats = [p[1] for p in r["players"]
+                if p[3] >= min_conf and p[4] is not False
+                and abs(float(K.wrap180(p[0] - centre[i]))) <= half]
+        if lats:
+            foot_lo[i], foot_hi[i] = min(lats), max(lats)
+    vh = np.array([K.vfov_deg(float(f), K.OUT_W, K.OUT_H, False, projection) for f in fov]) / 2.0
+    want = np.minimum(base, foot_lo + vh - margin)              # lowest feet still in the frame
+    floor = foot_hi + head_allow - vh                            # highest heads still in the frame
+    want = np.clip(np.maximum(want, np.minimum(floor, base)), base - max_dip, base)   # nan stays nan
+    if np.isnan(want).all():
+        return np.full(n, float(base))
+    want = fill_gaps(want, max_gap)                              # no players in the crop: hold
+    want = np.where(base - want < 1.5, float(base), want)         # ignore dips too small to matter
+    out = smooth_series(want, rate, smooth_s)
+    return np.clip(out, base - max_dip, base)
+
+
+def feet_coverage(frames: List[dict], t, pan, fov, tilt, projection: str, min_conf=0.3) -> float:
+    """Share of the players that are inside the crop horizontally whose feet are also inside it
+    vertically (1.0 = nobody is cut off at the top or bottom)."""
+    hit = tot = 0
+    for i, r in enumerate(frames):
+        centre = K.PAN_SIGN * pan[i]
+        for p in r["players"]:
+            if p[3] < min_conf or p[4] is False:
+                continue
+            if abs(float(K.wrap180(p[0] - centre))) > fov[i] / 2.0:
+                continue
+            tot += 1
+            hit += K.point_in_crop(p[0], p[1], float(pan[i]), float(tilt[i]), float(fov[i]),
+                                   K.OUT_W, K.OUT_H, False, projection)
+    return hit / tot if tot else float("nan")
+
+
 # ── the whole pass ───────────────────────────────────────────────────────────
 
 def build_path(header: dict, frames: List[dict], *, use_ball=False, min_conf=0.3, deadband=5.0,
                smooth_s=4.0, zoom_s=12.0, fov_fixed: Optional[float] = None, fov_a=0.36, fov_b=90.0,
                fov_min=90.0, fov_max=140.0, edge_limit=100.0, ball_weight=0.4, ball_conf=0.5,
-               ball_reach=45.0, max_gap_s=8.0) -> dict:
+               ball_reach=45.0, max_gap_s=8.0, adaptive_tilt_on=False, base_tilt=-15.0,
+               projection="cylindrical", tilt_margin=3.0, max_dip=20.0, tilt_s=3.0) -> dict:
     rate = float(header.get("fps", 3.0))
     t = np.array([r["t"] for r in frames], float)
     cells = static_cells(frames)
@@ -190,13 +258,26 @@ def build_path(header: dict, frames: List[dict], *, use_ball=False, min_conf=0.3
     room = np.maximum(edge_limit - fov / 2.0, 0.0)
     centre = np.clip(centre, -room, room)
     pan = K.PAN_SIGN * centre                             # pan_deg = -(longitude of the crop centre)
-    return {"t": t, "pan": pan, "fov": fov, "lon_raw": lon, "spread": spread, "n_players": n_pl,
-            "static_ball_cells": len(cells)}
+    tilt = None
+    if adaptive_tilt_on:
+        tilt = adaptive_tilt(frames, centre, fov, rate, base=base_tilt, projection=projection,
+                             min_conf=min_conf, margin=tilt_margin, max_dip=max_dip, smooth_s=tilt_s,
+                             max_gap=max_gap)
+    return {"t": t, "pan": pan, "fov": fov, "tilt": tilt, "lon_raw": lon, "spread": spread,
+            "n_players": n_pl, "static_ball_cells": len(cells)}
 
 
-def write_keyframes(path: str, t, pan, fov, idx: List[int], tilt: float, projection: str, video: str = "") -> None:
-    rows = [{"t": round(float(t[i]), 4), "pan_deg": round(float(pan[i]), 4), "fov_deg": round(float(fov[i]), 4)}
-            for i in idx]
+def write_keyframes(path: str, t, pan, fov, idx: List[int], tilt: float, projection: str, video: str = "",
+                    tilt_path: Optional[np.ndarray] = None) -> None:
+    """`tilt` is the project tilt (meta); `tilt_path`, if given, adds a per-keyframe tilt wherever
+    it differs from the project tilt."""
+    rows = []
+    for i in idx:
+        row = {"t": round(float(t[i]), 4), "pan_deg": round(float(pan[i]), 4), "fov_deg": round(float(fov[i]), 4)}
+        tl = _kf_tilt(tilt_path, i, float(tilt))
+        if tl is not None:
+            row["tilt_deg"] = round(tl, 4)
+        rows.append(row)
     with open(path, "w") as fh:
         json.dump(rows, fh, indent=1)
         fh.write("\n")
@@ -238,18 +319,28 @@ def main(argv=None) -> int:
     p.add_argument("--tol-pan", type=float, default=1.5, help="keyframe simplification tolerance (deg)")
     p.add_argument("--tol-fov", type=float, default=3.0)
     p.add_argument("--min-gap", type=float, default=1.0, help="minimum seconds between keyframes")
+    p.add_argument("--adaptive-tilt", action="store_true",
+                   help="dip the view (per-keyframe tilt) while the nearest players' feet would be cut off")
+    p.add_argument("--max-dip", type=float, default=20.0, help="most the tilt may drop below --tilt (deg)")
+    p.add_argument("--tilt-margin", type=float, default=3.0, help="degrees of room kept below the lowest feet")
+    p.add_argument("--tilt-smooth", type=float, default=3.0, help="tilt smoothing period in seconds")
+    p.add_argument("--tol-tilt", type=float, default=1.5, help="keyframe simplification tolerance for tilt (deg)")
     a = p.parse_args(argv)
 
     header, frames = load_detections(a.detections)
     if len(frames) < 4:
         raise SystemExit("too few frames in the detections file")
+    tilt = a.tilt if a.tilt is not None else float(header.get("tilt", -15.0))
     res = build_path(header, frames, use_ball=a.use_ball, min_conf=a.min_conf, deadband=a.deadband,
                      smooth_s=a.smooth, zoom_s=a.zoom_smooth, fov_fixed=a.fov, fov_min=a.fov_min,
-                     fov_max=a.fov_max, edge_limit=a.edge_limit)
-    idx = simplify(res["t"], res["pan"], res["fov"], a.tol_pan, a.tol_fov, a.min_gap)
+                     fov_max=a.fov_max, edge_limit=a.edge_limit, adaptive_tilt_on=a.adaptive_tilt,
+                     base_tilt=tilt, projection=a.projection, tilt_margin=a.tilt_margin,
+                     max_dip=a.max_dip, tilt_s=a.tilt_smooth)
+    idx = simplify(res["t"], res["pan"], res["fov"], a.tol_pan, a.tol_fov, a.min_gap,
+                   tilt=res["tilt"], tol_tilt=a.tol_tilt, base_tilt=tilt)
     out = a.out or os.path.splitext(a.detections)[0] + ".auto.keyframes.json"
-    tilt = a.tilt if a.tilt is not None else float(header.get("tilt", -15.0))
-    write_keyframes(out, res["t"], res["pan"], res["fov"], idx, tilt, a.projection, header.get("video", ""))
+    write_keyframes(out, res["t"], res["pan"], res["fov"], idx, tilt, a.projection, header.get("video", ""),
+                    tilt_path=res["tilt"])
 
     t = res["t"]
     print(f"{len(frames)} samples over {t[-1] - t[0]:.0f}s -> {len(idx)} keyframes "
@@ -257,6 +348,17 @@ def main(argv=None) -> int:
     print(f"pan {res['pan'].min():+.1f}..{res['pan'].max():+.1f}   fov {res['fov'].min():.0f}..{res['fov'].max():.0f}"
           f"   frames without players: {int(np.sum(res['n_players'] == 0))}"
           + (f"   fixed objects ignored as 'ball': {res['static_ball_cells']} spot(s)" if res["static_ball_cells"] else ""))
+    base_arr = np.full(len(t), float(tilt))
+    cov0 = feet_coverage(frames, t, res["pan"], res["fov"], base_arr, a.projection, a.min_conf)
+    if res["tilt"] is not None:
+        cov1 = feet_coverage(frames, t, res["pan"], res["fov"], res["tilt"], a.projection, a.min_conf)
+        dip = base_arr - res["tilt"]
+        print(f"tilt: adaptive, {res['tilt'].min():+.1f}..{res['tilt'].max():+.1f}  (project {tilt:+.1f}); dipped more than 2 deg "
+              f"for {100 * np.mean(dip > 2):.0f}% of the time")
+        print(f"players inside the crop whose feet are in frame: {100 * cov0:.1f}% with fixed tilt -> {100 * cov1:.1f}% adaptive")
+    else:
+        print(f"players inside the crop whose feet are in frame, tilt fixed at {tilt:+.1f}: {100 * cov0:.1f}%"
+              f"   (try --adaptive-tilt if that is low)")
     if a.compare:
         c = compare(t, res["pan"], res["fov"], a.compare, res["lon_raw"])
         print(f"vs {os.path.basename(a.compare)}: pan error {c['pan_mae']:.1f} deg on average, {c['pan_p90']:.1f} deg "

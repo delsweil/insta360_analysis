@@ -18,7 +18,9 @@ against FFmpeg's v360 filter; see test_keyframe_tools.py):
     pan_deg   == cam.yaw in autopan_infer.py. The crop is centred on equirect
                  longitude  -pan_deg  (so *positive pan looks LEFT* on the equirect,
                  because autopan_infer.py calls e2p(u_deg=-yaw)).
-    tilt_deg  == cam.pitch / e2p v_deg. Positive = up. Global per project, not per keyframe.
+    tilt_deg  == cam.pitch / e2p v_deg. Positive = up. A project default (meta sidecar) that
+              a keyframe may override with its own optional `tilt_deg`; keyframes without one
+              follow the project default, so older files behave exactly as before.
     fov_deg   == HORIZONTAL field of view of the output frame. The vertical FOV is derived
                  from the output aspect ratio (square pixels, true rectilinear).
                  Pass legacy_fov=True to reproduce py360convert's scalar-fov behaviour
@@ -322,10 +324,14 @@ class Keyframe:
     t: float
     pan_deg: float
     fov_deg: float
+    tilt_deg: Optional[float] = None       # None -> the project tilt (meta sidecar)
 
     def as_dict(self) -> dict:
-        return {"t": round(self.t, 4), "pan_deg": round(self.pan_deg, 4),
-                "fov_deg": round(self.fov_deg, 4)}
+        d = {"t": round(self.t, 4), "pan_deg": round(self.pan_deg, 4),
+             "fov_deg": round(self.fov_deg, 4)}
+        if self.tilt_deg is not None:        # only written when set: old files stay byte-identical
+            d["tilt_deg"] = round(self.tilt_deg, 4)
+        return d
 
 
 class KeyframeSet:
@@ -457,10 +463,13 @@ class KeyframeSet:
         ks = cls(tol)
         for i, r in enumerate(rows):
             try:
-                kf = Keyframe(float(r["t"]), float(r["pan_deg"]), float(r["fov_deg"]))
+                tl = r.get("tilt_deg")
+                kf = Keyframe(float(r["t"]), float(r["pan_deg"]), float(r["fov_deg"]),
+                              None if tl is None else float(tl))
             except (KeyError, TypeError, ValueError) as e:
                 raise ValueError(f"keyframe #{i} must have numeric t, pan_deg, fov_deg: {r!r}") from e
-            if not all(math.isfinite(v) for v in (kf.t, kf.pan_deg, kf.fov_deg)) or kf.t < 0:
+            vals = [kf.t, kf.pan_deg, kf.fov_deg] + ([] if kf.tilt_deg is None else [kf.tilt_deg])
+            if not all(math.isfinite(v) for v in vals) or kf.t < 0:
                 raise ValueError(f"keyframe #{i} has an invalid value: {r!r}")
             ks._k.append(kf)
         ks._k.sort(key=lambda k: k.t)
@@ -507,12 +516,15 @@ def _pchip_slopes(x: np.ndarray, y: np.ndarray) -> np.ndarray:
 
 
 class Path:
-    """Interpolated camera path (pan_deg, fov_deg) over time from a KeyframeSet.
-    Holds the first value before the first keyframe and the last after the last."""
+    """Interpolated camera path (pan_deg, fov_deg, and tilt) over time from a KeyframeSet.
+    Holds the first value before the first keyframe and the last after the last.
+
+    Tilt: a keyframe without its own tilt_deg uses `base_tilt` (the project tilt), so a
+    path with no per-keyframe tilt at all (`has_tilt` False) is just the constant base."""
 
     METHODS = ("pchip", "smoothstep", "linear")
 
-    def __init__(self, kfs: Sequence[Keyframe], method: str = "pchip"):
+    def __init__(self, kfs: Sequence[Keyframe], method: str = "pchip", base_tilt: float = 0.0):
         if method not in self.METHODS:
             raise ValueError(f"method must be one of {self.METHODS}")
         self.method = method
@@ -525,10 +537,16 @@ class Path:
         self.t = np.array([k.t for k in ks], dtype=np.float64)
         self.pan = np.array([k.pan_deg for k in ks], dtype=np.float64)
         self.fov = np.array([k.fov_deg for k in ks], dtype=np.float64)
-        self._dpan = self._dfov = None
+        self.base_tilt = float(base_tilt)
+        self.has_tilt = any(k.tilt_deg is not None for k in ks)
+        self.tilt = np.array([self.base_tilt if k.tilt_deg is None else k.tilt_deg for k in ks],
+                             dtype=np.float64)
+        self._dpan = self._dfov = self._dtilt = None
         if method == "pchip" and len(ks) >= 2:
             self._dpan = _pchip_slopes(self.t, self.pan)
             self._dfov = _pchip_slopes(self.t, self.fov)
+            if self.has_tilt:
+                self._dtilt = _pchip_slopes(self.t, self.tilt)
 
     def __bool__(self):
         return len(self.t) > 0
@@ -562,3 +580,13 @@ class Path:
         if scalar:
             return float(pan[0]), float(fov[0])
         return pan, fov
+
+    def tilt_at(self, t):
+        """Tilt in degrees at time(s) t (the constant project tilt when no keyframe sets one)."""
+        scalar = np.isscalar(t)
+        tq = np.atleast_1d(np.asarray(t, dtype=np.float64))
+        if not self.has_tilt or len(self.t) == 0:
+            out = np.full(tq.shape, self.base_tilt, dtype=np.float64)
+        else:
+            out = self._eval(tq, self.tilt, self._dtilt)
+        return float(out[0]) if scalar else out

@@ -29,7 +29,10 @@ KEYS  (H shows this in the window)
                           (if you have moved the crop it updates the keyframe instead)
   J / L                   nudge crop left / right 1 deg   (shift: 5 deg)
   I / O                   zoom in / out
-  W / S                   tilt up / down 0.5 deg  (global for the whole video)
+  W / S                   tilt up / down 0.5 deg  (the project tilt: global for the whole video)
+  T / B                   tilt THIS keyframe up / down 0.5 deg (e.g. look lower when the play is
+                          on the near touchline); it eases back to the project tilt at the next
+                          keyframe that has no tilt of its own.   X  clear this keyframe's tilt
   G                       drop your unsaved crop, snap to the interpolated path
   R                       REC: auto-keyframe while playing and steering
   Z / Y                   undo / redo keyframe edits
@@ -40,10 +43,11 @@ MOUSE
   scroll wheel            zoom in / out
   click / drag timeline   jump / scrub
 
-Keyframes are saved as [{"t": seconds, "pan_deg": .., "fov_deg": ..}, ...].
+Keyframes are saved as [{"t": seconds, "pan_deg": .., "fov_deg": ..}, ...] (plus "tilt_deg"
+on keyframes whose tilt differs from the project tilt).
 Conventions (identical to autopan_infer.py): pan_deg is cam.yaw, so positive pan looks
 LEFT on the equirect; fov_deg is the horizontal field of view of the 1280x720 output.
-Tilt is global and stored next to the keyframes in <name>.meta.json.
+The project tilt is stored next to the keyframes in <name>.meta.json.
 """
 
 from __future__ import annotations
@@ -81,7 +85,8 @@ HELP_LINES = [
     "Q/E  jump 5 s  (shift = 10 s)       up/down  5 s",
     ",  .                 previous / next keyframe",
     "K    add/remove keyframe (updates it if you moved the crop)",
-    "J/L  nudge crop 1 deg (shift 5)     I/O  zoom in/out     W/S  tilt",
+    "J/L  nudge crop 1 deg (shift 5)     I/O  zoom in/out     W/S  project tilt",
+    "T/B  tilt this keyframe up/down     X  clear this keyframe's tilt",
     "[  ]  mark where the game starts / ends (press again on the mark to clear it)",
     "G    drop my unsaved crop, snap to path",
     "R    REC: auto-keyframe every 0.5 s while playing + steering",
@@ -231,7 +236,8 @@ class Annotator:
         self.rec_interval = rec_interval
 
         meta = K.load_meta(self.kf_path)
-        self.tilt = float(tilt if tilt is not None else meta.get("tilt_deg", 0.0))
+        self.base_tilt = float(tilt if tilt is not None else meta.get("tilt_deg", 0.0))   # project tilt
+        self.tilt = self.base_tilt                                  # tilt of the view being shown / edited
         # a project saved before projections existed was annotated in the flat view; new ones start cylindrical
         self.projection = projection or meta.get("projection", "flat" if meta else "cylindrical")
         if self.projection not in K.PROJECTIONS:
@@ -290,10 +296,13 @@ class Annotator:
         return self.idx / self.fps
 
     def _path_obj(self) -> K.Path:
-        key = (self.kfs.version, self.interp)
+        key = (self.kfs.version, self.interp, round(self.base_tilt, 4))
         if self._path_cache[0] != key:
-            self._path_cache = (key, K.Path(self.kfs.items, self.interp))
+            self._path_cache = (key, K.Path(self.kfs.items, self.interp, base_tilt=self.base_tilt))
         return self._path_cache[1]
+
+    def _tilt_of(self, kf: K.Keyframe) -> float:
+        return self.base_tilt if kf.tilt_deg is None else kf.tilt_deg
 
     def kf_here(self) -> Optional[K.Keyframe]:
         return self.kfs.at(self.t)
@@ -328,6 +337,7 @@ class Annotator:
         path = self._path_obj()
         if path:
             self.pan, self.fov = path.at(self.t)
+            self.tilt = path.tilt_at(self.t)
 
     def goto(self, idx: int):
         idx = max(0, min(self.n - 1, int(idx)))
@@ -384,6 +394,11 @@ class Annotator:
             self.kfs.snapshot()
         self._last_edit = now
 
+    def _kf_tilt(self) -> Optional[float]:
+        """The tilt a keyframe made from the current view should carry: None (= follow the
+        project tilt) unless this view was deliberately tilted away from it."""
+        return None if abs(self.tilt - self.base_tilt) < 0.01 else round(self.tilt, 3)
+
     def set_crop(self, pan: Optional[float] = None, fov: Optional[float] = None):
         if pan is not None:
             self.pan = float(K.wrap180(pan))
@@ -391,7 +406,7 @@ class Annotator:
             self.fov = float(min(K.FOV_MAX, max(K.FOV_MIN, fov)))
         kf = self.kf_here()
         if kf is not None and not self.playing:
-            self.kfs.upsert(K.Keyframe(kf.t, self.pan, self.fov))      # live edit
+            self.kfs.upsert(K.Keyframe(kf.t, self.pan, self.fov, self._kf_tilt()))      # live edit
             self.hold = False
         else:
             self.hold = True            # uncommitted until K (or REC) commits it
@@ -406,8 +421,25 @@ class Annotator:
         self.set_crop(fov=self.fov * factor)
 
     def set_tilt(self, tilt: float):
-        self.tilt = float(max(-60.0, min(60.0, tilt)))
+        """W / S: change the project tilt. The view follows unless it carries its own tilt."""
+        old = self.base_tilt
+        self.base_tilt = float(max(-60.0, min(60.0, tilt)))
+        if abs(self.tilt - old) < 0.01:
+            self.tilt = self.base_tilt
         self._meta_dirty = True
+        self.dirty = True
+
+    def set_view_tilt(self, tilt: float):
+        """T / B / X: tilt only this view. On a keyframe it edits that keyframe; elsewhere it is
+        held (orange) until K or REC commits it, exactly like a moved crop."""
+        self._begin_edit()
+        self.tilt = float(max(-60.0, min(60.0, tilt)))
+        kf = self.kf_here()
+        if kf is not None and not self.playing:
+            self.kfs.upsert(K.Keyframe(kf.t, self.pan, self.fov, self._kf_tilt()))
+            self.hold = False
+        else:
+            self.hold = True
         self.dirty = True
 
     def toggle_keyframe(self):
@@ -421,7 +453,7 @@ class Annotator:
             self.toast("keyframe removed")
         else:
             self.kfs.snapshot()
-            self.kfs.upsert(K.Keyframe(t, self.pan, self.fov))
+            self.kfs.upsert(K.Keyframe(t, self.pan, self.fov, self._kf_tilt()))
             self.toast("keyframe updated" if kf is not None else f"keyframe #{len(self.kfs)} added")
         self.hold = False
         self.dirty = True
@@ -437,7 +469,7 @@ class Annotator:
         gap = t - self._rec_last_t
         if 0 < gap <= max(4 * self.rec_interval, 2.0):
             self.kfs.remove_between(self._rec_last_t, t)       # overwrite what we passed over
-        self.kfs.upsert(K.Keyframe(t, self.pan, self.fov))
+        self.kfs.upsert(K.Keyframe(t, self.pan, self.fov, self._kf_tilt()))
         self.hold = False
         self._rec_last_t = t
 
@@ -480,7 +512,7 @@ class Annotator:
         if changed or force or not os.path.exists(self.kf_path):
             self.kfs.save(self.kf_path)
             self._saved_version = self.kfs.version
-        K.save_meta(self.kf_path, tilt_deg=round(self.tilt, 3), legacy_fov=self.legacy_fov, projection=self.projection,
+        K.save_meta(self.kf_path, tilt_deg=round(self.base_tilt, 3), legacy_fov=self.legacy_fov, projection=self.projection,
                     interp=self.interp, video=os.path.basename(self.video), fps=self.fps,
                     last_t=round(self.t, 3), trim_in=self.trim_in, trim_out=self.trim_out)
         self._meta_dirty = False
@@ -565,9 +597,16 @@ class Annotator:
         elif ch == "o":
             self.zoom(1 / 0.96)
         elif ch == "w":
-            self.set_tilt(self.tilt + 0.5)
+            self.set_tilt(self.base_tilt + 0.5)
         elif ch == "s":
-            self.set_tilt(self.tilt - 0.5)
+            self.set_tilt(self.base_tilt - 0.5)
+        elif ch == "t":
+            self.set_view_tilt(self.tilt + 0.5)
+        elif ch == "b":
+            self.set_view_tilt(self.tilt - 0.5)
+        elif ch == "x":
+            self.set_view_tilt(self.base_tilt)
+            self.toast("tilt back to project tilt")
         elif ch == "[":
             self.mark_trim("in")
         elif ch == "]":
@@ -654,14 +693,14 @@ class Annotator:
         self.set_crop(pan=K.PAN_SIGN * float(K.wrap180(centre)))
 
     # ── rendering ────────────────────────────────────────────────────────────
-    def _outline_pts(self, pan, fov):
-        lon, lat = K.crop_outline(pan, self.tilt, fov, self.out_w, self.out_h, self.legacy_fov, n=18,
+    def _outline_pts(self, pan, fov, tilt=None):
+        lon, lat = K.crop_outline(pan, self.tilt if tilt is None else tilt, fov, self.out_w, self.out_h, self.legacy_fov, n=18,
                                  projection=self.projection)
         x, y = K.lonlat_to_xy(lon, lat, self.disp_w, self.eq_h)
         return np.stack([x, y], 1)
 
-    def _draw_outline(self, img, pan, fov, color, thick=2):
-        pts = self._outline_pts(pan, fov)
+    def _draw_outline(self, img, pan, fov, color, thick=2, tilt=None):
+        pts = self._outline_pts(pan, fov, tilt)
         for shift in (-self.disp_w, 0, self.disp_w):
             p = np.round(pts + [shift, 0]).astype(np.int32)
             if p[:, 0].max() < 0 or p[:, 0].min() > self.disp_w:
@@ -703,14 +742,14 @@ class Annotator:
             prev = self.kfs.prev_before(self.t)
             nxt = self.kfs.next_after(self.t)
             if prev is not None:
-                self._draw_outline(img, prev.pan_deg, prev.fov_deg, C_PREV, 1)
+                self._draw_outline(img, prev.pan_deg, prev.fov_deg, C_PREV, 1, self._tilt_of(prev))
             if nxt is not None:
-                self._draw_outline(img, nxt.pan_deg, nxt.fov_deg, C_NEXT, 1)
+                self._draw_outline(img, nxt.pan_deg, nxt.fov_deg, C_NEXT, 1, self._tilt_of(nxt))
             if self.hold:
                 path = self._path_obj()
                 if path:
                     pp, pf = path.at(self.t)
-                    self._draw_outline(img, pp, pf, (200, 200, 200), 1)
+                    self._draw_outline(img, pp, pf, (200, 200, 200), 1, path.tilt_at(self.t))
         col = self._crop_color()
         self._draw_outline(img, self.pan, self.fov, col, 2)
         c_lon, c_lat = K.centre_lonlat(self.pan, self.tilt)
@@ -791,6 +830,8 @@ class Annotator:
             cv2.line(img, (x, bar_t), (x, bar_b), col, 1)
             tri = np.array([[x - 4, bar_t], [x + 4, bar_t], [x, bar_t + 7]], np.int32)
             cv2.fillConvexPoly(img, tri, col)
+            if k.tilt_deg is not None:                       # this keyframe carries its own tilt
+                cv2.circle(img, (x, bar_b - 5), 3, (255, 255, 0), -1, cv2.LINE_AA)
 
         # outside the game (before IN / after OUT): dimmed, with a marker at each mark
         for lo, hi in ((0.0, self.trim_in), (self.trim_out, self.duration)):
@@ -843,7 +884,8 @@ class Annotator:
         put(img, line1, (PAD + 80, 22), 0.55)
         vf = K.vfov_deg(self.fov, self.out_w, self.out_h, self.legacy_fov, self.projection)
         side = "left" if self.pan > 0.05 else ("right" if self.pan < -0.05 else "centre")
-        line2 = f"pan {self.pan:+6.1f} deg ({side})   fov {self.fov:5.1f} (v {vf:4.1f})   tilt {self.tilt:+5.1f}   {self.projection}"
+        tl_tag = "" if abs(self.tilt - self.base_tilt) < 0.01 else f" (project {self.base_tilt:+.1f})"
+        line2 = f"pan {self.pan:+6.1f} deg ({side})   fov {self.fov:5.1f} (v {vf:4.1f})   tilt {self.tilt:+5.1f}{tl_tag}   {self.projection}"
         put(img, line2, (PAD, 48), 0.55)
         x = PAD + text_w(line2) + 24
         if self.hold:

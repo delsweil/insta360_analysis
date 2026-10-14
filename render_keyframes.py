@@ -20,7 +20,9 @@ v360 filter (equirect -> flat) re-aims the virtual camera on every frame.
   Detected from the aspect ratio; override with --source raw|equirect.
   Keyframe times are seconds from the start of the video, identical for both.
 
-Tilt (vertical aim) is global. It is taken, in order, from --tilt, --calib
+Tilt (vertical aim) is a project default that individual keyframes may override with their
+own optional tilt_deg (set in annotate.py with T/B, or by auto_keyframes.py --adaptive-tilt).
+The project default is taken, in order, from --tilt, --calib
 (same formula as autopan_infer.derive_tilt_fov), the <keyframes>.meta.json written by
 annotate.py, else 0.
 
@@ -73,10 +75,12 @@ def build_sendcmd(path: K.Path, tilt: float, n_frames: int, fps: float, start: f
     idx = np.arange(n_frames, dtype=np.float64)
     t_abs = start + idx / fps
     pan, fov = path.at(t_abs)
+    # per-keyframe tilt only when some keyframe sets one; otherwise the constant `tilt`, exactly as before
+    tilts = path.tilt_at(t_abs) if getattr(path, "has_tilt", False) else np.full(n_frames, float(tilt))
     names = ("yaw", "pitch", "h_fov", "v_fov")
     lines, last, first = [], None, None
     for i in range(n_frames):
-        p = K.to_v360_params(float(pan[i]), tilt, float(fov[i]), out_w, out_h, legacy_fov, projection)
+        p = K.to_v360_params(float(pan[i]), float(tilts[i]), float(fov[i]), out_w, out_h, legacy_fov, projection)
         vals = [p[n] for n in names]
         if first is None:                    # frame 0 uses the filter's initial options
             first, last = p, list(vals)
@@ -183,7 +187,7 @@ def main(argv=None) -> int:
     if len(kfs) == 0:
         print("error: keyframe file is empty", file=sys.stderr)
         return 2
-    path = K.Path(kfs.items, a.interp)
+    path = K.Path(kfs.items, a.interp, base_tilt=tilt)
 
     info = K.probe_video(a.input)
     if info["fps"] <= 0:
@@ -203,6 +207,9 @@ def main(argv=None) -> int:
     if a.start > 0 or a.duration is not None:
         end = a.start + a.duration if a.duration is not None else total
         print(f"game     : {K.fmt_time(a.start)} - {K.fmt_time(end)}  ({end - a.start:.1f}s rendered)")
+    if path.has_tilt:
+        tl = path.tilt_at(np.linspace(0, max(total, 1e-6), 2000))
+        print(f"tilt     : per-keyframe, {tl.min():+.1f}° .. {tl.max():+.1f}°  (project default {tilt:+.2f}°)")
     print(f"camera   : tilt={tilt:+.2f}°  out={a.width}x{a.height}  "
           f"{a.projection}, {'legacy (anamorphic) fov' if a.legacy_fov else 'square-pixel fov'}")
     if total and last_kf > total + 1:
