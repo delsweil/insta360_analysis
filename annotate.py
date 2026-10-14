@@ -82,6 +82,7 @@ HELP_LINES = [
     ",  .                 previous / next keyframe",
     "K    add/remove keyframe (updates it if you moved the crop)",
     "J/L  nudge crop 1 deg (shift 5)     I/O  zoom in/out     W/S  tilt",
+    "[  ]  mark where the game starts / ends (press again on the mark to clear it)",
     "G    drop my unsaved crop, snap to path",
     "R    REC: auto-keyframe every 0.5 s while playing + steering",
     "Z/Y  undo/redo           F  preview          V  neighbour outlines",
@@ -94,6 +95,7 @@ C_CROP = (0, 255, 255)       # yellow     : crop follows the path
 C_HOLD = (0, 150, 255)       # orange     : crop moved by you, not committed
 C_LIVE = (0, 255, 0)         # green      : parked on a keyframe, edits update it
 C_PREV = (255, 170, 0)
+C_TRIM = (80, 255, 80)       # green-ish : game start / end marks
 C_NEXT = (255, 0, 255)
 C_KF = (0, 200, 255)
 
@@ -193,11 +195,19 @@ def text_w(text, scale=0.55, thick=1) -> int:
 # The application (no window calls in here — run() owns the window)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _opt_float(v) -> Optional[float]:
+    try:
+        return None if v is None else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 class Annotator:
     SPEEDS = {"1": 1.0, "2": 1.5, "3": 2.0, "0": 0.5}
 
     def __init__(self, video: str, kf_path: Optional[str] = None, tilt: Optional[float] = None,
                  disp_w: int = 1440, legacy_fov: bool = False, interp: str = "pchip",
+                 projection: Optional[str] = None,
                  gap_warn: float = 20.0, rec_interval: float = 0.5,
                  out_w: int = K.OUT_W, out_h: int = K.OUT_H, start: Optional[float] = None):
         self.video = video
@@ -222,6 +232,12 @@ class Annotator:
 
         meta = K.load_meta(self.kf_path)
         self.tilt = float(tilt if tilt is not None else meta.get("tilt_deg", 0.0))
+        # a project saved before projections existed was annotated in the flat view; new ones start cylindrical
+        self.projection = projection or meta.get("projection", "flat" if meta else "cylindrical")
+        if self.projection not in K.PROJECTIONS:
+            self.projection = "flat"
+        self.trim_in: Optional[float] = _opt_float(meta.get("trim_in"))
+        self.trim_out: Optional[float] = _opt_float(meta.get("trim_out"))
         self.kfs = (K.KeyframeSet.load(self.kf_path, tol=0.5 / self.fps)
                     if os.path.exists(self.kf_path) else K.KeyframeSet(tol=0.5 / self.fps))
         self._saved_version = self.kfs.version
@@ -285,6 +301,27 @@ class Annotator:
     def toast(self, msg: str, secs: float = 1.6):
         self._toast = (msg, time.perf_counter() + secs)
         self.dirty = True
+
+    # ── game start / end marks ───────────────────────────────────────────────
+    def mark_trim(self, which: str):
+        """'in' / 'out': set the mark here; pressing it again while parked on that mark clears it."""
+        t = round(self.t, 3)
+        cur = self.trim_in if which == "in" else self.trim_out
+        if cur is not None and abs(cur - t) < 0.5 / self.fps:
+            new = None
+        else:
+            new = t
+            other = self.trim_out if which == "in" else self.trim_in
+            if other is not None and ((which == "in" and t >= other) or (which == "out" and t <= other)):
+                self.toast(f"{which.upper()} must be {'before' if which == 'in' else 'after'} "
+                            f"{'OUT' if which == 'in' else 'IN'} ({K.fmt_time(other)})", 2.5)
+                return
+        if which == "in":
+            self.trim_in = new
+        else:
+            self.trim_out = new
+        self._meta_dirty = True
+        self.toast(f"{which.upper()} cleared" if new is None else f"{which.upper()} set at {K.fmt_time(new)}", 2.0)
 
     # ── navigation ───────────────────────────────────────────────────────────
     def _sync_to_path(self):
@@ -443,9 +480,9 @@ class Annotator:
         if changed or force or not os.path.exists(self.kf_path):
             self.kfs.save(self.kf_path)
             self._saved_version = self.kfs.version
-        K.save_meta(self.kf_path, tilt_deg=round(self.tilt, 3), legacy_fov=self.legacy_fov,
+        K.save_meta(self.kf_path, tilt_deg=round(self.tilt, 3), legacy_fov=self.legacy_fov, projection=self.projection,
                     interp=self.interp, video=os.path.basename(self.video), fps=self.fps,
-                    last_t=round(self.t, 3))
+                    last_t=round(self.t, 3), trim_in=self.trim_in, trim_out=self.trim_out)
         self._meta_dirty = False
         self._last_save = now
         return True
@@ -531,6 +568,10 @@ class Annotator:
             self.set_tilt(self.tilt + 0.5)
         elif ch == "s":
             self.set_tilt(self.tilt - 0.5)
+        elif ch == "[":
+            self.mark_trim("in")
+        elif ch == "]":
+            self.mark_trim("out")
         elif ch == "g":
             self.snap_to_path()
         elif ch == "r":
@@ -574,7 +615,7 @@ class Annotator:
                 lon, lat = self._mouse_lonlat(x, y)
                 c_lon, _ = K.centre_lonlat(self.pan, self.tilt)
                 inside = K.point_in_crop(lon, lat, self.pan, self.tilt, self.fov,
-                                         self.out_w, self.out_h, self.legacy_fov)
+                                         self.out_w, self.out_h, self.legacy_fov, self.projection)
                 self._grab_dlon = float(K.wrap180(lon - c_lon)) if inside else 0.0
                 self.drag = "crop"
                 self._drag_crop(x)
@@ -614,7 +655,8 @@ class Annotator:
 
     # ── rendering ────────────────────────────────────────────────────────────
     def _outline_pts(self, pan, fov):
-        lon, lat = K.crop_outline(pan, self.tilt, fov, self.out_w, self.out_h, self.legacy_fov, n=18)
+        lon, lat = K.crop_outline(pan, self.tilt, fov, self.out_w, self.out_h, self.legacy_fov, n=18,
+                                 projection=self.projection)
         x, y = K.lonlat_to_xy(lon, lat, self.disp_w, self.eq_h)
         return np.stack([x, y], 1)
 
@@ -634,10 +676,10 @@ class Annotator:
         return C_CROP
 
     def _preview_maps(self, pw: int, ph: int):
-        key = (round(self.pan, 3), round(self.fov, 3), round(self.tilt, 3), pw, ph, self.legacy_fov)
+        key = (round(self.pan, 3), round(self.fov, 3), round(self.tilt, 3), pw, ph, self.legacy_fov, self.projection)
         if self._pv_cache[0] != key:
             mx, my = K.build_remap(self.pan, self.tilt, self.fov, self.disp_w, self.eq_h, pw, ph,
-                                   self.legacy_fov, step=4)
+                                   self.legacy_fov, step=4, projection=self.projection)
             self._pv_cache = (key, mx, my)
         return self._pv_cache[1], self._pv_cache[2]
 
@@ -750,6 +792,18 @@ class Annotator:
             tri = np.array([[x - 4, bar_t], [x + 4, bar_t], [x, bar_t + 7]], np.int32)
             cv2.fillConvexPoly(img, tri, col)
 
+        # outside the game (before IN / after OUT): dimmed, with a marker at each mark
+        for lo, hi in ((0.0, self.trim_in), (self.trim_out, self.duration)):
+            if lo is not None and hi is not None and hi > lo:
+                xa, xb = int(self._tl_x(lo)), int(self._tl_x(hi))
+                sub = img[bar_t:bar_b + 1, xa:xb + 1]
+                sub[:] = (sub * 0.35).astype(np.uint8)
+        for tm, lab in ((self.trim_in, "IN"), (self.trim_out, "OUT")):
+            if tm is not None:
+                x = int(round(self._tl_x(tm)))
+                cv2.line(img, (x, bar_t), (x, bar_b + 7), C_TRIM, 2)
+                put(img, lab, (x + 3 if lab == "IN" else x - 3 - text_w(lab, 0.4), bar_b + 6), 0.4, C_TRIM)
+
         # ticks
         step = self._nice_step((x1 - x0) / max(self.duration, 1e-6))
         tt = 0.0
@@ -783,10 +837,13 @@ class Annotator:
             idxs = f"   KEYFRAME #{self.kfs.index_at(self.t) + 1}"
         line1 = (f"{self.speed:g}x   t {K.fmt_time(self.t)} / {K.fmt_time(self.duration)}"
                  f"   frame {self.idx}/{self.n - 1}   keyframes {len(self.kfs)}{idxs}")
+        if self.trim_in is not None or self.trim_out is not None:
+            line1 += (f"   game {K.fmt_time(self.trim_in) if self.trim_in is not None else 'start'}"
+                      f" - {K.fmt_time(self.trim_out) if self.trim_out is not None else 'end'}")
         put(img, line1, (PAD + 80, 22), 0.55)
-        vf = K.vfov_deg(self.fov, self.out_w, self.out_h, self.legacy_fov)
+        vf = K.vfov_deg(self.fov, self.out_w, self.out_h, self.legacy_fov, self.projection)
         side = "left" if self.pan > 0.05 else ("right" if self.pan < -0.05 else "centre")
-        line2 = f"pan {self.pan:+6.1f} deg ({side})   fov {self.fov:5.1f} (v {vf:4.1f})   tilt {self.tilt:+5.1f}"
+        line2 = f"pan {self.pan:+6.1f} deg ({side})   fov {self.fov:5.1f} (v {vf:4.1f})   tilt {self.tilt:+5.1f}   {self.projection}"
         put(img, line2, (PAD, 48), 0.55)
         x = PAD + text_w(line2) + 24
         if self.hold:
@@ -858,6 +915,9 @@ def main(argv=None) -> int:
     p.add_argument("--interp", choices=K.Path.METHODS, default="pchip")
     p.add_argument("--legacy-fov", action="store_true",
                    help="vertical FOV == horizontal FOV, like py360convert's scalar fov (anamorphic)")
+    p.add_argument("--projection", choices=K.PROJECTIONS, default=None,
+                   help="output view: flat (rectilinear) or cylindrical (straight verticals, far less "
+                        "edge stretch at wide fov). Default: the saved choice, else cylindrical")
     p.add_argument("--gap-warn", type=float, default=20.0,
                    help="flag stretches without a keyframe longer than this many seconds (0 = off)")
     p.add_argument("--rec-interval", type=float, default=0.5, help="REC keyframe spacing in seconds")
@@ -867,7 +927,7 @@ def main(argv=None) -> int:
     tilt = a.tilt                       # None -> use the saved value, else 0
     if tilt is None and a.calib:
         tilt = K.tilt_from_calib(a.calib)
-    app = Annotator(a.video, a.keyframes, tilt=tilt, disp_w=a.width, legacy_fov=a.legacy_fov,
+    app = Annotator(a.video, a.keyframes, tilt=tilt, disp_w=a.width, legacy_fov=a.legacy_fov, projection=a.projection,
                     interp=a.interp, gap_warn=a.gap_warn, rec_interval=a.rec_interval, start=a.start)
     print(f"{a.video}: {app.n} frames @ {app.fps:.3f} fps ({K.fmt_time(app.duration)})")
     print(f"keyframes -> {app.kf_path}  ({len(app.kfs)} loaded)   tilt {app.tilt:+.1f} deg   press H for keys")

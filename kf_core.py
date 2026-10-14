@@ -103,18 +103,39 @@ def is_equirect_size(w: int, h: int, tol: float = 0.03) -> bool:
 
 # ── Projection geometry ───────────────────────────────────────────────────────
 
+PROJECTIONS = ("flat", "cylindrical")
+
+
 def plane_extent(fov_deg: float, out_w: int = OUT_W, out_h: int = OUT_H,
-                 legacy_fov: bool = False) -> Tuple[float, float]:
-    """Half-extent of the image plane at unit distance: (tan(h/2), tan(v/2))."""
-    xm = math.tan(math.radians(fov_deg) / 2.0)
+                 legacy_fov: bool = False, projection: str = "flat") -> Tuple[float, float]:
+    """Half-extent of the output image in the projection's own coordinates.
+
+    flat        : (tan(h/2), tan(v/2)) on the image plane at unit distance.
+    cylindrical : (h/2 in radians, tan(v/2)) — horizontal angle is linear in x, vertical is
+                  tan(latitude) (what FFmpeg's v360=output=cylindrical does). Vertical extent
+                  is chosen so pixels are square at the image centre."""
+    h = math.radians(fov_deg)
+    if projection == "cylindrical":
+        xm = h / 2.0
+        ym = math.tan(xm) if legacy_fov else xm * out_h / out_w
+        return xm, ym
+    xm = math.tan(h / 2.0)
     ym = xm if legacy_fov else xm * out_h / out_w
     return xm, ym
 
 
 def vfov_deg(fov_deg: float, out_w: int = OUT_W, out_h: int = OUT_H,
-             legacy_fov: bool = False) -> float:
-    _, ym = plane_extent(fov_deg, out_w, out_h, legacy_fov)
+             legacy_fov: bool = False, projection: str = "flat") -> float:
+    _, ym = plane_extent(fov_deg, out_w, out_h, legacy_fov, projection)
     return math.degrees(2.0 * math.atan(ym))
+
+
+def _rays(gx, gy, basis, projection: str = "flat"):
+    """Rays for grid coordinates (gx along x, gy along y; broadcastable). Last axis = xyz."""
+    f, r, u = basis
+    if projection == "cylindrical":
+        return (np.cos(gx)[..., None] * f + np.sin(gx)[..., None] * r + gy[..., None] * u)
+    return f + gx[..., None] * r + gy[..., None] * u
 
 
 def centre_lonlat(pan_deg: float, tilt_deg: float) -> Tuple[float, float]:
@@ -142,18 +163,15 @@ def rays_to_lonlat(rays: np.ndarray, ref_lon_deg: float):
 
 
 def view_rays(pan_deg: float, tilt_deg: float, fov_deg: float,
-              out_w: int, out_h: int, legacy_fov: bool = False) -> np.ndarray:
+              out_w: int, out_h: int, legacy_fov: bool = False,
+              projection: str = "flat") -> np.ndarray:
     """(out_h, out_w, 3) world-space rays; pixel grid identical to py360convert
     (edge pixels sit exactly on the frustum boundary)."""
-    xm, ym = plane_extent(fov_deg, out_w, out_h, legacy_fov)
+    xm, ym = plane_extent(fov_deg, out_w, out_h, legacy_fov, projection)
     gx = np.linspace(-xm, xm, out_w, dtype=np.float32)
     gy = np.linspace(ym, -ym, out_h, dtype=np.float32)       # row 0 = top
-    f, r, u = _basis(pan_deg, tilt_deg)
-    f, r, u = f.astype(np.float32), r.astype(np.float32), u.astype(np.float32)
-    rays = (f[None, None, :]
-            + gx[None, :, None] * r[None, None, :]
-            + gy[:, None, None] * u[None, None, :])
-    return rays
+    basis = tuple(v.astype(np.float32) for v in _basis(pan_deg, tilt_deg))
+    return _rays(gx[None, :], gy[:, None], basis, projection)
 
 
 def lonlat_to_xy(lon_deg, lat_deg, w: int, h: int):
@@ -170,7 +188,8 @@ def xy_to_lonlat(x, y, w: int, h: int):
 
 def build_remap(pan_deg: float, tilt_deg: float, fov_deg: float,
                 src_w: int, src_h: int, out_w: int, out_h: int,
-                legacy_fov: bool = False, step: int = 1) -> Tuple[np.ndarray, np.ndarray]:
+                legacy_fov: bool = False, step: int = 1,
+                projection: str = "flat") -> Tuple[np.ndarray, np.ndarray]:
     """cv2.remap maps (map_x, map_y) projecting an equirect frame of size
     (src_w, src_h) to the perspective view. x is left unwrapped (may be <0 or >src_w);
     use borderMode=cv2.BORDER_WRAP.
@@ -180,7 +199,7 @@ def build_remap(pan_deg: float, tilt_deg: float, fov_deg: float,
     step <= 4. Used for the live preview; the exact path (step=1) is the reference."""
     c_lon, _ = centre_lonlat(pan_deg, tilt_deg)
     if step <= 1:
-        rays = view_rays(pan_deg, tilt_deg, fov_deg, out_w, out_h, legacy_fov)
+        rays = view_rays(pan_deg, tilt_deg, fov_deg, out_w, out_h, legacy_fov, projection)
         lon, lat = rays_to_lonlat(rays, c_lon)
         mx, my = lonlat_to_xy(lon, lat, src_w, src_h)
         return mx.astype(np.float32), my.astype(np.float32)
@@ -191,11 +210,11 @@ def build_remap(pan_deg: float, tilt_deg: float, fov_deg: float,
     # the frame edges interpolate instead of replicating
     px = (np.arange(-1, cw + 1) + 0.5) * step - 0.5
     py = (np.arange(-1, ch + 1) + 0.5) * step - 0.5
-    xm, ym = plane_extent(fov_deg, out_w, out_h, legacy_fov)
+    xm, ym = plane_extent(fov_deg, out_w, out_h, legacy_fov, projection)
     gx = (-xm + 2 * xm * px / (out_w - 1)).astype(np.float32)
     gy = (ym - 2 * ym * py / (out_h - 1)).astype(np.float32)
-    f, r, u = (v.astype(np.float32) for v in _basis(pan_deg, tilt_deg))
-    rays = f[None, None, :] + gx[None, :, None] * r[None, None, :] + gy[:, None, None] * u[None, None, :]
+    basis = tuple(v.astype(np.float32) for v in _basis(pan_deg, tilt_deg))
+    rays = _rays(gx[None, :], gy[:, None], basis, projection)
     lon, lat = rays_to_lonlat(rays, c_lon)
     mx, my = lonlat_to_xy(lon, lat, src_w, src_h)
     size = ((cw + 2) * step, (ch + 2) * step)
@@ -208,41 +227,47 @@ def build_remap(pan_deg: float, tilt_deg: float, fov_deg: float,
 
 def crop_outline(pan_deg: float, tilt_deg: float, fov_deg: float,
                  out_w: int = OUT_W, out_h: int = OUT_H,
-                 legacy_fov: bool = False, n: int = 20) -> Tuple[np.ndarray, np.ndarray]:
+                 legacy_fov: bool = False, n: int = 20,
+                 projection: str = "flat") -> Tuple[np.ndarray, np.ndarray]:
     """Boundary of the crop on the equirect as (lon_deg, lat_deg) arrays, in order
     around the frame, longitudes unwrapped around the crop centre (so continuous)."""
-    xm, ym = plane_extent(fov_deg, out_w, out_h, legacy_fov)
+    xm, ym = plane_extent(fov_deg, out_w, out_h, legacy_fov, projection)
     t = np.linspace(0.0, 1.0, n, endpoint=False)
     xs = np.concatenate([-xm + 2 * xm * t, np.full(n, xm), xm - 2 * xm * t, np.full(n, -xm)])
     ys = np.concatenate([np.full(n, ym), ym - 2 * ym * t, np.full(n, -ym), -ym + 2 * ym * t])
-    f, r, u = _basis(pan_deg, tilt_deg)
-    rays = f[None, :] + xs[:, None] * r[None, :] + ys[:, None] * u[None, :]
+    rays = _rays(xs, ys, _basis(pan_deg, tilt_deg), projection)
     c_lon, _ = centre_lonlat(pan_deg, tilt_deg)
     return rays_to_lonlat(rays, c_lon)
 
 
 def point_in_crop(lon_deg: float, lat_deg: float, pan_deg: float, tilt_deg: float,
                   fov_deg: float, out_w: int = OUT_W, out_h: int = OUT_H,
-                  legacy_fov: bool = False) -> bool:
+                  legacy_fov: bool = False, projection: str = "flat") -> bool:
     lo, la = math.radians(lon_deg), math.radians(lat_deg)
     p = np.array([math.cos(la) * math.sin(lo), math.sin(la), math.cos(la) * math.cos(lo)])
     f, r, u = _basis(pan_deg, tilt_deg)
+    xm, ym = plane_extent(fov_deg, out_w, out_h, legacy_fov, projection)
+    if projection == "cylindrical":
+        px, pz = float(p @ r), float(p @ f)
+        rho = math.hypot(px, pz)
+        if rho <= 1e-6:
+            return False
+        return abs(math.atan2(px, pz)) <= xm and abs(float(p @ u) / rho) <= ym
     d = float(p @ f)
     if d <= 1e-6:
         return False
-    xm, ym = plane_extent(fov_deg, out_w, out_h, legacy_fov)
     return abs(float(p @ r) / d) <= xm and abs(float(p @ u) / d) <= ym
 
 
 def to_v360_params(pan_deg: float, tilt_deg: float, fov_deg: float,
                    out_w: int = OUT_W, out_h: int = OUT_H,
-                   legacy_fov: bool = False) -> dict:
-    """Map (pan, tilt, fov) to the runtime options of FFmpeg's v360=equirect:flat."""
+                   legacy_fov: bool = False, projection: str = "flat") -> dict:
+    """Map (pan, tilt, fov) to the runtime options of FFmpeg's v360=equirect:<projection>."""
     return {
         "yaw": float(wrap180(PAN_SIGN * pan_deg)),   # v360: +yaw looks right
         "pitch": float(tilt_deg),                    # v360: +pitch looks up
         "h_fov": float(fov_deg),
-        "v_fov": vfov_deg(fov_deg, out_w, out_h, legacy_fov),
+        "v_fov": vfov_deg(fov_deg, out_w, out_h, legacy_fov, projection),
     }
 
 

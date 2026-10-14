@@ -63,7 +63,8 @@ def ff_escape(path: str) -> str:
 
 
 def build_sendcmd(path: K.Path, tilt: float, n_frames: int, fps: float, start: float,
-                  out_w: int, out_h: int, legacy_fov: bool, target: str = "v360@cam"):
+                  out_w: int, out_h: int, legacy_fov: bool, target: str = "v360@cam",
+                  projection: str = "flat"):
     """Per-frame v360 commands. Returns (script_text, n_command_lines, first_params).
 
     Each command fires half a frame *before* its frame's timestamp so float rounding in
@@ -75,7 +76,7 @@ def build_sendcmd(path: K.Path, tilt: float, n_frames: int, fps: float, start: f
     names = ("yaw", "pitch", "h_fov", "v_fov")
     lines, last, first = [], None, None
     for i in range(n_frames):
-        p = K.to_v360_params(float(pan[i]), tilt, float(fov[i]), out_w, out_h, legacy_fov)
+        p = K.to_v360_params(float(pan[i]), tilt, float(fov[i]), out_w, out_h, legacy_fov, projection)
         vals = [p[n] for n in names]
         if first is None:                    # frame 0 uses the filter's initial options
             first, last = p, list(vals)
@@ -93,7 +94,7 @@ def build_sendcmd(path: K.Path, tilt: float, n_frames: int, fps: float, start: f
 def build_command(a, info: dict, source: str, cmd_file: str, n_frames: int, first: dict) -> list:
     # reset_rot=1 is essential: without it v360 treats runtime yaw/pitch commands as
     # *incremental* rotations that accumulate frame after frame.
-    flat = (f"v360@cam=input=equirect:output=flat:w={a.width}:h={a.height}:"
+    flat = (f"v360@cam=input=equirect:output={a.projection}:w={a.width}:h={a.height}:"
             f"interp={a.interp_filter}:reset_rot=1:"
             f"yaw={first['yaw']:.5f}:pitch={first['pitch']:.5f}:"
             f"h_fov={first['h_fov']:.5f}:v_fov={first['v_fov']:.5f}")
@@ -103,6 +104,7 @@ def build_command(a, info: dict, source: str, cmd_file: str, n_frames: int, firs
     if cmd_file:                              # a static camera has no commands (sendcmd rejects an empty file)
         parts.append(f"sendcmd=f='{ff_escape(cmd_file)}'")
     parts.append(flat)
+    parts.append("setsar=1")                 # the conversion's scale step leaves a non-square pixel aspect; players would stretch the video
     vf = ",".join(parts)
 
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats", "-y"]
@@ -134,6 +136,8 @@ def main(argv=None) -> int:
     p.add_argument("--height", type=int, default=K.OUT_H)
     p.add_argument("--legacy-fov", action="store_true", default=None,
                    help="vertical FOV == horizontal FOV like py360convert's scalar fov (anamorphic)")
+    p.add_argument("--projection", choices=K.PROJECTIONS, default=None,
+                   help="flat (rectilinear) or cylindrical; default: the one annotate.py used (meta.json)")
     p.add_argument("--interp-filter", default="cubic",
                    choices=["nearest", "linear", "cubic", "lanczos", "spline16", "gaussian"],
                    help="v360 resampling filter (default cubic)")
@@ -141,8 +145,11 @@ def main(argv=None) -> int:
     p.add_argument("--crf", type=int, default=18)
     p.add_argument("--bitrate", default="8000k", help="for h264_videotoolbox")
     p.add_argument("--audio", action="store_true", help="keep (re-encode) the first audio track")
-    p.add_argument("--start", type=float, default=0.0, help="start time in seconds")
-    p.add_argument("--duration", type=float, default=None, help="seconds to render (default: to the end)")
+    p.add_argument("--start", type=float, default=None,
+                   help="start time in seconds (default: the IN mark set in annotate.py, else 0)")
+    p.add_argument("--duration", type=float, default=None,
+                   help="seconds to render (default: up to the OUT mark set in annotate.py, else the end)")
+    p.add_argument("--no-trim", action="store_true", help="ignore the IN/OUT marks and render everything")
     p.add_argument("--dry-run", action="store_true", help="print the ffmpeg command, don't run it")
     p.add_argument("--keep-cmds", default=None, metavar="PATH", help="also save the sendcmd script here")
     a = p.parse_args(argv)
@@ -155,10 +162,22 @@ def main(argv=None) -> int:
         tilt = float(meta.get("tilt_deg", 0.0))
     if a.legacy_fov is None:
         a.legacy_fov = bool(meta.get("legacy_fov", False))
+    if a.projection is None:
+        a.projection = meta.get("projection", "flat" if meta else "cylindrical")
+        if a.projection not in K.PROJECTIONS:
+            a.projection = "flat"
     if a.interp is None:
         a.interp = meta.get("interp", "pchip")
         if a.interp not in K.Path.METHODS:
             a.interp = "pchip"
+
+    # the game window: explicit --start/--duration win, else the marks from annotate.py
+    t_in, t_out = meta.get("trim_in"), meta.get("trim_out")
+    use_marks = not a.no_trim and a.start is None and a.duration is None
+    if a.start is None:
+        a.start = float(t_in) if (use_marks and t_in is not None) else 0.0
+    if a.duration is None and use_marks and t_out is not None:
+        a.duration = max(0.0, float(t_out) - a.start)
 
     kfs = K.KeyframeSet.load(a.keyframes)
     if len(kfs) == 0:
@@ -181,13 +200,17 @@ def main(argv=None) -> int:
     print(f"input    : {a.input}  ({info['width']}x{info['height']} @ {info['fps']:.3f} fps, "
           f"{total:.1f}s, source={source})")
     print(f"keyframes: {len(kfs)}  (first {kfs.items[0].t:.2f}s, last {last_kf:.2f}s)  interp={a.interp}")
+    if a.start > 0 or a.duration is not None:
+        end = a.start + a.duration if a.duration is not None else total
+        print(f"game     : {K.fmt_time(a.start)} - {K.fmt_time(end)}  ({end - a.start:.1f}s rendered)")
     print(f"camera   : tilt={tilt:+.2f}°  out={a.width}x{a.height}  "
-          f"{'legacy (anamorphic) fov' if a.legacy_fov else 'rectilinear fov'}")
+          f"{a.projection}, {'legacy (anamorphic) fov' if a.legacy_fov else 'square-pixel fov'}")
     if total and last_kf > total + 1:
         print(f"warning  : last keyframe ({last_kf:.1f}s) is beyond the video ({total:.1f}s)", file=sys.stderr)
 
     text, n_cmds, first = build_sendcmd(path, tilt, n_frames, info["fps"], a.start,
-                                        a.width, a.height, a.legacy_fov)
+                                        a.width, a.height, a.legacy_fov,
+                                        projection=a.projection)
     tmpdir = tempfile.mkdtemp(prefix="kfrender_")
     cmd_file = None
     if n_cmds:
