@@ -264,16 +264,17 @@ def main(argv=None, player_model=None, ball_model=None) -> int:
     # which stretch of the video
     start, duration = a.start, a.duration
     meta = K.load_meta(a.keyframes) if a.keyframes else {}
-    if a.keyframes and start is None and duration is None:
-        kfs = K.KeyframeSet.load(a.keyframes)
-        if len(kfs):
-            start = max(0.0, kfs.items[0].t - a.margin)
-            duration = kfs.items[-1].t + a.margin - start
     if start is None and duration is None:
+        # the game IN / OUT marks set in annotate.py ([ and ]) win; otherwise the span of the keyframes
         if meta.get("trim_in") is not None:
             start = float(meta["trim_in"])
         if meta.get("trim_out") is not None:
             duration = float(meta["trim_out"]) - (start or 0.0)
+    if a.keyframes and start is None and duration is None and os.path.exists(a.keyframes):
+        kfs = K.KeyframeSet.load(a.keyframes)
+        if len(kfs):
+            start = max(0.0, kfs.items[0].t - a.margin)
+            duration = kfs.items[-1].t + a.margin - start
     start = start or 0.0
     if duration is None:
         duration = max(0.0, info["duration"] - start)
@@ -308,6 +309,7 @@ def main(argv=None, player_model=None, ball_model=None) -> int:
     print(f"views    : {len(views)} at lon {[round(v.centre_lon) for v in views]}  tilt {tilt:+.1f}  fov {VIEW_FOV:g}")
 
     header = {"type": "header", "video": os.path.basename(a.video), "start": start, "duration": duration,
+              "video_duration": round(float(info["duration"]), 3),
               "fps": a.fps, "tilt": tilt, "view_lons": [v.centre_lon for v in views], "view_fov": VIEW_FOV,
               "calib": a.calib, "players_model": a.players, "ball_model": None if ball_model is None else a.ball,
               "ball_conf": a.ball_conf, "ball_classes": None if ball_ids is None else sorted(ball_ids), "player_conf": CONF_PLAYERS, "raw_input": raw}

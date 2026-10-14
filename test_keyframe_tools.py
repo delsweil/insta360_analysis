@@ -913,6 +913,31 @@ class TestExtractDetections(unittest.TestCase):
         self.assertTrue(all(0.19 <= t <= 1.05 for t in ts), ts)
         self.assertTrue(all(fr["balls"] == [] for fr in lines[1:]))
 
+    def test_game_marks_win_over_keyframes_and_reach_the_automatic_output(self):
+        kf = os.path.join(self.tmp, "m.keyframes.json")                      # marks only, no keyframes yet
+        with open(kf, "w") as fh:
+            json.dump([], fh)
+        K.save_meta(kf, tilt_deg=-10.0, trim_in=0.5, trim_out=1.5)
+        out = os.path.join(self.tmp, "d3.jsonl")
+        X.main(["--video", self.video, "--out", out, "--fps", "5", "--keyframes", kf, "--tilt", "-10"],
+               player_model=BlobModel(), ball_model=None)
+        lines = [json.loads(l) for l in open(out)]
+        self.assertAlmostEqual(lines[0]["start"], 0.5, places=3)
+        self.assertAlmostEqual(lines[0]["duration"], 1.0, places=3)
+        self.assertIn("video_duration", lines[0])
+        with open(kf, "w") as fh:                                              # marks AND keyframes: marks win
+            json.dump([{"t": 0.1, "pan_deg": 0, "fov_deg": 80}, {"t": 1.9, "pan_deg": 5, "fov_deg": 80}], fh)
+        out2 = os.path.join(self.tmp, "d4.jsonl")
+        X.main(["--video", self.video, "--out", out2, "--fps", "5", "--keyframes", kf, "--tilt", "-10"],
+               player_model=BlobModel(), ball_model=None)
+        h = json.loads(open(out2).readline())
+        self.assertAlmostEqual(h["start"], 0.5, places=3)
+        # the automatic pass hands the marks on to the keyframes it writes (only for a partial extraction)
+        t_in, t_out = AK.game_marks({"start": 60.0, "duration": 1380.0, "video_duration": 1500.0})
+        self.assertEqual((t_in, t_out), (60.0, 1440.0))
+        self.assertEqual(AK.game_marks({"start": 0.0, "duration": 1500.0, "video_duration": 1500.0}), (None, None))
+        self.assertEqual(AK.game_marks({"fps": 3.0}), (None, None))             # older detections files: nothing
+
     def test_pitch_flag_uses_the_calibration_polygon(self):
         poly = [[1700, 700], [2300, 700], [2300, 800], [1700, 800]]          # lon about -29..+13 at the equator band
         cal = os.path.join(self.tmp, "cal.json")
@@ -1043,6 +1068,24 @@ class TestAutoKeyframes(unittest.TestCase):
             self.assertEqual(AK.main(["--detections", det, "--out", out]), 0)
             self.assertGreater(len(K.KeyframeSet.load(out)), 3)
             self.assertEqual(AK.main(["--detections", det, "--out", out + "2", "--compare", out]), 0)
+
+
+class TestAutoKeyframesMarks(unittest.TestCase):
+    def test_main_writes_game_marks_into_the_meta(self):
+        header, frames = TestAutoKeyframes.make(lambda t: 10.0, seconds=60)
+        header.update({"start": 30.0, "duration": 60.0, "video_duration": 200.0})
+        for fr in frames:
+            fr["t"] += 30.0
+        with tempfile.TemporaryDirectory() as d:
+            det = os.path.join(d, "g.detections.jsonl")
+            with open(det, "w") as fh:
+                fh.write(json.dumps(header) + "\n")
+                for fr in frames:
+                    fh.write(json.dumps(fr) + "\n")
+            out = os.path.join(d, "g.json")
+            self.assertEqual(AK.main(["--detections", det, "--out", out]), 0)
+            meta = K.load_meta(out)
+            self.assertEqual((meta["trim_in"], meta["trim_out"]), (30.0, 90.0))
 
 
 class TestKeyframeTilt(unittest.TestCase):

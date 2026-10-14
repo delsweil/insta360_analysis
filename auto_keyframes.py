@@ -268,7 +268,8 @@ def build_path(header: dict, frames: List[dict], *, use_ball=False, min_conf=0.3
 
 
 def write_keyframes(path: str, t, pan, fov, idx: List[int], tilt: float, projection: str, video: str = "",
-                    tilt_path: Optional[np.ndarray] = None) -> None:
+                    tilt_path: Optional[np.ndarray] = None, trim_in: Optional[float] = None,
+                    trim_out: Optional[float] = None) -> None:
     """`tilt` is the project tilt (meta); `tilt_path`, if given, adds a per-keyframe tilt wherever
     it differs from the project tilt."""
     rows = []
@@ -282,8 +283,21 @@ def write_keyframes(path: str, t, pan, fov, idx: List[int], tilt: float, project
         json.dump(rows, fh, indent=1)
         fh.write("\n")
     K.save_meta(path, tilt_deg=round(float(tilt), 3), legacy_fov=False, projection=projection,
-                interp="pchip", video=video, trim_in=None, trim_out=None,
+                interp="pchip", video=video, trim_in=trim_in, trim_out=trim_out,
                 note="written by auto_keyframes.py")
+
+
+def game_marks(header: dict) -> Tuple[Optional[float], Optional[float]]:
+    """IN / OUT marks for the output: the stretch the detections were extracted from, when that
+    was only part of the video (so render_keyframes.py renders the game, not the setup and take-down)."""
+    start = float(header.get("start") or 0.0)
+    dur = header.get("duration")
+    vd = header.get("video_duration")
+    t_in = round(start, 3) if start > 0.5 else None
+    t_out = None
+    if dur is not None and vd is not None and start + float(dur) < float(vd) - 0.5:
+        t_out = round(start + float(dur), 3)
+    return t_in, t_out
 
 
 def compare(t, pan, fov, ref_path: str, lon_raw=None) -> dict:
@@ -340,7 +354,7 @@ def main(argv=None) -> int:
                    tilt=res["tilt"], tol_tilt=a.tol_tilt, base_tilt=tilt)
     out = a.out or os.path.splitext(a.detections)[0] + ".auto.keyframes.json"
     write_keyframes(out, res["t"], res["pan"], res["fov"], idx, tilt, a.projection, header.get("video", ""),
-                    tilt_path=res["tilt"])
+                    tilt_path=res["tilt"], trim_in=game_marks(header)[0], trim_out=game_marks(header)[1])
 
     t = res["t"]
     print(f"{len(frames)} samples over {t[-1] - t[0]:.0f}s -> {len(idx)} keyframes "
@@ -365,6 +379,10 @@ def main(argv=None) -> int:
               f"for the worst 10%  (bias {c['pan_bias']:+.1f}); zoom differs by {c['fov_mae']:.1f} deg")
         print(f"   your crop centre is inside the automatic crop {100 * c['ref_centre_in_auto_crop']:.0f}% of the time; "
               f"the players' centre is inside it {100 * c.get('players_in_auto_crop', float('nan')):.0f}%")
+    t_in, t_out = game_marks(header)
+    if t_in is not None or t_out is not None:
+        print(f"game marks carried over: IN {K.fmt_time(t_in) if t_in is not None else 'start'}  "
+              f"OUT {K.fmt_time(t_out) if t_out is not None else 'end'}  (render_keyframes.py uses them by default)")
     print(f"wrote {out}\nopen it:  python annotate.py <video> --keyframes {out}")
     return 0
 
