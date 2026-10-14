@@ -25,6 +25,9 @@ Steps
   7. Simplify to a few keyframes (a pchip path through them reproduces the smooth path to within
                             --tol-pan / --tol-fov), so there is something you can actually edit.
 
+Settings: every knob below has a default; `--profile my.profile.json` loads a set fitted to your own
+annotations (see tune_auto.py), and any flag you also give on the command line wins over the profile.
+
 Writes <out> (+ the .meta.json sidecar annotate.py and render_keyframes.py read: tilt, cylindrical).
 --compare prints how closely the result follows an annotation you made by hand.
 """
@@ -226,11 +229,21 @@ def feet_coverage(frames: List[dict], t, pan, fov, tilt, projection: str, min_co
 
 # ── the whole pass ───────────────────────────────────────────────────────────
 
+def lead_shift(y: np.ndarray, k: int) -> np.ndarray:
+    """y[i] -> y[i + k]: with k > 0 the camera is `k` samples ahead of the action (anticipation)."""
+    if k == 0 or len(y) == 0:
+        return y
+    k = int(np.clip(k, -(len(y) - 1), len(y) - 1))
+    if k > 0:
+        return np.concatenate([y[k:], np.full(k, y[-1])])
+    return np.concatenate([np.full(-k, y[0]), y[:k]])
+
+
 def build_path(header: dict, frames: List[dict], *, use_ball=False, min_conf=0.3, deadband=5.0,
                smooth_s=4.0, zoom_s=12.0, fov_fixed: Optional[float] = None, fov_a=0.36, fov_b=90.0,
                fov_min=90.0, fov_max=140.0, edge_limit=100.0, ball_weight=0.4, ball_conf=0.5,
                ball_reach=45.0, max_gap_s=8.0, adaptive_tilt_on=False, base_tilt=-15.0,
-               projection="cylindrical", tilt_margin=3.0, max_dip=20.0, tilt_s=3.0) -> dict:
+               projection="cylindrical", tilt_margin=3.0, max_dip=20.0, tilt_s=3.0, lead_s=0.0) -> dict:
     rate = float(header.get("fps", 3.0))
     t = np.array([r["t"] for r in frames], float)
     cells = static_cells(frames)
@@ -257,12 +270,17 @@ def build_path(header: dict, frames: List[dict], *, use_ball=False, min_conf=0.3
     # keep the crop inside the part of the picture the lens covers
     room = np.maximum(edge_limit - fov / 2.0, 0.0)
     centre = np.clip(centre, -room, room)
-    pan = K.PAN_SIGN * centre                             # pan_deg = -(longitude of the crop centre)
     tilt = None
     if adaptive_tilt_on:
         tilt = adaptive_tilt(frames, centre, fov, rate, base=base_tilt, projection=projection,
                              min_conf=min_conf, margin=tilt_margin, max_dip=max_dip, smooth_s=tilt_s,
                              max_gap=max_gap)
+    k = int(round(lead_s * rate))                         # anticipation: the camera runs `lead_s` ahead
+    if k:
+        centre, fov = lead_shift(centre, k), lead_shift(fov, k)
+        if tilt is not None:
+            tilt = lead_shift(tilt, k)
+    pan = K.PAN_SIGN * centre                             # pan_deg = -(longitude of the crop centre)
     return {"t": t, "pan": pan, "fov": fov, "tilt": tilt, "lon_raw": lon, "spread": spread,
             "n_players": n_pl, "static_ball_cells": len(cells)}
 
@@ -314,6 +332,26 @@ def compare(t, pan, fov, ref_path: str, lon_raw=None) -> dict:
     return out
 
 
+PROFILE_KEYS = ("deadband", "smooth", "zoom_smooth", "fov_a", "fov_b", "fov_min", "fov_max", "edge_limit",
+                "tilt", "tilt_margin", "max_dip", "tilt_smooth", "lead", "adaptive_tilt", "min_conf")
+
+
+def load_profile(path: str) -> dict:
+    """A profile is a JSON object whose keys are auto_keyframes.py option names (underscored)."""
+    try:
+        with open(path) as fh:
+            d = json.load(fh)
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"cannot read profile {path}: {e}")
+    if not isinstance(d, dict):
+        raise SystemExit(f"{path}: a profile is a JSON object")
+    d = d.get("settings", d)                       # tune_auto.py nests the settings next to its report
+    bad = [k for k in d if k not in PROFILE_KEYS]
+    if bad:
+        print(f"profile  : ignoring unknown keys {bad}", file=sys.stderr)
+    return {k: v for k, v in d.items() if k in PROFILE_KEYS}
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--detections", required=True)
@@ -327,6 +365,8 @@ def main(argv=None) -> int:
     p.add_argument("--smooth", type=float, default=4.0, help="pan smoothing period in seconds (larger = calmer)")
     p.add_argument("--zoom-smooth", type=float, default=12.0, help="zoom smoothing period in seconds")
     p.add_argument("--fov", type=float, default=None, help="fixed field of view instead of the adaptive one")
+    p.add_argument("--fov-a", type=float, default=0.36, help="zoom: fov = a * player spread + b")
+    p.add_argument("--fov-b", type=float, default=90.0)
     p.add_argument("--fov-min", type=float, default=90.0)
     p.add_argument("--fov-max", type=float, default=140.0)
     p.add_argument("--edge-limit", type=float, default=100.0, help="never show beyond this longitude (lens coverage)")
@@ -339,17 +379,28 @@ def main(argv=None) -> int:
     p.add_argument("--tilt-margin", type=float, default=3.0, help="degrees of room kept below the lowest feet")
     p.add_argument("--tilt-smooth", type=float, default=3.0, help="tilt smoothing period in seconds")
     p.add_argument("--tol-tilt", type=float, default=1.5, help="keyframe simplification tolerance for tilt (deg)")
+    p.add_argument("--lead", type=float, default=0.0,
+                   help="seconds the camera runs ahead of the action (anticipation; 0 = centred on it)")
+    p.add_argument("--profile", default=None,
+                   help="settings fitted by tune_auto.py; flags given on the command line override it")
+    pre, _ = p.parse_known_args(argv)
+    if pre.profile:
+        prof = load_profile(pre.profile)
+        known = {act.dest for act in p._actions}
+        p.set_defaults(**{k: v for k, v in prof.items() if k in known})
     a = p.parse_args(argv)
+    if a.profile:
+        print(f"profile  : {a.profile}")
 
     header, frames = load_detections(a.detections)
     if len(frames) < 4:
         raise SystemExit("too few frames in the detections file")
     tilt = a.tilt if a.tilt is not None else float(header.get("tilt", -15.0))
     res = build_path(header, frames, use_ball=a.use_ball, min_conf=a.min_conf, deadband=a.deadband,
-                     smooth_s=a.smooth, zoom_s=a.zoom_smooth, fov_fixed=a.fov, fov_min=a.fov_min,
-                     fov_max=a.fov_max, edge_limit=a.edge_limit, adaptive_tilt_on=a.adaptive_tilt,
-                     base_tilt=tilt, projection=a.projection, tilt_margin=a.tilt_margin,
-                     max_dip=a.max_dip, tilt_s=a.tilt_smooth)
+                     smooth_s=a.smooth, zoom_s=a.zoom_smooth, fov_fixed=a.fov, fov_a=a.fov_a, fov_b=a.fov_b,
+                     fov_min=a.fov_min, fov_max=a.fov_max, edge_limit=a.edge_limit,
+                     adaptive_tilt_on=a.adaptive_tilt, base_tilt=tilt, projection=a.projection,
+                     tilt_margin=a.tilt_margin, max_dip=a.max_dip, tilt_s=a.tilt_smooth, lead_s=a.lead)
     idx = simplify(res["t"], res["pan"], res["fov"], a.tol_pan, a.tol_fov, a.min_gap,
                    tilt=res["tilt"], tol_tilt=a.tol_tilt, base_tilt=tilt)
     out = a.out or os.path.splitext(a.detections)[0] + ".auto.keyframes.json"
