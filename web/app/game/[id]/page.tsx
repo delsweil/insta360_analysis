@@ -902,21 +902,26 @@ export default function GamePage({ params }: Props) {
         />
 
         {/* Invisible tap-catcher — sits above the iframe (zIndex 7).
-            Receives taps on the video area and toggles HUD visibility. */}
+            Receives taps on the video area and toggles HUD visibility.
+            Disabled while drawing so pointer events reach AnnotationCanvas. */}
         <div
-          onClick={() => setHudVisible(v => !v)}
-          style={{ position: 'absolute', inset: 0, zIndex: 7, background: 'transparent' }}
+          onClick={() => { if (!isDrawing) setHudVisible(v => !v) }}
+          style={{
+            position: 'absolute', inset: 0, zIndex: 7, background: 'transparent',
+            pointerEvents: isDrawing ? 'none' : 'auto',
+          }}
         />
 
         {/* ── HUD wrapper — shown/hidden by tap ── */}
-        {/* Tapping the wrapper background (not a button) hides the HUD */}
+        {/* Tapping the wrapper background (not a button) hides the HUD.
+            While drawing, always visible so the draw toolbar stays accessible. */}
         <div
-          onClick={() => setHudVisible(false)}
+          onClick={() => { if (!isDrawing) setHudVisible(false) }}
           style={{
             position: 'absolute', inset: 0,
-            opacity: hudVisible ? 1 : 0,
+            opacity: (hudVisible || isDrawing) ? 1 : 0,
             transition: 'opacity 0.2s ease',
-            pointerEvents: hudVisible ? 'auto' : 'none',
+            pointerEvents: (hudVisible || isDrawing) ? 'auto' : 'none',
             zIndex: 8,
           }}
         >
@@ -1171,7 +1176,97 @@ export default function GamePage({ params }: Props) {
             </span>
           </div>
 
-          {/* Action row */}
+          {/* Action row — drawing mode replaces normal controls */}
+          {isDrawing ? (
+            /* ── Mobile draw toolbar ── */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+              {/* Tool picker row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, overflowX: 'auto', paddingBottom: 2 }}>
+                {([
+                  { key: 'select',    icon: '↖', label: 'Auswahl' },
+                  { key: 'zone',      icon: '▭', label: 'Zone' },
+                  { key: 'curve',     icon: '↝', label: 'Linie' },
+                  { key: 'connector', icon: '⌇', label: 'Pfeil' },
+                  { key: 'cone',      icon: '◣', label: 'Spieler' },
+                  { key: 'highlight', icon: '◎', label: 'Spot' },
+                  { key: 'label',     icon: 'T', label: 'Text' },
+                  { key: 'number',    icon: '①', label: 'Nr.' },
+                ] as const).map(t => {
+                  const isSelected = drawTool === t.key
+                  return (
+                    <button
+                      key={t.key}
+                      onClick={() => setDrawTool(t.key as typeof drawTool)}
+                      title={t.label}
+                      style={{
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+                        padding: '5px 8px', borderRadius: 8, flexShrink: 0,
+                        border: `1.5px solid ${isSelected ? '#4ade80' : 'rgba(255,255,255,0.2)'}`,
+                        background: isSelected ? 'rgba(74,222,128,0.15)' : 'rgba(255,255,255,0.07)',
+                        color: isSelected ? '#4ade80' : 'rgba(255,255,255,0.7)',
+                        cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
+                      }}
+                    >
+                      <span style={{ fontSize: 14 }}>{t.icon}</span>
+                      <span style={{ fontSize: 8, fontWeight: 600, letterSpacing: '0.03em' }}>{t.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+              {/* Undo / Clear / Done row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <button
+                  onClick={() => setDraftShapes(prev => prev.slice(0, -1))}
+                  disabled={draftShapes.length === 0}
+                  style={{
+                    padding: '0 12px', height: 36,
+                    background: 'rgba(255,255,255,0.07)',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    borderRadius: 9,
+                    color: draftShapes.length > 0 ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.25)',
+                    fontSize: 12, fontWeight: 600,
+                    fontFamily: 'DM Sans, sans-serif', cursor: draftShapes.length > 0 ? 'pointer' : 'default',
+                    flexShrink: 0,
+                  }}
+                >↩ Undo</button>
+                <button
+                  onClick={() => setDraftShapes([])}
+                  style={{
+                    padding: '0 12px', height: 36,
+                    background: 'rgba(239,68,68,0.1)',
+                    border: '1px solid rgba(239,68,68,0.3)',
+                    borderRadius: 9, color: 'rgba(239,68,68,0.85)',
+                    fontSize: 12, fontWeight: 600,
+                    fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+                  }}
+                >✕ Clear</button>
+                <div style={{ flex: 1 }} />
+                {/* Hint */}
+                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', flexShrink: 0 }}>
+                  {draftShapes.length} shapes
+                </span>
+                <button
+                  onClick={() => {
+                    mobileCanvasRef.current?.finalizePending()
+                    desktopCanvasRef.current?.finalizePending()
+                    setIsDrawing(false)
+                    setDrawTool('select')
+                    setEditingAnnotationId(null)
+                    setMarkIn(null)
+                    setAnnotationEndSec(null)
+                    setClipEndSec(null)
+                  }}
+                  style={{
+                    padding: '0 16px', height: 36,
+                    background: '#0f2972', border: 'none',
+                    borderRadius: 9, color: '#fff',
+                    fontSize: 12, fontWeight: 700,
+                    fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+                  }}
+                >✓ Fertig</button>
+              </div>
+            </div>
+          ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             {/* Mark / Save clip button */}
             <button
@@ -1242,6 +1337,28 @@ export default function GamePage({ params }: Props) {
               {activeLabelDisplay} ▾
             </button>
 
+            {/* Tactical draw button — coaches only */}
+            {isCoach && (
+              <button
+                onClick={() => {
+                  setSelectedLabel('tactical')
+                  setHudVisible(true)
+                  startDrawing()
+                }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '0 11px', height: 38,
+                  background: 'rgba(255,255,255,0.07)',
+                  border: '1px solid rgba(255,255,255,0.18)',
+                  borderRadius: 9, color: 'rgba(255,255,255,0.8)',
+                  fontSize: 12, fontWeight: 600,
+                  fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+                }}
+              >
+                ✏ Draw
+              </button>
+            )}
+
             {/* Clip list toggle */}
             <button
               onClick={() => setFocusMode(prev => !prev)}
@@ -1275,6 +1392,7 @@ export default function GamePage({ params }: Props) {
               {mobilePlaybackRate === 1 ? '1×' : `${mobilePlaybackRate}×`}
             </button>
           </div>
+          )}
         </div>
 
         {/* ── Label sheet (slides up from bottom) ── */}
