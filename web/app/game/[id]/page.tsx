@@ -974,12 +974,13 @@ export default function GamePage({ params }: Props) {
           pointerEvents: 'none', zIndex: 6,
         }} />
 
-        {/* Top bar */}
+        {/* Top bar — safe-area-inset-top pushes content below Dynamic Island / notch */}
         <div onClick={e => e.stopPropagation()} style={{
           position: 'absolute', top: 0, left: 0, right: 0,
           zIndex: 10, display: 'flex', alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '10px 14px 0',
+          paddingTop: 'max(10px, env(safe-area-inset-top))',
+          paddingLeft: 14, paddingRight: 14, paddingBottom: 0,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <button
@@ -1115,7 +1116,9 @@ export default function GamePage({ params }: Props) {
         {/* ── Bottom HUD ── */}
         <div onClick={e => e.stopPropagation()} style={{
           position: 'absolute', bottom: 0, left: 0, right: 0,
-          zIndex: 10, padding: '0 12px 10px',
+          zIndex: 10,
+          paddingTop: 0, paddingLeft: 12, paddingRight: 12,
+          paddingBottom: 'max(10px, env(safe-area-inset-bottom))',
         }}>
           {/* Timeline row */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
