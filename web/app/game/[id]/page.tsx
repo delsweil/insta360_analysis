@@ -894,11 +894,35 @@ export default function GamePage({ params }: Props) {
         {/* ── VIDEO fills the entire screen ── */}
         <iframe
           ref={playerRef}
-          src={`${game.video_url}?enablejsapi=1&controls=0&rel=0&modestbranding=1`}
+          src={`${game.video_url}?enablejsapi=1&controls=0&rel=0&modestbranding=1&autoplay=1&playsinline=1`}
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
           allowFullScreen
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
         />
+
+        {/* Big play button shown before video starts (autoplay blocked by iOS) */}
+        {!isPlaying && currentTime === 0 && (
+          <div
+            onClick={() => resumeVideo()}
+            style={{
+              position: 'absolute', inset: 0, zIndex: 6,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'rgba(0,0,0,0.3)',
+              cursor: 'pointer',
+            }}
+          >
+            <div style={{
+              width: 72, height: 72, borderRadius: '50%',
+              background: 'rgba(255,255,255,0.2)', backdropFilter: 'blur(8px)',
+              border: '2px solid rgba(255,255,255,0.4)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <svg width="28" height="28" viewBox="0 0 28 28" fill="white">
+                <polygon points="8,4 24,14 8,24"/>
+              </svg>
+            </div>
+          </div>
+        )}
 
         {/* Invisible tap-catcher — sits above the iframe, below the HUD controls (zIndex 7).
             Receives all taps that miss the HUD buttons and toggles HUD visibility. */}
