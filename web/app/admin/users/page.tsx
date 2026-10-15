@@ -34,6 +34,12 @@ export default function AdminUsersPage() {
   const [createError, setCreateError] = useState('')
   const [createSuccess, setCreateSuccess] = useState('')
 
+  // Invite link state
+  const [inviteRole, setInviteRole] = useState<'admin' | 'coach' | 'player'>('player')
+  const [generatingLink, setGeneratingLink] = useState(false)
+  const [inviteLink, setInviteLink] = useState('')
+  const [inviteCopied, setInviteCopied] = useState(false)
+
   useEffect(() => {
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
@@ -97,6 +103,35 @@ export default function AdminUsersPage() {
     }
     setUsers(prev => prev.map(u => u.id === userId ? { ...u, role: newRole } : u))
     setSaving(null)
+  }
+
+  const handleGenerateInvite = async () => {
+    setGeneratingLink(true)
+    setInviteLink('')
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) { setGeneratingLink(false); return }
+
+    try {
+      const res = await fetch('/api/admin/create-invite', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ role: inviteRole }),
+      })
+      const data = await res.json()
+      if (res.ok && data.token) {
+        setInviteLink(`${window.location.origin}/join/${data.token}`)
+      }
+    } catch { /* ignore */ }
+    setGeneratingLink(false)
+  }
+
+  const handleCopyInvite = async () => {
+    await navigator.clipboard.writeText(inviteLink)
+    setInviteCopied(true)
+    setTimeout(() => setInviteCopied(false), 2000)
   }
 
   const handleCreateUser = async () => {
@@ -267,6 +302,79 @@ export default function AdminUsersPage() {
               </div>
             </div>
           ))}
+        </div>
+
+        {/* Invite link */}
+        <div style={{
+          background: '#fff', border: '1px solid #E4E6EE',
+          borderRadius: 12, padding: '16px 18px', marginTop: 16, marginBottom: 8,
+        }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#111318', marginBottom: 10 }}>
+            Invite link
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select
+              value={inviteRole}
+              onChange={e => { setInviteRole(e.target.value as typeof inviteRole); setInviteLink('') }}
+              style={{
+                fontSize: 13, padding: '8px 10px',
+                border: '1px solid #E4E6EE', borderRadius: 8, outline: 'none',
+                fontFamily: 'DM Sans, sans-serif', background: '#fff',
+              }}
+            >
+              <option value="player">Player</option>
+              <option value="coach">Coach</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button
+              onClick={handleGenerateInvite}
+              disabled={generatingLink}
+              style={{
+                fontSize: 13, fontWeight: 600, padding: '8px 18px',
+                borderRadius: 8, border: 'none',
+                background: generatingLink ? '#E4E6EE' : '#0f2972',
+                color: generatingLink ? '#8A8F9E' : '#fff',
+                cursor: generatingLink ? 'default' : 'pointer',
+                fontFamily: 'DM Sans, sans-serif',
+              }}
+            >
+              {generatingLink ? 'Generating…' : 'Generate link'}
+            </button>
+          </div>
+
+          {inviteLink && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                background: '#F8F8F6', border: '1px solid #E4E6EE',
+                borderRadius: 8, padding: '8px 12px',
+              }}>
+                <span style={{
+                  fontSize: 12, color: '#111318', flex: 1,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  fontFamily: 'monospace',
+                }}>
+                  {inviteLink}
+                </span>
+                <button
+                  onClick={handleCopyInvite}
+                  style={{
+                    fontSize: 12, fontWeight: 600, padding: '4px 12px',
+                    borderRadius: 6, border: '1.5px solid #0f2972',
+                    background: inviteCopied ? '#0f2972' : '#fff',
+                    color: inviteCopied ? '#fff' : '#0f2972',
+                    cursor: 'pointer', flexShrink: 0,
+                    fontFamily: 'DM Sans, sans-serif',
+                  }}
+                >
+                  {inviteCopied ? '✓ Copied' : 'Copy'}
+                </button>
+              </div>
+              <div style={{ fontSize: 11, color: '#8A8F9E', marginTop: 6 }}>
+                Single-use · expires in 7 days · grants <strong>{inviteRole}</strong> access.
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Add user */}
