@@ -1344,10 +1344,19 @@ export default function GamePage({ params }: Props) {
             <div style={{
               padding: '10px 12px 8px',
               borderBottom: '1px solid rgba(255,255,255,0.07)',
-              fontSize: 9, fontWeight: 700, textTransform: 'uppercase',
-              letterSpacing: '0.1em', color: 'rgba(255,255,255,0.35)',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             }}>
-              {annotations.length} Clips
+              <span style={{
+                fontSize: 9, fontWeight: 700, textTransform: 'uppercase',
+                letterSpacing: '0.1em', color: 'rgba(255,255,255,0.35)',
+              }}>{annotations.length} Clips</span>
+              <button
+                onClick={() => setFocusMode(false)}
+                style={{
+                  background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)',
+                  fontSize: 16, cursor: 'pointer', padding: '0 2px', lineHeight: 1,
+                }}
+              >✕</button>
             </div>
             <div style={{ overflowY: 'auto', flex: 1 }}>
               {annotations.length === 0 ? (
