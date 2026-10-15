@@ -884,7 +884,6 @@ export default function GamePage({ params }: Props) {
 
     return (
       <div
-        onClick={() => setHudVisible(v => !v)}
         style={{
           position: 'fixed', inset: 0,
           background: '#000',
@@ -896,19 +895,26 @@ export default function GamePage({ params }: Props) {
         <iframe
           ref={playerRef}
           src={`${game.video_url}?enablejsapi=1&controls=0&rel=0&modestbranding=1`}
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', pointerEvents: 'none' }}
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
           allowFullScreen
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
         />
 
-        {/* ── HUD wrapper — tap video to show/hide ── */}
+        {/* Invisible tap-catcher — sits above the iframe, below the HUD controls (zIndex 7).
+            Receives all taps that miss the HUD buttons and toggles HUD visibility. */}
         <div
-          onClick={e => e.stopPropagation()}
+          onClick={() => setHudVisible(v => !v)}
+          style={{ position: 'absolute', inset: 0, zIndex: 7, background: 'transparent' }}
+        />
+
+        {/* ── HUD wrapper — shown/hidden by tap ── */}
+        <div
           style={{
             position: 'absolute', inset: 0,
             opacity: hudVisible ? 1 : 0,
             transition: 'opacity 0.2s ease',
             pointerEvents: hudVisible ? 'auto' : 'none',
+            zIndex: 8,
           }}
         >
 
