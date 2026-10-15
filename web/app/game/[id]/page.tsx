@@ -908,7 +908,9 @@ export default function GamePage({ params }: Props) {
         />
 
         {/* ── HUD wrapper — shown/hidden by tap ── */}
+        {/* Tapping the wrapper background (not a button) hides the HUD */}
         <div
+          onClick={() => setHudVisible(false)}
           style={{
             position: 'absolute', inset: 0,
             opacity: hudVisible ? 1 : 0,
@@ -959,7 +961,7 @@ export default function GamePage({ params }: Props) {
         }} />
 
         {/* Top bar */}
-        <div style={{
+        <div onClick={e => e.stopPropagation()} style={{
           position: 'absolute', top: 0, left: 0, right: 0,
           zIndex: 10, display: 'flex', alignItems: 'center',
           justifyContent: 'space-between',
@@ -995,7 +997,7 @@ export default function GamePage({ params }: Props) {
         </div>
 
         {/* Transport controls — centred vertically */}
-        <div style={{
+        <div onClick={e => e.stopPropagation()} style={{
           position: 'absolute', top: '50%', left: '50%',
           transform: 'translate(-50%, -50%)',
           zIndex: 10, display: 'flex', alignItems: 'center', gap: 14,
@@ -1050,7 +1052,7 @@ export default function GamePage({ params }: Props) {
         </div>
 
         {/* ── Bottom HUD ── */}
-        <div style={{
+        <div onClick={e => e.stopPropagation()} style={{
           position: 'absolute', bottom: 0, left: 0, right: 0,
           zIndex: 10, padding: '0 12px 10px',
         }}>
