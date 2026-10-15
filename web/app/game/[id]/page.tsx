@@ -80,6 +80,7 @@ export default function GamePage({ params }: Props) {
   const [mobilePlaybackRate, setMobilePlaybackRate] = useState(1)
   const [isMuted, setIsMuted] = useState(true) // starts muted for autoplay
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [showFsHint, setShowFsHint] = useState(false)
 
   // Shapes belonging to whichever tactical annotation's [shown, removed]
   // window currently contains playback — a pure time-range check now, not
@@ -1395,31 +1396,6 @@ export default function GamePage({ params }: Props) {
               </button>
             )}
 
-            {/* Fullscreen toggle — before auto-margin so it is never pushed off-screen on narrow phones */}
-            <button
-              onClick={() => {
-                if (!document.fullscreenElement) {
-                  document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {})
-                } else {
-                  document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {})
-                }
-              }}
-              style={{
-                padding: '0 11px', height: 38,
-                background: 'rgba(255,255,255,0.08)',
-                border: '1px solid rgba(255,255,255,0.15)',
-                borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                cursor: 'pointer', flexShrink: 0,
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                {isFullscreen
-                  ? <path d="M5 2H2v3M9 2h3v3M5 12H2V9M9 12h3V9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                  : <path d="M2 5V2h3M9 2h3v3M2 9v3h3M12 9v3H9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                }
-              </svg>
-            </button>
-
             {/* Playback speed */}
             <button
               onClick={cycleSpeed}
@@ -1436,7 +1412,7 @@ export default function GamePage({ params }: Props) {
               {mobilePlaybackRate === 1 ? '1×' : `${mobilePlaybackRate}×`}
             </button>
 
-            {/* Clip list toggle — marginLeft:auto pushes it right; nothing after this should be tappable */}
+            {/* Clip list toggle */}
             <button
               onClick={() => setFocusMode(prev => !prev)}
               style={{
@@ -1452,6 +1428,54 @@ export default function GamePage({ params }: Props) {
             >
               {focusMode ? '✕ Clips' : `≡ ${annotations.length} Clips`}
             </button>
+
+            {/* Fullscreen / Add-to-Home-Screen button */}
+            <div style={{ position: 'relative', flexShrink: 0 }}>
+              <button
+                onClick={() => {
+                  const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent)
+                  if (isIOS) {
+                    setShowFsHint(h => !h)
+                  } else if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {})
+                  } else {
+                    document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {})
+                  }
+                }}
+                style={{
+                  padding: '0 11px', height: 38,
+                  background: 'rgba(255,255,255,0.08)',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  {isFullscreen
+                    ? <path d="M5 2H2v3M9 2h3v3M5 12H2V9M9 12h3V9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    : <path d="M2 5V2h3M9 2h3v3M2 9v3h3M12 9v3H9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  }
+                </svg>
+              </button>
+              {showFsHint && (
+                <div
+                  onClick={() => setShowFsHint(false)}
+                  style={{
+                    position: 'absolute', bottom: 46, right: 0,
+                    background: 'rgba(15,41,114,0.97)', backdropFilter: 'blur(12px)',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    borderRadius: 10, padding: '10px 14px',
+                    width: 220, zIndex: 30,
+                    color: '#fff', fontSize: 12, fontWeight: 500,
+                    fontFamily: 'DM Sans, sans-serif', lineHeight: 1.5,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>Vollbild auf iPhone</div>
+                  Tippe auf <strong>Teilen ⎋</strong> → <strong>„Zum Home-Bildschirm"</strong> — dann startet die App ohne Browserleiste.
+                  <div style={{ marginTop: 8, color: 'rgba(255,255,255,0.45)', fontSize: 11 }}>Tippe irgendwo zum Schließen</div>
+                </div>
+              )}
+            </div>
           </div>
           )}
         </div>
