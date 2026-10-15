@@ -958,7 +958,7 @@ export default function GamePage({ params }: Props) {
             prev.filter(s => s.id !== shapeId)
               .filter(s => !(s.type === 'connector' && (s.fromId === shapeId || s.toId === shapeId)))
           )}
-          onToggleVideo={() => (isPlaying ? pauseVideo() : resumeVideo())}
+          onToggleVideo={undefined}
         />
 
         {/* Orange recording border */}
