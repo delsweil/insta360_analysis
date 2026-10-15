@@ -26,6 +26,10 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState<string | null>(null)
+  const [resetting, setResetting] = useState<string | null>(null)
+  const [resetSuccess, setResetSuccess] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null) // userId pending confirmation
+  const [deleting, setDeleting] = useState<string | null>(null)
 
   const [newEmail, setNewEmail] = useState('')
   const [newDisplayName, setNewDisplayName] = useState('')
@@ -33,12 +37,6 @@ export default function AdminUsersPage() {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
   const [createSuccess, setCreateSuccess] = useState('')
-
-  // Invite link state
-  const [inviteRole, setInviteRole] = useState<'admin' | 'coach' | 'player'>('player')
-  const [generatingLink, setGeneratingLink] = useState(false)
-  const [inviteLink, setInviteLink] = useState('')
-  const [inviteCopied, setInviteCopied] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -105,33 +103,53 @@ export default function AdminUsersPage() {
     setSaving(null)
   }
 
-  const handleGenerateInvite = async () => {
-    setGeneratingLink(true)
-    setInviteLink('')
+  const handleResetPassword = async (userId: string, email: string) => {
+    setResetting(userId)
+    setResetSuccess(null)
     const { data: { session } } = await supabase.auth.getSession()
-    if (!session) { setGeneratingLink(false); return }
+    if (!session) { setResetting(null); return }
 
     try {
-      const res = await fetch('/api/admin/create-invite', {
+      const res = await fetch('/api/admin/reset-password', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({ role: inviteRole }),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ email }),
       })
-      const data = await res.json()
-      if (res.ok && data.token) {
-        setInviteLink(`${window.location.origin}/join/${data.token}`)
+      const result = await res.json()
+      if (res.ok) {
+        setResetSuccess(userId)
+        setTimeout(() => setResetSuccess(null), 3000)
+      } else {
+        alert(`Reset failed: ${result.error}`)
       }
-    } catch { /* ignore */ }
-    setGeneratingLink(false)
+    } catch {
+      alert('Network error — please try again.')
+    }
+    setResetting(null)
   }
 
-  const handleCopyInvite = async () => {
-    await navigator.clipboard.writeText(inviteLink)
-    setInviteCopied(true)
-    setTimeout(() => setInviteCopied(false), 2000)
+  const handleDeleteUser = async (userId: string) => {
+    setDeleting(userId)
+    setConfirmDelete(null)
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) { setDeleting(null); return }
+
+    try {
+      const res = await fetch('/api/admin/delete-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ userId }),
+      })
+      const result = await res.json()
+      if (res.ok) {
+        setUsers(prev => prev.filter(u => u.id !== userId))
+      } else {
+        alert(`Delete failed: ${result.error}`)
+      }
+    } catch {
+      alert('Network error — please try again.')
+    }
+    setDeleting(null)
   }
 
   const handleCreateUser = async () => {
@@ -252,129 +270,117 @@ export default function AdminUsersPage() {
             <div key={user.id} style={{
               background: '#fff', border: '1px solid #E4E6EE',
               borderRadius: 12, padding: '14px 18px',
-              display: 'flex', alignItems: 'center',
-              justifyContent: 'space-between', gap: 12,
+              display: 'flex', flexDirection: 'column', gap: 10,
             }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{
-                  fontSize: 14, fontWeight: 500, color: '#111318',
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>
-                  {user.email}
-                </div>
-                {user.role ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                {/* Email + role label */}
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{
-                    fontSize: 11, marginTop: 2,
-                    color: ROLE_LABELS[user.role]?.color ?? '#8A8F9E',
-                    fontWeight: 600,
+                    fontSize: 14, fontWeight: 500, color: '#111318',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                   }}>
-                    {ROLE_LABELS[user.role]?.label}
+                    {user.email}
                   </div>
-                ) : (
-                  <div style={{ fontSize: 11, marginTop: 2, color: '#8A8F9E' }}>
-                    No role assigned
-                  </div>
-                )}
+                  {user.role ? (
+                    <div style={{
+                      fontSize: 11, marginTop: 2,
+                      color: ROLE_LABELS[user.role]?.color ?? '#8A8F9E',
+                      fontWeight: 600,
+                    }}>
+                      {ROLE_LABELS[user.role]?.label}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 11, marginTop: 2, color: '#8A8F9E' }}>No role assigned</div>
+                  )}
+                </div>
+
+                {/* Role toggle buttons */}
+                <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+                  {(['admin', 'coach', 'player'] as const).map(role => (
+                    <button
+                      key={role}
+                      onClick={() => handleRoleChange(user.id, user.role === role ? null : role)}
+                      disabled={saving === user.id}
+                      style={{
+                        fontSize: 11, fontWeight: 600,
+                        padding: '5px 12px', borderRadius: 99,
+                        cursor: saving === user.id ? 'default' : 'pointer',
+                        border: `1.5px solid ${user.role === role ? ROLE_LABELS[role].color : '#E4E6EE'}`,
+                        background: user.role === role ? ROLE_LABELS[role].bg : '#fff',
+                        color: user.role === role ? ROLE_LABELS[role].color : '#8A8F9E',
+                        opacity: saving === user.id ? 0.6 : 1,
+                      }}
+                    >
+                      {saving === user.id ? '…' : ROLE_LABELS[role].label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
-                {(['admin', 'coach', 'player'] as const).map(role => (
+              {/* Action row: reset password + delete */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 2, borderTop: '1px solid #F0F1F5' }}>
+                {/* Reset password */}
+                <button
+                  onClick={() => handleResetPassword(user.id, user.email)}
+                  disabled={resetting === user.id}
+                  style={{
+                    fontSize: 11, fontWeight: 600,
+                    padding: '4px 12px', borderRadius: 99,
+                    border: '1.5px solid #E4E6EE', background: '#fff',
+                    color: resetSuccess === user.id ? '#166534' : '#8A8F9E',
+                    borderColor: resetSuccess === user.id ? '#86efac' : '#E4E6EE',
+                    background: resetSuccess === user.id ? '#f0fdf4' : '#fff',
+                    cursor: resetting === user.id ? 'default' : 'pointer',
+                    opacity: resetting === user.id ? 0.6 : 1,
+                  } as any}
+                >
+                  {resetting === user.id ? '…' : resetSuccess === user.id ? '✓ Reset sent' : '↺ Reset password'}
+                </button>
+
+                {/* Delete — two-step confirm */}
+                {confirmDelete === user.id ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 11, color: '#b91c1c', fontWeight: 600 }}>Delete permanently?</span>
+                    <button
+                      onClick={() => handleDeleteUser(user.id)}
+                      disabled={deleting === user.id}
+                      style={{
+                        fontSize: 11, fontWeight: 700,
+                        padding: '4px 12px', borderRadius: 99,
+                        border: '1.5px solid #ef4444', background: '#fef2f2',
+                        color: '#b91c1c', cursor: 'pointer',
+                      }}
+                    >
+                      {deleting === user.id ? '…' : 'Yes, delete'}
+                    </button>
+                    <button
+                      onClick={() => setConfirmDelete(null)}
+                      style={{
+                        fontSize: 11, fontWeight: 600,
+                        padding: '4px 12px', borderRadius: 99,
+                        border: '1.5px solid #E4E6EE', background: '#fff',
+                        color: '#8A8F9E', cursor: 'pointer',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
                   <button
-                    key={role}
-                    onClick={() => handleRoleChange(
-                      user.id,
-                      user.role === role ? null : role
-                    )}
-                    disabled={saving === user.id}
+                    onClick={() => setConfirmDelete(user.id)}
                     style={{
                       fontSize: 11, fontWeight: 600,
-                      padding: '5px 12px', borderRadius: 99,
-                      cursor: saving === user.id ? 'default' : 'pointer',
-                      border: `1.5px solid ${user.role === role ? ROLE_LABELS[role].color : '#E4E6EE'}`,
-                      background: user.role === role ? ROLE_LABELS[role].bg : '#fff',
-                      color: user.role === role ? ROLE_LABELS[role].color : '#8A8F9E',
-                      opacity: saving === user.id ? 0.6 : 1,
+                      padding: '4px 12px', borderRadius: 99,
+                      border: '1.5px solid #fca5a5', background: '#fff',
+                      color: '#ef4444', cursor: 'pointer',
                     }}
                   >
-                    {saving === user.id ? '...' : ROLE_LABELS[role].label}
+                    🗑 Delete account
                   </button>
-                ))}
+                )}
               </div>
             </div>
           ))}
-        </div>
-
-        {/* Invite link */}
-        <div style={{
-          background: '#fff', border: '1px solid #E4E6EE',
-          borderRadius: 12, padding: '16px 18px', marginTop: 16, marginBottom: 8,
-        }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: '#111318', marginBottom: 10 }}>
-            Invite link
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <select
-              value={inviteRole}
-              onChange={e => { setInviteRole(e.target.value as typeof inviteRole); setInviteLink('') }}
-              style={{
-                fontSize: 13, padding: '8px 10px',
-                border: '1px solid #E4E6EE', borderRadius: 8, outline: 'none',
-                fontFamily: 'DM Sans, sans-serif', background: '#fff',
-              }}
-            >
-              <option value="player">Player</option>
-              <option value="coach">Coach</option>
-              <option value="admin">Admin</option>
-            </select>
-            <button
-              onClick={handleGenerateInvite}
-              disabled={generatingLink}
-              style={{
-                fontSize: 13, fontWeight: 600, padding: '8px 18px',
-                borderRadius: 8, border: 'none',
-                background: generatingLink ? '#E4E6EE' : '#0f2972',
-                color: generatingLink ? '#8A8F9E' : '#fff',
-                cursor: generatingLink ? 'default' : 'pointer',
-                fontFamily: 'DM Sans, sans-serif',
-              }}
-            >
-              {generatingLink ? 'Generating…' : 'Generate link'}
-            </button>
-          </div>
-
-          {inviteLink && (
-            <div style={{ marginTop: 10 }}>
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                background: '#F8F8F6', border: '1px solid #E4E6EE',
-                borderRadius: 8, padding: '8px 12px',
-              }}>
-                <span style={{
-                  fontSize: 12, color: '#111318', flex: 1,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  fontFamily: 'monospace',
-                }}>
-                  {inviteLink}
-                </span>
-                <button
-                  onClick={handleCopyInvite}
-                  style={{
-                    fontSize: 12, fontWeight: 600, padding: '4px 12px',
-                    borderRadius: 6, border: '1.5px solid #0f2972',
-                    background: inviteCopied ? '#0f2972' : '#fff',
-                    color: inviteCopied ? '#fff' : '#0f2972',
-                    cursor: 'pointer', flexShrink: 0,
-                    fontFamily: 'DM Sans, sans-serif',
-                  }}
-                >
-                  {inviteCopied ? '✓ Copied' : 'Copy'}
-                </button>
-              </div>
-              <div style={{ fontSize: 11, color: '#8A8F9E', marginTop: 6 }}>
-                Single-use · expires in 7 days · grants <strong>{inviteRole}</strong> access.
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Add user */}
