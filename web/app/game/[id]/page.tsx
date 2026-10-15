@@ -1395,40 +1395,7 @@ export default function GamePage({ params }: Props) {
               </button>
             )}
 
-            {/* Clip list toggle */}
-            <button
-              onClick={() => setFocusMode(prev => !prev)}
-              style={{
-                marginLeft: 'auto',
-                display: 'flex', alignItems: 'center', gap: 5,
-                padding: '0 11px', height: 38,
-                background: focusMode ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.08)',
-                border: '1px solid rgba(255,255,255,0.15)',
-                borderRadius: 9, color: 'rgba(255,255,255,0.75)',
-                fontSize: 12, fontWeight: 600,
-                fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
-              }}
-            >
-              {focusMode ? '✕ Clips' : `≡ ${annotations.length} Clips`}
-            </button>
-
-            {/* Playback speed */}
-            <button
-              onClick={cycleSpeed}
-              style={{
-                padding: '0 11px', height: 38,
-                background: mobilePlaybackRate !== 1 ? 'rgba(232,120,10,0.15)' : 'rgba(255,255,255,0.08)',
-                border: `1px solid ${mobilePlaybackRate !== 1 ? 'rgba(232,120,10,0.4)' : 'rgba(255,255,255,0.15)'}`,
-                borderRadius: 9,
-                color: mobilePlaybackRate !== 1 ? '#E8780A' : 'rgba(255,255,255,0.75)',
-                fontSize: 12, fontWeight: 700,
-                fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
-              }}
-            >
-              {mobilePlaybackRate === 1 ? '1×' : `${mobilePlaybackRate}×`}
-            </button>
-
-            {/* Fullscreen toggle */}
+            {/* Fullscreen toggle — before auto-margin so it is never pushed off-screen on narrow phones */}
             <button
               onClick={() => {
                 if (!document.fullscreenElement) {
@@ -1451,6 +1418,39 @@ export default function GamePage({ params }: Props) {
                   : <path d="M2 5V2h3M9 2h3v3M2 9v3h3M12 9v3H9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                 }
               </svg>
+            </button>
+
+            {/* Playback speed */}
+            <button
+              onClick={cycleSpeed}
+              style={{
+                padding: '0 11px', height: 38,
+                background: mobilePlaybackRate !== 1 ? 'rgba(232,120,10,0.15)' : 'rgba(255,255,255,0.08)',
+                border: `1px solid ${mobilePlaybackRate !== 1 ? 'rgba(232,120,10,0.4)' : 'rgba(255,255,255,0.15)'}`,
+                borderRadius: 9,
+                color: mobilePlaybackRate !== 1 ? '#E8780A' : 'rgba(255,255,255,0.75)',
+                fontSize: 12, fontWeight: 700,
+                fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+              }}
+            >
+              {mobilePlaybackRate === 1 ? '1×' : `${mobilePlaybackRate}×`}
+            </button>
+
+            {/* Clip list toggle — marginLeft:auto pushes it right; nothing after this should be tappable */}
+            <button
+              onClick={() => setFocusMode(prev => !prev)}
+              style={{
+                marginLeft: 'auto',
+                display: 'flex', alignItems: 'center', gap: 5,
+                padding: '0 11px', height: 38,
+                background: focusMode ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.08)',
+                border: '1px solid rgba(255,255,255,0.15)',
+                borderRadius: 9, color: 'rgba(255,255,255,0.75)',
+                fontSize: 12, fontWeight: 600,
+                fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+              }}
+            >
+              {focusMode ? '✕ Clips' : `≡ ${annotations.length} Clips`}
             </button>
           </div>
           )}
