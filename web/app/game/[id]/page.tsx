@@ -1020,41 +1020,15 @@ export default function GamePage({ params }: Props) {
           }}>
             {game.title}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{
-              fontFamily: 'Bebas Neue, sans-serif', fontSize: 16,
-              color: '#fff', letterSpacing: '0.1em',
-              background: 'rgba(255,255,255,0.12)', backdropFilter: 'blur(6px)',
-              padding: '3px 12px', borderRadius: 7,
-            }}>
-              {annotations.filter(a => a.label === 'goal_home').length}
-              {' – '}
-              {annotations.filter(a => a.label === 'goal_away').length}
-            </div>
-            {/* Fullscreen toggle */}
-            <button
-              onClick={() => {
-                if (!document.fullscreenElement) {
-                  document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {})
-                } else {
-                  document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {})
-                }
-              }}
-              title={isFullscreen ? 'Vollbild beenden' : 'Vollbild'}
-              style={{
-                background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(255,255,255,0.15)',
-                borderRadius: 8, color: 'rgba(255,255,255,0.7)',
-                padding: '4px 8px', cursor: 'pointer', lineHeight: 1,
-                display: 'flex', alignItems: 'center',
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ display: 'block' }}>
-                {isFullscreen
-                  ? <><path d="M5 2H2v3M9 2h3v3M5 12H2V9M9 12h3V9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></>
-                  : <><path d="M2 5V2h3M9 2h3v3M2 9v3h3M12 9v3H9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></>
-                }
-              </svg>
-            </button>
+          <div style={{
+            fontFamily: 'Bebas Neue, sans-serif', fontSize: 16,
+            color: '#fff', letterSpacing: '0.1em',
+            background: 'rgba(255,255,255,0.12)', backdropFilter: 'blur(6px)',
+            padding: '3px 12px', borderRadius: 7,
+          }}>
+            {annotations.filter(a => a.label === 'goal_home').length}
+            {' – '}
+            {annotations.filter(a => a.label === 'goal_away').length}
           </div>
         </div>
 
@@ -1301,6 +1275,31 @@ export default function GamePage({ params }: Props) {
                     fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
                   }}
                 >✓ Fertig</button>
+
+                {/* Fullscreen toggle (drawing mode) */}
+                <button
+                  onClick={() => {
+                    if (!document.fullscreenElement) {
+                      document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {})
+                    } else {
+                      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {})
+                    }
+                  }}
+                  style={{
+                    padding: '0 11px', height: 36,
+                    background: 'rgba(255,255,255,0.08)',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    cursor: 'pointer', flexShrink: 0,
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    {isFullscreen
+                      ? <path d="M5 2H2v3M9 2h3v3M5 12H2V9M9 12h3V9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      : <path d="M2 5V2h3M9 2h3v3M2 9v3h3M12 9v3H9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    }
+                  </svg>
+                </button>
               </div>
             </div>
           ) : (
@@ -1427,6 +1426,31 @@ export default function GamePage({ params }: Props) {
               }}
             >
               {mobilePlaybackRate === 1 ? '1×' : `${mobilePlaybackRate}×`}
+            </button>
+
+            {/* Fullscreen toggle */}
+            <button
+              onClick={() => {
+                if (!document.fullscreenElement) {
+                  document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {})
+                } else {
+                  document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {})
+                }
+              }}
+              style={{
+                padding: '0 11px', height: 38,
+                background: 'rgba(255,255,255,0.08)',
+                border: '1px solid rgba(255,255,255,0.15)',
+                borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                cursor: 'pointer', flexShrink: 0,
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                {isFullscreen
+                  ? <path d="M5 2H2v3M9 2h3v3M5 12H2V9M9 12h3V9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  : <path d="M2 5V2h3M9 2h3v3M2 9v3h3M12 9v3H9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                }
+              </svg>
             </button>
           </div>
           )}
