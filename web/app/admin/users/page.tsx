@@ -326,10 +326,9 @@ export default function AdminUsersPage() {
                   style={{
                     fontSize: 11, fontWeight: 600,
                     padding: '4px 12px', borderRadius: 99,
-                    border: '1.5px solid #E4E6EE', background: '#fff',
-                    color: resetSuccess === user.id ? '#166534' : '#8A8F9E',
-                    borderColor: resetSuccess === user.id ? '#86efac' : '#E4E6EE',
+                    border: `1.5px solid ${resetSuccess === user.id ? '#86efac' : '#E4E6EE'}`,
                     background: resetSuccess === user.id ? '#f0fdf4' : '#fff',
+                    color: resetSuccess === user.id ? '#166534' : '#8A8F9E',
                     cursor: resetting === user.id ? 'default' : 'pointer',
                     opacity: resetting === user.id ? 0.6 : 1,
                   } as any}
