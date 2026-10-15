@@ -525,7 +525,7 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
   }, [shapes, toCanvas])
 
   return (
-    <div ref={containerRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'auto' }}>
+    <div ref={containerRef} style={{ position: 'absolute', inset: 0, pointerEvents: editable ? 'auto' : 'none' }}>
       <canvas
         ref={canvasRef}
         style={{ display: 'block', width: '100%', height: '100%', cursor: editable && tool !== 'select' ? 'crosshair' : 'default', touchAction: 'none' }}
