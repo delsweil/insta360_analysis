@@ -76,6 +76,8 @@ export default function GamePage({ params }: Props) {
   const autoResumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [showVeoImport, setShowVeoImport] = useState(false)
   const [editingLabelId, setEditingLabelId] = useState<string | null>(null)
+  const [hudVisible, setHudVisible] = useState(false)
+  const [mobilePlaybackRate, setMobilePlaybackRate] = useState(1)
 
   // Shapes belonging to whichever tactical annotation's [shown, removed]
   // window currently contains playback — a pure time-range check now, not
@@ -229,6 +231,12 @@ export default function GamePage({ params }: Props) {
   const resumeVideo = useCallback(() => {
     playerRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*'
+    )
+  }, [])
+
+  const setVideoRate = useCallback((rate: number) => {
+    playerRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'setPlaybackRate', args: [rate] }), '*'
     )
   }, [])
 
@@ -865,23 +873,44 @@ export default function GamePage({ params }: Props) {
       }
     }
 
+    const SPEED_STEPS = [0.5, 1, 1.25, 1.5, 2]
+
+    const cycleSpeed = () => {
+      const idx = SPEED_STEPS.indexOf(mobilePlaybackRate)
+      const next = SPEED_STEPS[(idx + 1) % SPEED_STEPS.length]
+      setMobilePlaybackRate(next)
+      setVideoRate(next)
+    }
+
     return (
-      <div style={{
-        position: 'fixed', inset: 0,
-        background: '#000',
-        fontFamily: 'DM Sans, sans-serif',
-        overflow: 'hidden',
-        // Force the content to lay out in landscape regardless of device orientation.
-        // (The iframe itself handles the video; we're just giving it a fullscreen container.)
-      }}>
+      <div
+        onClick={() => setHudVisible(v => !v)}
+        style={{
+          position: 'fixed', inset: 0,
+          background: '#000',
+          fontFamily: 'DM Sans, sans-serif',
+          overflow: 'hidden',
+        }}
+      >
         {/* ── VIDEO fills the entire screen ── */}
         <iframe
           ref={playerRef}
           src={`${game.video_url}?enablejsapi=1&controls=0&rel=0&modestbranding=1`}
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', pointerEvents: 'none' }}
           allowFullScreen
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
         />
+
+        {/* ── HUD wrapper — tap video to show/hide ── */}
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            position: 'absolute', inset: 0,
+            opacity: hudVisible ? 1 : 0,
+            transition: 'opacity 0.2s ease',
+            pointerEvents: hudVisible ? 'auto' : 'none',
+          }}
+        >
 
         {/* Tactical shapes overlay */}
         <AnnotationCanvas
@@ -1199,6 +1228,22 @@ export default function GamePage({ params }: Props) {
             >
               {focusMode ? '✕ Clips' : `≡ ${annotations.length} Clips`}
             </button>
+
+            {/* Playback speed */}
+            <button
+              onClick={cycleSpeed}
+              style={{
+                padding: '0 11px', height: 38,
+                background: mobilePlaybackRate !== 1 ? 'rgba(232,120,10,0.15)' : 'rgba(255,255,255,0.08)',
+                border: `1px solid ${mobilePlaybackRate !== 1 ? 'rgba(232,120,10,0.4)' : 'rgba(255,255,255,0.15)'}`,
+                borderRadius: 9,
+                color: mobilePlaybackRate !== 1 ? '#E8780A' : 'rgba(255,255,255,0.75)',
+                fontSize: 12, fontWeight: 700,
+                fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+              }}
+            >
+              {mobilePlaybackRate === 1 ? '1×' : `${mobilePlaybackRate}×`}
+            </button>
           </div>
         </div>
 
@@ -1315,6 +1360,8 @@ export default function GamePage({ params }: Props) {
             </div>
           </div>
         )}
+
+        </div>{/* end HUD wrapper */}
 
         {/* Pulse animation for recording button */}
         <style>{`
