@@ -31,6 +31,10 @@ export async function POST(req: NextRequest) {
 
     const adminClient = createClient(supabaseUrl, serviceRoleKey)
 
+    // Delete in FK-safe order: annotations → user_roles → profiles → auth user
+    const { error: annotationsErr } = await adminClient.from('annotations').delete().eq('user_id', userId)
+    if (annotationsErr) return NextResponse.json({ error: 'annotations delete failed: ' + annotationsErr.message }, { status: 500 })
+
     const { error: roleErr } = await adminClient.from('user_roles').delete().eq('user_id', userId)
     if (roleErr) return NextResponse.json({ error: 'user_roles delete failed: ' + roleErr.message }, { status: 500 })
 
