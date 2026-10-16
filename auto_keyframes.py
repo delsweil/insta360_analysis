@@ -47,12 +47,19 @@ import kf_core as K
 
 # ── detections ───────────────────────────────────────────────────────────────
 
-def load_detections(path: str) -> Tuple[dict, List[dict]]:
+def load_detections(path: str, max_lon: Optional[float] = None) -> Tuple[dict, List[dict]]:
+    """header, frames. With max_lon, players beyond +/-max_lon degrees are dropped: that is outside the
+    lens's usable range (about +/-100), and a fixed phantom there ("player" at -110 deg in most frames of
+    the Altenberg games) drags the action centre sideways."""
     with open(path) as fh:
         rows = [json.loads(l) for l in fh if l.strip()]
     if not rows or rows[0].get("type") != "header":
         raise SystemExit(f"{path}: not a detections file (no header line)")
-    return rows[0], rows[1:]
+    frames = rows[1:]
+    if max_lon is not None:
+        for r in frames:
+            r["players"] = [p for p in r["players"] if abs(p[0]) <= max_lon]
+    return rows[0], frames
 
 
 def static_cells(frames: List[dict], cell: float = 2.0, frac: float = 0.2) -> set:
@@ -361,6 +368,8 @@ def main(argv=None) -> int:
     p.add_argument("--projection", default="cylindrical", choices=K.PROJECTIONS)
     p.add_argument("--use-ball", action="store_true", help="blend in plausible ball detections")
     p.add_argument("--min-conf", type=float, default=0.3, help="ignore players below this confidence")
+    p.add_argument("--max-lon", type=float, default=98.0,
+                   help="ignore players beyond +/- this longitude (outside the lens; 0 = keep all)")
     p.add_argument("--deadband", type=float, default=5.0, help="degrees the action may drift before the camera moves")
     p.add_argument("--smooth", type=float, default=4.0, help="pan smoothing period in seconds (larger = calmer)")
     p.add_argument("--zoom-smooth", type=float, default=12.0, help="zoom smoothing period in seconds")
@@ -392,7 +401,7 @@ def main(argv=None) -> int:
     if a.profile:
         print(f"profile  : {a.profile}")
 
-    header, frames = load_detections(a.detections)
+    header, frames = load_detections(a.detections, max_lon=a.max_lon if a.max_lon > 0 else None)
     if len(frames) < 4:
         raise SystemExit("too few frames in the detections file")
     tilt = a.tilt if a.tilt is not None else float(header.get("tilt", -15.0))

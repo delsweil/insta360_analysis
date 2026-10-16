@@ -41,6 +41,8 @@ import numpy as np
 import auto_keyframes as AK
 import kf_core as K
 
+MAX_LON = 98.0          # players beyond this longitude are outside the lens (phantoms); same default as auto_keyframes
+
 DEFAULTS: Dict[str, float] = dict(deadband=5.0, smooth=4.0, zoom_smooth=12.0, fov_a=0.36, fov_b=90.0,
                                   fov_min=90.0, fov_max=140.0, lead=0.0,
                                   tilt_margin=3.0, max_dip=20.0, tilt_smooth=3.0)
@@ -71,7 +73,7 @@ class Case:
 
     def __init__(self, det_path: str, ref_path: str):
         self.name = os.path.basename(det_path)
-        self.header, self.frames = AK.load_detections(det_path)
+        self.header, self.frames = AK.load_detections(det_path, max_lon=MAX_LON)
         self.t = np.array([r["t"] for r in self.frames], float)
         kfs = K.KeyframeSet.load(ref_path)
         if len(kfs) < 2:
