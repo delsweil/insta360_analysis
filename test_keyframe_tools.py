@@ -1519,5 +1519,190 @@ class TestIvFov(unittest.TestCase):
                     self.assertNotIn("iv_fov", meta)                               # old files are written exactly as before
 
 
+class TestSceneCheck(unittest.TestCase):
+    """scene_check.py: colour clusters, position estimate, scene picking, and the whole run on a stub detector."""
+
+    def setUp(self):
+        import scene_check as S
+        self.S = S
+
+    def test_position_follows_the_ruler_and_the_angle(self):
+        S = self.S
+        x, y = S.ground_position(0.0, 40.0, 0.0, S.SQUARE_FY, 1.0)
+        self.assertAlmostEqual(x, 0.0, places=6)
+        self.assertAlmostEqual(y, 1.7 * S.SQUARE_FY / 40.0, places=6)
+        x2, y2 = S.ground_position(0.0, 20.0, 0.0, S.SQUARE_FY, 1.0)
+        self.assertAlmostEqual(y2, 2 * y, places=6)                         # half the height = twice as far
+        xs, _ = S.ground_position(30.0, 40.0, 30.0, S.SQUARE_FY, 0.75)
+        self.assertGreater(xs, 0)
+        self.assertLess(S.ground_position(-30.0, 40.0, -30.0, S.SQUARE_FY, 0.75)[0], 0)
+
+    def test_torso_colour_ignores_grass_and_clusters_separate_teams(self):
+        S = self.S
+        img = np.full((100, 60, 3), (60, 140, 50), np.uint8)
+        cv2.rectangle(img, (15, 15), (45, 50), (40, 40, 220), -1)             # red shirt
+        c = S.torso_colour(img, (10, 10, 50, 90))
+        self.assertGreater(c[2], 180)
+        self.assertLess(c[1], 80)
+        rng = np.random.default_rng(0)
+        red = np.array([40, 40, 220]) + rng.normal(0, 6, (30, 3))
+        blue = np.array([210, 70, 30]) + rng.normal(0, 6, (25, 3))
+        cl = S.Clusters(np.vstack([red, blue]), 2, 0)
+        self.assertEqual(sorted(cl.sizes.tolist()), [25, 30])
+        self.assertEqual(cl.sizes[0], 30)                                     # biggest first
+        lab, amb = cl.assign(np.array([[40, 40, 220], [210, 70, 30]]))
+        self.assertNotEqual(lab[0], lab[1])
+        self.assertTrue((amb < 0.3).all())
+
+    def test_scene_picking_is_seeded_and_spaced(self):
+        S = self.S
+        frames = [{"t": float(t), "players": [[0, 0, 30, 0.9, None]] * 16} for t in range(0, 1000)]
+        a, b = S.pick_scenes(frames, 4, 7), S.pick_scenes(frames, 4, 7)
+        self.assertEqual(a, b)
+        self.assertEqual(len(a), 4)
+        self.assertTrue(all(y - x >= 90 for x, y in zip(a, a[1:])))
+        self.assertNotEqual(a, S.pick_scenes(frames, 4, 8))
+
+    def test_whole_run_with_a_stub_detector(self):
+        S = self.S
+
+        class Box:
+            def __init__(s, b, c):
+                s.xyxy, s.cls, s.conf = [np.array(b, float)], [0], [c]
+
+        class Stub:
+            names = {0: "person"}
+
+            def __call__(s, img, **kw):
+                m = (np.abs(img.astype(int) - np.array([60, 140, 50])).sum(-1) > 90).astype(np.uint8)
+                n, lab, st, _ = cv2.connectedComponentsWithStats(m)
+                res = type("R", (), {})()
+                res.boxes = [Box((x, y, x + w, y + h), .9) for x, y, w, h, a in st[1:] if a > 150]
+                return [res]
+
+        def frame(seed):
+            r = np.random.default_rng(seed)
+            f = np.full((X.EQ_H, X.EQ_W, 3), (60, 140, 50), np.uint8)
+            for i in range(10):
+                x, y = 900 + 100 * i, int(r.integers(780, 940))
+                cv2.rectangle(f, (x, y), (x + 22, y + 34), (40, 40, 220) if i % 2 else (210, 70, 30), -1)
+                cv2.rectangle(f, (x + 2, y + 34), (x + 20, y + 62), (20, 20, 20), -1)
+            return f
+
+        with tempfile.TemporaryDirectory() as d:
+            det = os.path.join(d, "d.jsonl")
+            with open(det, "w") as fh:
+                fh.write(json.dumps({"type": "header", "tilt": -22.0, "view_lons": [-60, -20, 20, 60],
+                                     "iv_fov": 112.0, "square_views": True, "raw_input": True}) + "\n")
+                for t in range(0, 300):
+                    fh.write(json.dumps({"t": float(t), "players": [[0, 0, 40, .9, None]] * 16, "balls": []}) + "\n")
+            out = os.path.join(d, "o.png")
+            rc = S.main(["--video", "x.mp4", "--detections", det, "--out", out, "--n", "2", "--fit-frames", "6",
+                         "--k", "2", "--device", "cpu"], model=Stub(), grab=lambda t: frame(int(t)))
+            self.assertEqual(rc, 0)
+            self.assertGreater(os.path.getsize(out), 10000)
+
+
+class TestColourExtraction(unittest.TestCase):
+    def test_colours_are_an_optional_sixth_value(self):
+        img = np.full((720, 1280, 3), (60, 140, 50), np.uint8)
+        cv2.rectangle(img, (600, 300), (630, 340), (40, 40, 220), -1)
+
+        class Box:
+            xyxy, cls, conf = [np.array([595.0, 295.0, 635.0, 400.0])], [0], [0.9]
+
+        class M:
+            names = {0: "person"}
+
+            def __call__(s, im, **kw):
+                return [type("R", (), {"boxes": [Box()]})()]
+
+        plain = X.detect_players(img, M(), "cpu")
+        self.assertEqual(len(plain[0]), 5)                                    # default output unchanged
+        rich = X.detect_players(img, M(), "cpu", colours=True)
+        self.assertEqual(len(rich[0]), 6)
+        self.assertGreater(rich[0][5][2], 150)                                # red shirt: high R in [b, g, r]
+
+
+class TestPitchFilter(unittest.TestCase):
+    def test_players_outside_the_outline_are_flagged_and_dropped_by_the_loader(self):
+        import pitch_filter as PF
+        with tempfile.TemporaryDirectory() as d:
+            # outline: the frame area around lon -40..40, lat -40..-5
+            x0, y0 = K.lonlat_to_xy(-40, -5, X.EQ_W, X.EQ_H)
+            x1, y1 = K.lonlat_to_xy(40, -40, X.EQ_W, X.EQ_H)
+            cal = os.path.join(d, "pitch.json")
+            with open(cal, "w") as fh:
+                json.dump({"pitch_polygon": [[float(x0), float(y0)], [float(x1), float(y0)],
+                                             [float(x1), float(y1)], [float(x0), float(y1)]]}, fh)
+            src, dst = os.path.join(d, "a.jsonl"), os.path.join(d, "b.jsonl")
+            with open(src, "w") as fh:
+                fh.write(json.dumps({"type": "header", "video": "v"}) + "\n")
+                fh.write(json.dumps({"t": 0.0, "balls": [], "players": [
+                    [0.0, -20.0, 40.0, 0.9, None, [10, 20, 30]],            # on the pitch, with a colour
+                    [90.0, -20.0, 40.0, 0.9, None],                         # far to the side
+                    [0.0, 5.0, 40.0, 0.9, None]]}) + "\n")                 # above the horizon: stand / trees
+            n, off = PF.apply(src, dst, cal, margin=10)
+            self.assertEqual((n, off), (3, 2))
+            rows = [json.loads(line) for line in open(dst)]
+            self.assertEqual([p[4] for p in rows[1]["players"]], [True, False, False])
+            self.assertEqual(rows[1]["players"][0][5], [10, 20, 30])         # colour kept
+            self.assertIn("pitch_filter", rows[0])
+            _, frames = AK.load_detections(dst)
+            self.assertEqual(len(frames[0]["players"]), 1)                  # the rest of the pipeline never sees them
+            _, plain = AK.load_detections(src)
+            self.assertEqual(len(plain[0]["players"]), 3)                   # unflagged files behave as before
+
+
+class TestTeamStats(unittest.TestCase):
+    def test_two_teams_found_and_centres_recovered(self):
+        import team_stats as TS
+        rng = np.random.default_rng(1)
+        fy = TS.S.SQUARE_FY
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.jsonl")
+            with open(path, "w") as fh:
+                fh.write(json.dumps({"type": "header", "start": 0.0, "fps": 3.0, "view_lons": [-60, -20, 20, 60],
+                                     "square_views": True, "colours": True}) + "\n")
+                for i in range(300):
+                    pl = []
+                    for bgr, cx in (((200, 200, 200), -8.0), ((120, 60, 30), 8.0)):
+                        for _ in range(9):
+                            x, y = cx + rng.normal(0, 8), 30 + rng.normal(0, 6)
+                            lon = math.degrees(math.atan2(x, y)) / 0.75
+                            c = min([-60, -20, 20, 60], key=lambda v: abs(v - lon))
+                            D = math.hypot(x, y)
+                            h = 1.7 * fy / (0.75 * D * math.cos(math.radians(0.75 * (lon - c))))
+                            pl.append([lon, -10, h, 0.9, None, [int(v + rng.normal(0, 8)) for v in bgr]])
+                    fh.write(json.dumps({"t": i / 3, "players": pl, "balls": []}) + "\n")
+            out = os.path.join(d, "t")
+            self.assertEqual(TS.main(["--detections", path, "--out", out, "--k", "3"]), 0)
+            self.assertTrue(os.path.getsize(out + ".png") > 10000)
+            rows = list(__import__("csv").DictReader(open(out + ".csv")))
+            cx = sorted([float(rows[0]["A_centre_x"]), float(rows[0]["B_centre_x"])])
+            self.assertAlmostEqual(cx[0], -8.0, delta=1.5)
+            self.assertAlmostEqual(cx[1], 8.0, delta=1.5)
+
+    def test_team_colours_follow_the_shirts(self):
+        import football_style as FS
+        self.assertEqual(FS.colour_name([150, 148, 138]), "white")             # shaded white shirt (b, g, r)
+        self.assertEqual(FS.colour_name([111, 64, 36]), "blue")                # navy
+        self.assertEqual(FS.display_colour([150, 148, 138]), "#ececec")
+        h = FS.display_colour([111, 64, 36])                                   # navy -> bright blue, still blue
+        r, g, b = int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
+        self.assertGreater(b, 180)
+        self.assertGreater(b, r + 40)
+
+    def test_file_without_colours_is_refused(self):
+        import team_stats as TS
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "n.jsonl")
+            with open(path, "w") as fh:
+                fh.write(json.dumps({"type": "header", "start": 0.0, "fps": 3.0, "view_lons": [0]}) + "\n")
+                fh.write(json.dumps({"t": 0.0, "players": [], "balls": []}) + "\n")
+            with self.assertRaises(SystemExit):
+                TS.load_game([path], 98, 0.5, 18, 0.75)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

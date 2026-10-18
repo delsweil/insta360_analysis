@@ -77,7 +77,9 @@ def main():
     ap.add_argument("--max-lon", type=float, default=98.0)
     ap.add_argument("--min-conf", type=float, default=0.3)
     ap.add_argument("--title", default=None)
+    ap.add_argument("--lang", choices=["en", "de"], default="en", help="language of the chart (en or de)")
     a = ap.parse_args()
+    L = (lambda en, de: de if a.lang == "de" else en)
     if len(a.detections) != len(a.keyframes):
         raise SystemExit("give one --keyframes file for each --detections file, in the same order")
 
@@ -99,7 +101,7 @@ def main():
 
     lo3, hi3 = np.percentile(lon[ok], [33.3, 66.7])
     zone = np.where(lon < lo3, 0, np.where(lon < hi3, 1, 2))
-    names = ["left third", "middle third", "right third"]
+    names = [L("left third", "linkes Drittel"), L("middle third", "mittleres Drittel"), L("right third", "rechtes Drittel")]
 
     nb = max(1, int(math.ceil(total / (a.block * 60))))
     fig = plt.figure(figsize=(15, 8.0), constrained_layout=True)
@@ -115,21 +117,21 @@ def main():
     ax.imshow(H, origin="lower", extent=[xr[0], xr[1], yr[0], yr[1]], aspect="auto", cmap="magma_r")
     for v in (lo3, hi3):
         ax.axvline(v, color="white", lw=0.8, ls="--")
-    ax.set_title("Where the play was (one point per moment, whole game)", loc="left", fontsize=12, color=ink)
-    ax.set_xlabel("camera longitude (°)   ← left        right →")
-    ax.set_ylabel("foot latitude of the play (°)   far ↑   ↓ near")
+    ax.set_title(L("Where the play was (one point per moment, whole game)", "Wo das Spiel stattfand (ein Punkt pro Moment, ganzes Spiel)"), loc="left", fontsize=12, color=ink)
+    ax.set_xlabel(L("camera longitude (°)   ← left        right →", "Kamera-Längengrad (°)   ← links        rechts →"))
+    ax.set_ylabel(L("foot latitude of the play (°)   far ↑   ↓ near", "Fußpunkt-Breitengrad des Spiels (°)   weit ↑   ↓ nah"))
 
     # 2 the camera over time
     ax2 = fig.add_subplot(gs[0, 1])
     m = t / 60.0
-    ax2.plot(m, np.where(ok, lon, np.nan), color=red, lw=0.7, alpha=0.8, label="play centre (players in the crop)")
-    ax2.plot(m, cam, color=blue, lw=1.0, label="where the camera looked")
+    ax2.plot(m, np.where(ok, lon, np.nan), color=red, lw=0.7, alpha=0.8, label=L("play centre (players in the crop)", "Spielmitte (Spieler im Bildausschnitt)"))
+    ax2.plot(m, cam, color=blue, lw=1.0, label=L("where the camera looked", "wohin die Kamera schaute"))
     for v in (lo3, hi3):
         ax2.axhline(v, color=soft, lw=0.6, ls=":")
     for p in parts[:-1]:
         ax2.axvline((p["t"][-1]) / 60.0, color=soft, lw=0.8)
-    ax2.set_xlim(0, m[-1]); ax2.set_xlabel("minutes"); ax2.set_ylabel("longitude (°)")
-    ax2.set_title("The camera over time", loc="left", fontsize=12, color=ink)
+    ax2.set_xlim(0, m[-1]); ax2.set_xlabel(L("minutes", "Minuten")); ax2.set_ylabel(L("longitude (°)", "Längengrad (°)"))
+    ax2.set_title(L("The camera over time", "Die Kamera im Zeitverlauf"), loc="left", fontsize=12, color=ink)
     ax2.legend(loc="upper right", fontsize=8, frameon=False)
 
     # 3 territory per block
@@ -147,8 +149,8 @@ def main():
         ax3.bar(xs, shares[:, z] * 100, bottom=bottom, color=cols[z], label=names[z], width=0.8)
         bottom += shares[:, z] * 100
     ax3.set_xticks(xs); ax3.set_xticklabels([f"{int(i * a.block)}–{int(min((i + 1) * a.block, total / 60))}" for i in xs], fontsize=8)
-    ax3.set_xlabel("minutes"); ax3.set_ylabel("% of the time the play was in…")
-    ax3.set_title("Territory: where the play was, block by block", loc="left", fontsize=12, color=ink)
+    ax3.set_xlabel(L("minutes", "Minuten")); ax3.set_ylabel(L("% of the time the play was in…", "% der Zeit"))
+    ax3.set_title(L("Territory: where the play was, block by block", "Raumgewinn: wo das Spiel war, Block für Block"), loc="left", fontsize=12, color=ink)
     ax3.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0), fontsize=8, frameon=False)
 
     # 4 accuracy against a human path
@@ -174,15 +176,17 @@ def main():
             e = np.concatenate(errs); tm = np.concatenate(tt)
             ax4.plot(tm, e, color=blue, lw=0.8)
             ax4.axhline(0, color=soft, lw=0.6)
-            ax4.set_xlabel("minutes"); ax4.set_ylabel("camera − human (°)")
-            ax4.set_title(f"Against the human path: mean error {np.mean(np.abs(e)):.1f}°, bias {np.mean(e):+.1f}°",
+            ax4.set_xlabel(L("minutes", "Minuten")); ax4.set_ylabel(L("camera − human (°)", "Kamera − Mensch (°)"))
+            ax4.set_title(L(f"Against the human path: mean error {np.mean(np.abs(e)):.1f}°, bias {np.mean(e):+.1f}°", f"Gegen den Verlauf von Hand: Fehler {np.mean(np.abs(e)):.1f}°, Abweichung {np.mean(e):+.1f}°"),
                           loc="left", fontsize=12, color=ink)
-            note = f"  Accuracy: {np.mean(np.abs(e)):.1f}° mean error over {len(e) / 3 / 60:.1f} min of human-annotated play (at 3 frames/s)."
+            note = L(f"  Accuracy: {np.mean(np.abs(e)):.1f}° mean error over {len(e) / 3 / 60:.1f} min of human-annotated play (at 3 frames/s).",
+                     f"  Genauigkeit: {np.mean(np.abs(e)):.1f}° mittlerer Fehler über {len(e) / 3 / 60:.1f} Min. von Hand gesetzten Verlaufs (bei 3 Bildern/s).")
         else:
             ax4.text(0.5, 0.5, "the reference does not overlap the game", ha="center", transform=ax4.transAxes)
-    fig.suptitle(a.title or "Where the play was", x=0.01, ha="left", fontsize=14, color=ink)
-    fig.text(0.01, 0.003, "Play centre = middle of the players inside the crop, weighted to the centre; an estimate of where the ball "
-             "was, not a ball track." + note, fontsize=8, color=soft, ha="left", va="bottom")
+    fig.suptitle(a.title or L("Where the play was", "Wo das Spiel stattfand"), x=0.01, ha="left", fontsize=14, color=ink)
+    fig.text(0.01, 0.003, L("Play centre = middle of the players inside the crop, weighted to the centre; an estimate of where the ball "
+             "was, not a ball track.", "Spielmitte = Mitte der Spieler im Bildausschnitt, zur Bildmitte hin stärker gewichtet; eine Schätzung, "
+             "wo der Ball war, keine Ballverfolgung.") + note, fontsize=8, color=soft, ha="left", va="bottom")
     fig.savefig(a.out, dpi=130)
     print(f"{ok.sum()} of {len(t)} moments with players in the crop, {total / 60:.1f} min -> {a.out}")
 

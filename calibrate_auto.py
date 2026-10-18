@@ -43,6 +43,8 @@ Usage:
         --output calibration/pitch.json --vis /tmp/calib_vis.jpg --scale 1.02
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os

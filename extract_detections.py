@@ -127,10 +127,31 @@ def polygon_lon_range(poly: np.ndarray, margin: float = 12.0) -> Tuple[float, fl
     return float(lon.min() - margin), float(lon.max() + margin)
 
 
+def torso_colour(img: np.ndarray, box: Sequence[float], min_pixels: int = 12) -> np.ndarray:
+    """Median BGR of the shirt: the middle of the box, upper half, with grass-green pixels left out.
+    `img` is a BGR image, `box` = x1, y1, x2, y2 in its pixels. Returns float BGR (3,)."""
+    import cv2
+    h, w = img.shape[:2]
+    x1, y1, x2, y2 = box
+    bw, bh = x2 - x1, y2 - y1
+    xa, xb = int(max(0, x1 + 0.28 * bw)), int(min(w, x1 + 0.72 * bw + 1))
+    ya, yb = int(max(0, y1 + 0.18 * bh)), int(min(h, y1 + 0.52 * bh + 1))
+    if xb <= xa or yb <= ya:
+        return np.array([np.nan] * 3)
+    patch = img[ya:yb, xa:xb].reshape(-1, 3)
+    hsv = cv2.cvtColor(patch.reshape(1, -1, 3), cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    grass = (hsv[:, 0] >= 35) & (hsv[:, 0] <= 85) & (hsv[:, 1] > 70) & (hsv[:, 2] > 40)
+    keep = patch[~grass]
+    if len(keep) < min_pixels:
+        keep = patch
+    return np.median(keep.astype(np.float32), axis=0)
+
+
 # ── detection ────────────────────────────────────────────────────────────────
 
-def detect_players(img, model, device, mask=None, conf=CONF_PLAYERS):
-    """-> [(cx, foot_y, box_h, conf, on_pitch)] in view pixels, class 'person' only."""
+def detect_players(img, model, device, mask=None, conf=CONF_PLAYERS, colours=False):
+    """-> [(cx, foot_y, box_h, conf, on_pitch)] in view pixels, class 'person' only.
+    With colours=True each tuple gets a sixth element: the shirt colour [b, g, r] (see torso_colour)."""
     res = model(img, imgsz=IMGSZ_PLAYERS, conf=conf, device=device, verbose=False)[0]
     names = model.names
     out = []
@@ -142,7 +163,10 @@ def detect_players(img, model, device, mask=None, conf=CONF_PLAYERS):
         on = None
         if mask is not None:
             on = bool(mask[int(np.clip(foot, 0, mask.shape[0] - 1)), int(np.clip(cx, 0, mask.shape[1] - 1))])
-        out.append((cx, foot, y2 - y1, float(b.conf[0]), on))
+        row = (cx, foot, y2 - y1, float(b.conf[0]), on)
+        if colours:
+            row += ([int(round(v)) for v in torso_colour(img, (x1, y1, x2, y2))],)
+        out.append(row)
     return out
 
 
@@ -179,16 +203,16 @@ def detect_balls(img, model, device, conf=CONF_BALL, max_area_frac=0.02, class_i
 
 
 def process_frame(eq_frame, t, views, player_model, ball_model, device, eq_mask=None,
-                  ball_conf=CONF_BALL, player_conf=CONF_PLAYERS, ball_classes=None) -> dict:
+                  ball_conf=CONF_BALL, player_conf=CONF_PLAYERS, ball_classes=None, colours=False) -> dict:
     players, balls = [], []
     for vi, v in enumerate(views):
         img = v.sample(eq_frame)
         vmask = v.sample_mask(eq_mask) if eq_mask is not None else None
-        for cx, foot, h, c, on in detect_players(img, player_model, device, vmask, player_conf):
+        for cx, foot, h, c, on, *extra in detect_players(img, player_model, device, vmask, player_conf, colours):
             lon, lat = v.lonlat(cx, foot)
             if nearest_view(views, lon) != vi:            # the neighbouring view owns this one
                 continue
-            players.append([round(lon, 3), round(lat, 3), round(h, 1), round(c, 3), on])
+            players.append([round(lon, 3), round(lat, 3), round(h, 1), round(c, 3), on] + extra)   # extra = [shirt b,g,r]
         if ball_model is not None:
             for cx, cy, c in detect_balls(img, ball_model, device, ball_conf, class_ids=ball_classes):
                 lon, lat = v.lonlat(cx, cy)
@@ -254,6 +278,8 @@ def main(argv=None, player_model=None, ball_model=None) -> int:
     p.add_argument("--iv-fov", type=float, default=None,
                    help="vertical field of the fisheye model that unwraps the raw video (default 200, the original; "
                         "112 gives equal pixels per degree for a 2560x1440 frame). Written to the output header.")
+    p.add_argument("--colours", action="store_true",
+                   help="also store each player's shirt colour [b,g,r] as a sixth value (for the team analysis)")
     p.add_argument("--start", type=float, default=None)
     p.add_argument("--duration", type=float, default=None)
     p.add_argument("--players", default="models/yolo11s.pt")
@@ -330,6 +356,8 @@ def main(argv=None, player_model=None, ball_model=None) -> int:
         header["iv_fov"] = iv_fov
         header["square_views"] = square_views
         print(f"unwrap   : iv_fov={iv_fov:g} (default {K.DEFAULT_IV_FOV:g}); the keyframes made from this file carry it")
+    if a.colours:
+        header["colours"] = True
     n_total = max(1, int(duration * a.fps))
     proc = open_frames(a.video, start, duration, a.fps, raw, iv_fov)
     t0, n, n_ball = time.time(), 0, 0
@@ -341,7 +369,7 @@ def main(argv=None, player_model=None, ball_model=None) -> int:
                 if frame is None:
                     break
                 rec = process_frame(frame, start + n / a.fps, views, player_model, ball_model, device,
-                                    eq_mask, a.ball_conf, ball_classes=ball_ids)
+                                    eq_mask, a.ball_conf, ball_classes=ball_ids, colours=a.colours)
                 fh.write(json.dumps(rec) + "\n")
                 n += 1
                 n_ball += 1 if rec["balls"] else 0

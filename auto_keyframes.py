@@ -56,6 +56,9 @@ def load_detections(path: str, max_lon: Optional[float] = None) -> Tuple[dict, L
     if not rows or rows[0].get("type") != "header":
         raise SystemExit(f"{path}: not a detections file (no header line)")
     frames = rows[1:]
+    for r in frames:                                          # players flagged off the pitch (pitch_filter.py / --calib): coaches, subs
+        if any(len(p) > 4 and p[4] is False for p in r["players"]):
+            r["players"] = [p for p in r["players"] if not (len(p) > 4 and p[4] is False)]
     if max_lon is not None:
         for r in frames:
             r["players"] = [p for p in r["players"] if abs(p[0]) <= max_lon]
