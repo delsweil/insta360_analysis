@@ -294,9 +294,10 @@ def build_path(header: dict, frames: List[dict], *, use_ball=False, min_conf=0.3
 
 def write_keyframes(path: str, t, pan, fov, idx: List[int], tilt: float, projection: str, video: str = "",
                     tilt_path: Optional[np.ndarray] = None, trim_in: Optional[float] = None,
-                    trim_out: Optional[float] = None) -> None:
+                    trim_out: Optional[float] = None, iv_fov: Optional[float] = None) -> None:
     """`tilt` is the project tilt (meta); `tilt_path`, if given, adds a per-keyframe tilt wherever
-    it differs from the project tilt."""
+    it differs from the project tilt. `iv_fov` (only when not the default) records the fisheye model
+    the detections were made with, so render_keyframes.py unwraps the video the same way."""
     rows = []
     for i in idx:
         row = {"t": round(float(t[i]), 4), "pan_deg": round(float(pan[i]), 4), "fov_deg": round(float(fov[i]), 4)}
@@ -307,9 +308,10 @@ def write_keyframes(path: str, t, pan, fov, idx: List[int], tilt: float, project
     with open(path, "w") as fh:
         json.dump(rows, fh, indent=1)
         fh.write("\n")
+    extra = {} if iv_fov is None else {"iv_fov": float(iv_fov)}
     K.save_meta(path, tilt_deg=round(float(tilt), 3), legacy_fov=False, projection=projection,
                 interp="pchip", video=video, trim_in=trim_in, trim_out=trim_out,
-                note="written by auto_keyframes.py")
+                note="written by auto_keyframes.py", **extra)
 
 
 def game_marks(header: dict) -> Tuple[Optional[float], Optional[float]]:
@@ -414,7 +416,8 @@ def main(argv=None) -> int:
                    tilt=res["tilt"], tol_tilt=a.tol_tilt, base_tilt=tilt)
     out = a.out or os.path.splitext(a.detections)[0] + ".auto.keyframes.json"
     write_keyframes(out, res["t"], res["pan"], res["fov"], idx, tilt, a.projection, header.get("video", ""),
-                    tilt_path=res["tilt"], trim_in=game_marks(header)[0], trim_out=game_marks(header)[1])
+                    tilt_path=res["tilt"], trim_in=game_marks(header)[0], trim_out=game_marks(header)[1],
+                    iv_fov=header.get("iv_fov"))
 
     t = res["t"]
     print(f"{len(frames)} samples over {t[-1] - t[0]:.0f}s -> {len(idx)} keyframes "

@@ -62,12 +62,17 @@ class View:
     the same kind of picture they were trained on."""
 
     def __init__(self, centre_lon: float, tilt: float, fov: float = VIEW_FOV,
-                 w: int = VIEW_W, h: int = VIEW_H, eq_w: int = EQ_W, eq_h: int = EQ_H):
+                 w: int = VIEW_W, h: int = VIEW_H, eq_w: int = EQ_W, eq_h: int = EQ_H,
+                 legacy_fov: bool = True):
+        # legacy_fov=True: the vertical field equals the horizontal one (anamorphic pixels). That is what
+        # the original iv_fov=200 unwrapping needs (its vertical pixels per degree are 0.56 of the horizontal
+        # ones, so the view is 1:1 with the source). With a square-pixel unwrapping (iv_fov ~112) the same
+        # views would squash every player to about half height, so those use square pixels instead.
         self.centre_lon, self.tilt, self.fov, self.w, self.h = centre_lon, tilt, fov, w, h
         pan = K.PAN_SIGN * centre_lon
-        self.map_x, self.map_y = K.build_remap(pan, tilt, fov, eq_w, eq_h, w, h, legacy_fov=True)
+        self.map_x, self.map_y = K.build_remap(pan, tilt, fov, eq_w, eq_h, w, h, legacy_fov=legacy_fov)
         # longitude / latitude of every pixel of the view
-        rays = K.view_rays(pan, tilt, fov, w, h, legacy_fov=True)
+        rays = K.view_rays(pan, tilt, fov, w, h, legacy_fov=legacy_fov)
         self.lon, self.lat = K.rays_to_lonlat(rays, centre_lon)
         self.lon = np.asarray(self.lon, np.float32)
         self.lat = np.asarray(self.lat, np.float32)
@@ -87,11 +92,11 @@ class View:
 
 
 def make_views(lon_min: float, lon_max: float, tilt: float, spacing: float = 40.0,
-               fov: float = VIEW_FOV) -> List[View]:
+               fov: float = VIEW_FOV, legacy_fov: bool = True) -> List[View]:
     n = max(1, int(np.ceil((lon_max - lon_min) / spacing)))
     centres = np.linspace(lon_min + (lon_max - lon_min) / (2 * n),
                           lon_max - (lon_max - lon_min) / (2 * n), n)
-    return [View(float(c), tilt, fov) for c in centres]
+    return [View(float(c), tilt, fov, legacy_fov=legacy_fov) for c in centres]
 
 
 def nearest_view(views: Sequence[View], lon: float) -> int:
@@ -195,8 +200,9 @@ def process_frame(eq_frame, t, views, player_model, ball_model, device, eq_mask=
 
 # ── video input ──────────────────────────────────────────────────────────────
 
-def open_frames(video: str, start: float, duration: Optional[float], fps: float, raw: bool):
-    vf = (RAW_TO_EQUIRECT + "," if raw else "") + \
+def open_frames(video: str, start: float, duration: Optional[float], fps: float, raw: bool,
+                iv_fov: Optional[float] = None):
+    vf = (K.raw_to_equirect(iv_fov) + "," if raw else "") + \
          (f"scale={EQ_W}:{EQ_H}," if not raw else "") + f"fps={fps}"
     cmd = ["ffmpeg", "-v", "error"]
     if start > 0:
@@ -245,6 +251,9 @@ def main(argv=None, player_model=None, ball_model=None) -> int:
                    help="longitudes to cover, e.g. --lon-range -80 80 (default: from calib, else -80 80)")
     p.add_argument("--view-spacing", type=float, default=40.0)
     p.add_argument("--fps", type=float, default=3.0, help="detections per second (default 3)")
+    p.add_argument("--iv-fov", type=float, default=None,
+                   help="vertical field of the fisheye model that unwraps the raw video (default 200, the original; "
+                        "112 gives equal pixels per degree for a 2560x1440 frame). Written to the output header.")
     p.add_argument("--start", type=float, default=None)
     p.add_argument("--duration", type=float, default=None)
     p.add_argument("--players", default="models/yolo11s.pt")
@@ -279,6 +288,9 @@ def main(argv=None, player_model=None, ball_model=None) -> int:
     if duration is None:
         duration = max(0.0, info["duration"] - start)
 
+    iv_fov = a.iv_fov if a.iv_fov is not None else meta.get("iv_fov")
+    iv_fov = K.DEFAULT_IV_FOV if iv_fov is None else float(iv_fov)
+
     poly = load_polygon(a.calib) if a.calib else None
     eq_mask = polygon_mask(poly) if poly is not None else None
     if a.tilt is not None:
@@ -293,7 +305,8 @@ def main(argv=None, player_model=None, ball_model=None) -> int:
         lo, hi = polygon_lon_range(poly)
     else:
         lo, hi = -80.0, 80.0
-    views = make_views(lo, hi, tilt, a.view_spacing)
+    square_views = iv_fov != K.DEFAULT_IV_FOV           # a non-default unwrapping is meant to have square pixels
+    views = make_views(lo, hi, tilt, a.view_spacing, legacy_fov=not square_views)
 
     device = pick_device(a.device)
     if player_model is None:
@@ -313,8 +326,12 @@ def main(argv=None, player_model=None, ball_model=None) -> int:
               "fps": a.fps, "tilt": tilt, "view_lons": [v.centre_lon for v in views], "view_fov": VIEW_FOV,
               "calib": a.calib, "players_model": a.players, "ball_model": None if ball_model is None else a.ball,
               "ball_conf": a.ball_conf, "ball_classes": None if ball_ids is None else sorted(ball_ids), "player_conf": CONF_PLAYERS, "raw_input": raw}
+    if raw and iv_fov != K.DEFAULT_IV_FOV:               # only written when it differs: older files stay byte-compatible
+        header["iv_fov"] = iv_fov
+        header["square_views"] = square_views
+        print(f"unwrap   : iv_fov={iv_fov:g} (default {K.DEFAULT_IV_FOV:g}); the keyframes made from this file carry it")
     n_total = max(1, int(duration * a.fps))
-    proc = open_frames(a.video, start, duration, a.fps, raw)
+    proc = open_frames(a.video, start, duration, a.fps, raw, iv_fov)
     t0, n, n_ball = time.time(), 0, 0
     try:
         with open(out, "w") as fh:

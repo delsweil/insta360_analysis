@@ -108,6 +108,19 @@ def is_equirect_size(w: int, h: int, tol: float = 0.03) -> bool:
 
 PROJECTIONS = ("flat", "cylindrical")
 
+# The raw (single-lens) video is unwrapped with FFmpeg's v360 fisheye model. The horizontal field is
+# 200 degrees; the vertical one is the only thing that has ever needed adjusting. 200 is the original
+# setting and stays the default, so every earlier detections / keyframe file keeps its meaning. A
+# value that makes the pixels per degree equal in both directions for a 2560x1440 frame is 112.5.
+DEFAULT_IV_FOV = 200.0
+
+
+def raw_to_equirect(iv_fov=None) -> str:
+    """The pipeline's fisheye -> equirect step as an FFmpeg filter. With no argument it is exactly the
+    original string; the result of a different iv_fov is only valid for the files made with it."""
+    iv = DEFAULT_IV_FOV if iv_fov is None else float(iv_fov)
+    return f"v360=fisheye:equirect:ih_fov=200:iv_fov={iv:g},scale=2880:1440"
+
 
 def plane_extent(fov_deg: float, out_w: int = OUT_W, out_h: int = OUT_H,
                  legacy_fov: bool = False, projection: str = "flat") -> Tuple[float, float]:

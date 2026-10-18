@@ -1427,5 +1427,97 @@ class TestTuner(unittest.TestCase):
                 TU.main(["--detections", det, "--reference", far, "--out", os.path.join(d, "x.json")])
 
 
+class TestIvFov(unittest.TestCase):
+    """The vertical field of the fisheye unwrapping is one setting, carried from extraction to render."""
+
+    ORIGINAL = "v360=fisheye:equirect:ih_fov=200:iv_fov=200,scale=2880:1440"
+
+    def test_default_is_exactly_the_original_filter(self):
+        self.assertEqual(K.raw_to_equirect(), self.ORIGINAL)
+        self.assertEqual(K.raw_to_equirect(None), self.ORIGINAL)
+        self.assertEqual(K.raw_to_equirect(200), self.ORIGINAL)
+        self.assertEqual(X.RAW_TO_EQUIRECT, self.ORIGINAL)
+        self.assertEqual(R.RAW_TO_EQUIRECT, self.ORIGINAL)
+
+    def test_other_value_changes_only_iv_fov(self):
+        self.assertEqual(K.raw_to_equirect(112), "v360=fisheye:equirect:ih_fov=200:iv_fov=112,scale=2880:1440")
+        self.assertIn("iv_fov=112.5", K.raw_to_equirect(112.5))
+
+    def test_extraction_filter_follows_the_setting(self):
+        import unittest.mock as mock
+        seen = []
+        with mock.patch.object(X.subprocess, "Popen", lambda cmd, **kw: seen.append(cmd) or None):
+            X.open_frames("v.mp4", 0.0, 10.0, 3.0, True)
+            X.open_frames("v.mp4", 0.0, 10.0, 3.0, True, 112)
+            X.open_frames("v.mp4", 0.0, 10.0, 3.0, False, 112)             # equirect input is never unwrapped
+        vf = [c[c.index("-vf") + 1] for c in seen]
+        self.assertTrue(vf[0].startswith(self.ORIGINAL))
+        self.assertTrue(vf[1].startswith("v360=fisheye:equirect:ih_fov=200:iv_fov=112,"))
+        self.assertNotIn("fisheye", vf[2])
+
+    def _dry_run(self, kf, *extra):
+        import contextlib
+        import io
+        raw = os.path.join(os.path.dirname(kf), "raw.mp4")
+        if not os.path.exists(raw):
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                            "testsrc2=size=1440x2560:rate=30:duration=1", "-pix_fmt", "yuv420p", raw], check=True)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = R.main(["--input", raw, "--keyframes", kf, "--output", "x.mp4", "--dry-run", *extra])
+        self.assertEqual(rc, 0)
+        return buf.getvalue()
+
+    def test_render_takes_the_value_from_the_keyframe_file_and_the_flag_wins(self):
+        with tempfile.TemporaryDirectory() as d:
+            kf = os.path.join(d, "a.keyframes.json")
+            with open(kf, "w") as fh:
+                json.dump([{"t": 0, "pan_deg": 0, "fov_deg": 90}, {"t": 5, "pan_deg": 10, "fov_deg": 90}], fh)
+            self.assertIn(self.ORIGINAL, self._dry_run(kf))                       # no setting anywhere: unchanged
+            K.save_meta(kf, tilt_deg=-10.0, projection="flat", iv_fov=112.0)
+            txt = self._dry_run(kf)
+            self.assertIn("iv_fov=112,scale=2880:1440", txt)
+            self.assertNotIn("iv_fov=200", txt)
+            self.assertIn("iv_fov=150,scale=2880:1440", self._dry_run(kf, "--iv-fov", "150"))
+
+    def test_views_are_square_pixel_only_for_a_non_default_unwrapping(self):
+        old = X.View(0.0, -18.0)                                           # original: vertical field = horizontal field
+        sq = X.View(0.0, -18.0, legacy_fov=False)
+        span = lambda v: float(v.lat.max() - v.lat.min())                  # noqa: E731
+        self.assertAlmostEqual(span(old), 100.0, delta=8.0)
+        self.assertAlmostEqual(span(sq), 67.7, delta=3.0)                  # flat 100 deg across 1280 px -> 67.7 deg across 720 px
+        self.assertEqual([v.fov for v in X.make_views(-80, 80, -18.0, legacy_fov=False)], [100.0] * 4)
+        self.assertAlmostEqual(span(X.make_views(-80, 80, -18.0)[0]), span(old), delta=0.5)   # default call unchanged
+
+    def test_game_stats_speed_ruler_follows_the_view_geometry(self):
+        import game_stats as GS
+        # one player 50 px tall, 1 m per frame sideways at 3 frames/s = 3 m/s, seen from 1.7 * fy / 50 metres away
+        for fy in (GS.VIEW_FY, GS.SQUARE_FY):
+            dist = 1.7 * fy / 50.0
+            step_deg = math.degrees(1.0 / dist)
+            frames = [{"t": i / 3.0, "players": [[10.0 + i * step_deg, -20.0, 50.0, 0.9, None]], "balls": []}
+                      for i in range(4)]
+            sp = GS.player_speeds(frames, np.array([f["t"] for f in frames]), 0.3, fy)
+            self.assertAlmostEqual(float(sp[0][0]), 3.0, delta=0.05)
+        self.assertAlmostEqual(GS.SQUARE_FY, 537.0, delta=0.5)
+
+    def test_setting_travels_from_detections_header_to_keyframe_meta(self):
+        with tempfile.TemporaryDirectory() as d:
+            header, frames = TestAutoKeyframes.make(lambda t: 10.0 * np.sin(t / 9.0), seconds=60)
+            for name, extra in (("plain", {}), ("iv", {"iv_fov": 112.0})):
+                det = os.path.join(d, name + ".jsonl")
+                with open(det, "w") as fh:
+                    fh.write(json.dumps({**header, **extra}) + "\n")
+                    for r in frames:
+                        fh.write(json.dumps(r) + "\n")
+                out = os.path.join(d, name + ".keyframes.json")
+                self.assertEqual(AK.main(["--detections", det, "--out", out]), 0)
+                meta = K.load_meta(out)
+                if extra:
+                    self.assertEqual(meta["iv_fov"], 112.0)
+                else:
+                    self.assertNotIn("iv_fov", meta)                               # old files are written exactly as before
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

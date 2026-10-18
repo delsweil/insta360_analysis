@@ -104,7 +104,7 @@ def build_command(a, info: dict, source: str, cmd_file: str, n_frames: int, firs
             f"h_fov={first['h_fov']:.5f}:v_fov={first['v_fov']:.5f}")
     parts = []
     if source == "raw":
-        parts.append(RAW_TO_EQUIRECT)
+        parts.append(K.raw_to_equirect(getattr(a, "iv_fov", None)))
     if cmd_file:                              # a static camera has no commands (sendcmd rejects an empty file)
         parts.append(f"sendcmd=f='{ff_escape(cmd_file)}'")
     parts.append(flat)
@@ -138,6 +138,9 @@ def main(argv=None) -> int:
                    help="default: the method annotate.py used (meta.json), else pchip")
     p.add_argument("--width", type=int, default=K.OUT_W)
     p.add_argument("--height", type=int, default=K.OUT_H)
+    p.add_argument("--iv-fov", type=float, default=None,
+                   help="vertical field of the fisheye model that unwraps a raw video (default: the keyframe file's "
+                        "own setting, else 200). It must match the one the detections were made with.")
     p.add_argument("--legacy-fov", action="store_true", default=None,
                    help="vertical FOV == horizontal FOV like py360convert's scalar fov (anamorphic)")
     p.add_argument("--projection", choices=K.PROJECTIONS, default=None,
@@ -170,6 +173,8 @@ def main(argv=None) -> int:
         a.projection = meta.get("projection", "flat" if meta else "cylindrical")
         if a.projection not in K.PROJECTIONS:
             a.projection = "flat"
+    if a.iv_fov is None:
+        a.iv_fov = float(meta["iv_fov"]) if meta.get("iv_fov") is not None else K.DEFAULT_IV_FOV
     if a.interp is None:
         a.interp = meta.get("interp", "pchip")
         if a.interp not in K.Path.METHODS:
