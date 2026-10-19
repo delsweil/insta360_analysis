@@ -5,11 +5,11 @@ The shirt colours of the whole game are grouped (k-means in Lab, like scene_chec
 clusters are the two teams, the smaller ones are referee, goalkeepers and the like (left out of the team
 numbers). Every detected player gets a team and a top-down position (metres, camera at the origin), then:
 
-  * a heat map per team on a pitch (where each team spends its time),
+  * one heat map of the whole game on a pitch (everybody seen; people standing still all game are left out),
   * a territory curve like a momentum chart: who has the play in their attacking half,
-  * team shape per minute: how compact (spread around the team's centre), how wide, how deep,
-  * where each team's centre of gravity sits along the pitch, and the gap between the two centres,
-  * a table per 5-minute block (CSV).
+  * spread per minute: how far each team stretches (rms distance of its players from the team's centre),
+  * tempo per minute: average running speed of each team's players,
+  * a card with the key numbers, and a table per 5-minute block (CSV).
 
 Positions are approximate (box height as a ruler, see scene_check.py): trust the shapes and the trends,
 not the last metre.
@@ -31,28 +31,28 @@ import scene_check as S
 import football_style as FS
 
 TEXT = {
-    "en": {"heat": "where {t} spends its time", "shape": "team shape per minute", "compact": "spread (m)",
-           "width": "width (std of sideways position, m)", "depth": "depth (std of distance from camera, m)",
-           "centre": "centre of gravity along the pitch (m, + = right)", "gap": "gap between the two centres (m)",
-           "minute": "minute of play", "sideways": "sideways (m)", "dist": "distance from camera (m)",
-           "team": "team", "players": "players seen per moment", "other": "other",
-           "momentum": "Territory: who has the play in their attacking half",
+    "en": {"heat": "Where the game was played", "spread": "Spread: how far each team stretches (m)",
+           "tempo": "Tempo: typical running speed of the players (m/s)", "minute": "minute of play",
+           "team": "team", "momentum": "Territory: who has the play in their attacking half",
+           "attacks": "{t} attacks to the {d}", "right": "right", "left": "left",
            "colour_team": "{c} team", "colours": {"white": "white", "black": "dark", "red": "red", "orange": "orange",
                                                   "yellow": "yellow", "green": "green", "blue": "blue", "purple": "purple"},
-           "attacks": "{t} attacks to the {d}", "right": "right", "left": "left",
+           "card": "Key numbers", "c_terr": "Territory (time with the play in their attacking half)",
+           "c_spread": "Average spread", "c_tempo": "Typical tempo", "c_n": "Players seen per moment",
            "foot": "Teams are told apart by shirt colour; positions are approximate (box height as ruler); "
-                   "pitch markings are fitted to where players were seen."},
-    "de": {"heat": "Aufenthaltsorte {t}", "shape": "Mannschaftsform pro Minute", "compact": "Streuung (m)",
-           "width": "Breite (Streuung seitlich, m)", "depth": "Tiefe (Streuung Abstand zur Kamera, m)",
-           "centre": "Schwerpunkt entlang des Platzes (m, + = rechts)", "gap": "Abstand der beiden Schwerpunkte (m)",
-           "minute": "Spielminute", "sideways": "seitlich (m)", "dist": "Abstand zur Kamera (m)",
-           "team": "Team", "players": "Spieler pro Moment", "other": "Sonstige",
-           "momentum": "Territorium: wer spielt in der gegnerischen Hälfte",
+                   "pitch markings are fitted to where players were seen; the tempo includes measuring noise, "
+                   "so compare the teams and the minutes, not the absolute numbers."},
+    "de": {"heat": "Wo gespielt wurde", "spread": "Streuung: wie weit sich jedes Team auseinanderzieht (m)",
+           "tempo": "Tempo: typische Laufgeschwindigkeit der Spieler (m/s)", "minute": "Spielminute",
+           "team": "Team", "momentum": "Territorium: wer spielt in der gegnerischen Hälfte",
+           "attacks": "{t} greift nach {d} an", "right": "rechts", "left": "links",
            "colour_team": "{c}", "colours": {"white": "Weiß", "black": "Dunkel", "red": "Rot", "orange": "Orange",
                                               "yellow": "Gelb", "green": "Grün", "blue": "Blau", "purple": "Lila"},
-           "attacks": "{t} greift nach {d} an", "right": "rechts", "left": "links",
+           "card": "Kennzahlen", "c_terr": "Territorium (Zeit mit dem Spiel in der gegnerischen Hälfte)",
+           "c_spread": "Mittlere Streuung", "c_tempo": "Typisches Tempo", "c_n": "Spieler pro Moment",
            "foot": "Teams werden an der Trikotfarbe unterschieden; Positionen sind Näherungen (Boxhöhe als Maßstab); "
-                   "Spielfeldlinien sind an die beobachteten Positionen angepasst."},
+                   "Spielfeldlinien sind an die beobachteten Positionen angepasst; das Tempo enthält Messrauschen, "
+                   "vergleiche daher Teams und Minuten, nicht die absoluten Werte."},
 }
 
 
@@ -148,7 +148,52 @@ def territory(game, team, box, switch_min: float = None, min_players: int = 6, b
     return minutes, FS.smooth(value, sigma_bins), a_right
 
 
-def draw(game, team, clusters, pm, out: str, title: str, lang: str, box, mom, switch_min=None):
+def tempo_per_minute(game, team, stride: int = 3, max_step_m: float = 7.0, minute_len: float = 60.0):
+    """Typical (median) running speed (m/s) of each team per minute.
+
+    Players are followed over `stride` moments (1 s at 3 per second): within a team, each player is matched
+    to the nearest player of the later moment (both ways, i.e. mutual nearest neighbours) and the distance
+    walked divided by the time is the speed. Matches farther than `max_step_m` are not trusted. -> {0: array, 1: array}"""
+    nmin = int(game["duration"] // minute_len) + 1
+    vals = {m: [[] for _ in range(nmin)] for m in (0, 1)}
+    order = np.argsort(game["frame"], kind="stable")
+    fr = game["frame"][order]
+    starts = np.r_[0, np.where(np.diff(fr) != 0)[0] + 1]
+    ends = np.r_[starts[1:], len(fr)]
+    where = {int(fr[s]): (order[s:e]) for s, e in zip(starts, ends)}
+    for f, idx in where.items():
+        g = where.get(f + stride)
+        if g is None:
+            continue
+        dt = float(game["t"][g[0]] - game["t"][idx[0]])
+        if not (0.5 < dt < 2.0 * stride / 3.0 + 0.5):
+            continue
+        mi = min(int(game["t"][idx[0]] // minute_len), nmin - 1)
+        for m in (0, 1):
+            a_ = idx[team[idx] == m]
+            b_ = g[team[g] == m]
+            if len(a_) < 2 or len(b_) < 2:
+                continue
+            d = np.hypot(game["x"][a_][:, None] - game["x"][b_][None], game["y"][a_][:, None] - game["y"][b_][None])
+            ia, ib = d.argmin(1), d.argmin(0)
+            for i, j in enumerate(ia):
+                if ib[j] == i and d[i, j] <= max_step_m:
+                    vals[m][mi].append(d[i, j] / dt)
+    return {m: np.array([np.median(v) if len(v) >= 8 else np.nan for v in vals[m]]) for m in (0, 1)}
+
+
+def static_spots(game, cell: float = 2.0, frac: float = 0.35):
+    """Cells in which somebody stands in more than `frac` of all moments (coaches, bench, a keeper)."""
+    ix, iy = np.floor(game["x"] / cell).astype(int), np.floor(game["y"] / cell).astype(int)
+    seen = {}
+    for f, a_, b_ in zip(game["frame"], ix, iy):
+        seen.setdefault((a_, b_), set()).add(int(f))
+    n = max(1, game["n_frames"])
+    return {k for k, v in seen.items() if len(v) / n > frac}, cell
+
+
+def draw(game, team, clusters, pm, tempo, out: str, title: str, lang: str, box, mom, switch_min=None,
+         keep=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -160,73 +205,98 @@ def draw(game, team, clusters, pm, out: str, title: str, lang: str, box, mom, sw
     else:
         names = [f"{T['team']} A", f"{T['team']} B"]
 
-    fig = plt.figure(figsize=(15, 14.5), facecolor=FS.BG)
-    gs = fig.add_gridspec(4, 2, height_ratios=[1.35, 0.8, 0.7, 0.7], hspace=0.38, wspace=0.12, top=0.925, bottom=0.075)
-    fig.text(0.075, 0.965, title, fontsize=17, color=FS.TEXT, fontweight="bold", ha="left")
+    fig = plt.figure(figsize=(14, 15.5), facecolor=FS.BG)
+    gs = fig.add_gridspec(4, 2, height_ratios=[1.5, 0.8, 0.7, 0.7], hspace=0.40, wspace=0.10, top=0.925, bottom=0.07)
+    fig.text(0.07, 0.965, title, fontsize=17, color=FS.TEXT, fontweight="bold", ha="left")
 
+    # combined heat map: everybody seen
+    ax = fig.add_subplot(gs[0, 0])
+    FS.style_axes(ax)
+    sel = keep if keep is not None else np.ones(len(game["x"]), bool)
+    FS.draw_heat(ax, game["x"][sel], game["y"][sel], box)
+    FS.draw_pitch(ax, box)
+    ax.scatter([0], [box[2] - 0.03 * (box[3] - box[2])], marker="^", c=FS.MUTED, s=50, zorder=4, clip_on=False)
+    ax.set_title(T["heat"], loc="left", fontsize=13, color=FS.TEXT, pad=8)
+
+    # key numbers
+    ax = fig.add_subplot(gs[0, 1])
+    ax.set_facecolor(FS.BG)
+    ax.axis("off")
+    minutes, value, a_right = mom
+    share = float((value > 0).mean())
+    sp = [np.nanmean(pm[m]["spread"]) for m in (0, 1)]
+    tp = [np.nanmean(tempo[m]) for m in (0, 1)]
+    n_seen = [len(game["x"][team == m]) / max(1, game["n_frames"]) for m in (0, 1)]
+    ax.text(0.0, 0.97, T["card"], fontsize=13, color=FS.TEXT, va="top", transform=ax.transAxes)
+    rows = [(T["c_terr"], [f"{100 * share:.0f} %", f"{100 * (1 - share):.0f} %"]),
+            (T["c_spread"], [f"{v:.1f} m" for v in sp]), (T["c_tempo"], [f"{v:.2f} m/s" for v in tp]),
+            (T["c_n"], [f"{v:.1f}" for v in n_seen])]
+    y = 0.84
+    for label, vals in rows:
+        ax.text(0.0, y, label, fontsize=10, color=FS.MUTED, va="top", transform=ax.transAxes)
+        for m in (0, 1):
+            ax.text(0.08 + 0.42 * m, y - 0.055, vals[m], fontsize=20, color=col[m], va="top", fontweight="bold",
+                    transform=ax.transAxes)
+        y -= 0.19
     for m in (0, 1):
-        ax = fig.add_subplot(gs[0, m])
-        FS.style_axes(ax)
-        sel = team == m
-        FS.draw_heat(ax, game["x"][sel], game["y"][sel], box)
-        FS.draw_pitch(ax, box)
-        ax.scatter([0], [box[2] - 0.03 * (box[3] - box[2])], marker="^", c=FS.MUTED, s=50, zorder=4, clip_on=False)
-        ax.set_title(T["heat"].format(t=names[m]), loc="left", fontsize=12, color=col[m], pad=8)
-        sw = clusters.mean_bgr[m][::-1] / 255.0                  # the shirt colour of this team
-        ax.add_patch(plt.Rectangle((0.93, 1.02), 0.06, 0.05, transform=ax.transAxes, color=sw, ec=FS.TEXT, lw=0.8,
-                                   clip_on=False))
+        ax.text(0.08 + 0.42 * m, 0.0, names[m], fontsize=11, color=col[m], va="bottom", transform=ax.transAxes)
 
+    # territory (momentum)
     ax = fig.add_subplot(gs[1, :])
     FS.style_axes(ax)
-    minutes, value, a_right = mom
     marks = [(switch_min, "HT")] if switch_min and minutes[0] < switch_min < minutes[-1] else []
     FS.draw_momentum(ax, minutes, value, col[0], col[1], marks)
     ax.set_title(T["momentum"], fontsize=13, color=FS.TEXT, pad=26)
     ax.set_xlabel(T["minute"])
     ax.text(0.0, 1.02, f"▲ {names[0]}", transform=ax.transAxes, color=col[0], fontsize=11, va="bottom", fontweight="bold")
-    ax.text(0.09, 1.02, f"▼ {names[1]}", transform=ax.transAxes, color=col[1], fontsize=11, va="bottom", fontweight="bold")
+    ax.text(0.12, 1.02, f"▼ {names[1]}", transform=ax.transAxes, color=col[1], fontsize=11, va="bottom", fontweight="bold")
     ax.text(0.995, 1.02, T["attacks"].format(t=names[0], d=T["right"] if a_right else T["left"]),
             transform=ax.transAxes, color=FS.MUTED, fontsize=9, va="bottom", ha="right")
 
-    minutes_m = np.arange(len(pm[0]["cx"])) + 0.5
-    panels = [("spread", T["compact"], gs[2, 0]), ("width", T["width"], gs[2, 1]), ("depth", T["depth"], gs[3, 0])]
-    for key, label, pos in panels:
+    # spread and tempo per minute
+    minutes_m = np.arange(len(pm[0]["spread"])) + 0.5
+    for pos, label, series in ((gs[2, :], T["spread"], [pm[0]["spread"], pm[1]["spread"]]),
+                               (gs[3, :], T["tempo"], [tempo[0], tempo[1]])):
         ax = fig.add_subplot(pos)
         FS.style_axes(ax)
         for m in (0, 1):
-            ax.plot(minutes_m, pm[m][key], color=col[m], lw=2.0, label=names[m])
-        ax.set_title(label, loc="left", fontsize=11, color=FS.TEXT)
+            v = np.asarray(series[m], float)
+            ax.plot(minutes_m[: len(v)], v, color=col[m], lw=1.0, alpha=0.35)
+            ax.plot(minutes_m[: len(v)], _roll(v, 3), color=col[m], lw=2.4, label=names[m])
+        ax.set_title(label, loc="left", fontsize=12, color=FS.TEXT)
         ax.set_xlabel(T["minute"])
         ax.grid(color=FS.LINE, alpha=0.25, lw=0.6)
-    ax = fig.add_subplot(gs[3, 1])
-    FS.style_axes(ax)
-    for m in (0, 1):
-        ax.plot(minutes_m, pm[m]["cx"], color=col[m], lw=2.0, label=names[m])
-    ax.plot(minutes_m, np.abs(pm[0]["cx"] - pm[1]["cx"]), color=FS.MUTED, lw=1.4, ls="--", label=T["gap"])
-    ax.axhline(0, color=FS.LINE, lw=0.8)
-    ax.set_title(T["centre"], loc="left", fontsize=11, color=FS.TEXT)
-    ax.set_xlabel(T["minute"])
-    ax.grid(color=FS.LINE, alpha=0.25, lw=0.6)
-    leg = ax.legend(frameon=False, fontsize=8, loc="best")
-    for t in leg.get_texts():
-        t.set_color(FS.TEXT)
-    fig.text(0.075, 0.02, T["foot"], fontsize=9, color=FS.MUTED)
+        ax.set_xlim(0, max(minutes_m[-1] + 0.5, 1))
+    fig.text(0.07, 0.015, T["foot"], fontsize=8.5, color=FS.MUTED, wrap=True)
     fig.savefig(out, dpi=110, bbox_inches="tight", facecolor=FS.BG)
     plt.close(fig)
 
 
-def write_csv(path: str, pm, block: int = 5):
-    nmin = len(pm[0]["cx"])
+def _roll(v: np.ndarray, w: int) -> np.ndarray:
+    """Centred moving average that ignores gaps."""
+    out = np.full(len(v), np.nan)
+    for i in range(len(v)):
+        seg = v[max(0, i - w // 2): i + w // 2 + 1]
+        if np.isfinite(seg).any():
+            out[i] = np.nanmean(seg)
+    return out
+
+
+def write_csv(path: str, pm, tempo, mom, block: int = 5):
+    nmin = len(pm[0]["spread"])
+    minutes, value, _ = mom
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["block_min", "A_spread", "B_spread", "A_width", "B_width", "A_depth", "B_depth",
-                    "A_centre_x", "B_centre_x", "centre_gap"])
+        w.writerow(["block_min", "A_spread_m", "B_spread_m", "A_tempo_ms", "B_tempo_ms", "A_territory_pct"])
         for b in range(0, nmin, block):
             sl = slice(b, min(nmin, b + block))
-            row = [np.nanmean(pm[m][k][sl]) if np.isfinite(pm[m][k][sl]).any() else np.nan
-                   for k in ("spread", "width", "depth", "cx") for m in (0, 1)]
-            gap = np.nanmean(np.abs(pm[0]["cx"][sl] - pm[1]["cx"][sl])) if np.isfinite(pm[0]["cx"][sl]).any() else np.nan
-            w.writerow([f"{b}-{min(nmin, b + block)}"] + [f"{v:.2f}" for v in row] + [f"{gap:.2f}"])
+            def nm(v):
+                v = np.asarray(v[sl], float)
+                return f"{np.nanmean(v):.2f}" if np.isfinite(v).any() else ""
+            blk = (minutes >= b) & (minutes < min(nmin, b + block))
+            terr = f"{100 * float((value[blk] > 0).mean()):.0f}" if blk.any() else ""
+            w.writerow([f"{b}-{min(nmin, b + block)}", nm(pm[0]["spread"]), nm(pm[1]["spread"]),
+                        nm(tempo[0]), nm(tempo[1]), terr])
 
 
 def main(argv=None) -> int:
@@ -239,6 +309,8 @@ def main(argv=None) -> int:
                    help="pitch rectangle in metres (default: estimated from where players were seen)")
     p.add_argument("--switch-at", type=float, default=None, metavar="MIN",
                    help="minute of play at which the teams change ends (a game given as both halves)")
+    p.add_argument("--tempo-stride", type=int, default=3, help="moments between the two positions a speed is measured over (3 = 1 s)")
+    p.add_argument("--keep-static", action="store_true", help="draw people who stand still all game into the heat map too")
     p.add_argument("--k", type=int, default=4)
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--angle-factor", type=float, default=0.75)
@@ -262,13 +334,22 @@ def main(argv=None) -> int:
     print(f"{len(team)} player sightings in {game['n_frames']} moments: team A {int((team == 0).sum())}, "
           f"team B {int((team == 1).sum())}, other/ambiguous {int((team < 0).sum())}")
     pm = per_minute(game, team)
+    tempo = tempo_per_minute(game, team, a.tempo_stride)
     ok = team >= 0
     box = tuple(a.box) if a.box else FS.estimate_box(game["x"][ok], game["y"][ok])
     mom = territory(game, team, box, a.switch_at)
     print(f"pitch box (x0 x1 y0 y1, m): {', '.join(f'{v:.1f}' for v in box)}   team A attacks "
           f"{'right' if mom[2] else 'left'}")
-    draw(game, team, clusters, pm, a.out + ".png", a.title, a.lang, box, mom, a.switch_at)
-    write_csv(a.out + ".csv", pm)
+    keep = np.ones(len(game["x"]), bool)
+    if not a.keep_static:
+        cells, cell = static_spots(game)
+        if cells:
+            cid = list(zip(np.floor(game["x"] / cell).astype(int), np.floor(game["y"] / cell).astype(int)))
+            keep = np.array([c not in cells for c in cid])
+            print(f"heat map: {len(cells)} static spot(s) left out (somebody stands there in >35% of the moments: "
+                  f"coaches, bench); use --keep-static to include them")
+    draw(game, team, clusters, pm, tempo, a.out + ".png", a.title, a.lang, box, mom, a.switch_at, keep)
+    write_csv(a.out + ".csv", pm, tempo, mom)
     print(f"wrote {a.out}.png and {a.out}.csv")
     return 0
 

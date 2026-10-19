@@ -1655,7 +1655,7 @@ class TestPitchFilter(unittest.TestCase):
 
 
 class TestTeamStats(unittest.TestCase):
-    def test_two_teams_found_and_centres_recovered(self):
+    def test_two_teams_found_and_spread_recovered(self):
         import team_stats as TS
         rng = np.random.default_rng(1)
         fy = TS.S.SQUARE_FY
@@ -1679,9 +1679,27 @@ class TestTeamStats(unittest.TestCase):
             self.assertEqual(TS.main(["--detections", path, "--out", out, "--k", "3"]), 0)
             self.assertTrue(os.path.getsize(out + ".png") > 10000)
             rows = list(__import__("csv").DictReader(open(out + ".csv")))
-            cx = sorted([float(rows[0]["A_centre_x"]), float(rows[0]["B_centre_x"])])
-            self.assertAlmostEqual(cx[0], -8.0, delta=1.5)
-            self.assertAlmostEqual(cx[1], 8.0, delta=1.5)
+            for col in ("A_spread_m", "B_spread_m"):                 # players scattered 8 m sideways, 6 m in depth
+                self.assertAlmostEqual(float(rows[0][col]), 10.0, delta=2.0)
+            self.assertIn("A_tempo_ms", rows[0])
+            self.assertIn("A_territory_pct", rows[0])
+
+    def test_tempo_recovers_a_known_speed(self):
+        import team_stats as TS
+        n = 60
+        t, x, y, fr, tm = [], [], [], [], []
+        for f in range(n):
+            for k in range(6):                                    # six players of one team running 2 m/s in x
+                t.append(f / 3.0)
+                x.append(10.0 * k + 2.0 * f / 3.0)
+                y.append(20.0 + 3.0 * k)
+                fr.append(f)
+                tm.append(0)
+        game = {"t": np.array(t), "x": np.array(x), "y": np.array(y), "frame": np.array(fr), "duration": n / 3.0,
+                "n_frames": n}
+        v = TS.tempo_per_minute(game, np.array(tm))
+        self.assertAlmostEqual(float(v[0][0]), 2.0, delta=0.05)
+        self.assertTrue(np.isnan(v[1][0]))                         # no second team
 
     def test_team_colours_follow_the_shirts(self):
         import football_style as FS
