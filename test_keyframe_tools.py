@@ -1604,6 +1604,19 @@ class TestSceneCheck(unittest.TestCase):
 
 
 class TestColourExtraction(unittest.TestCase):
+    def test_shirt_colour_survives_dry_yellow_ground(self):
+        ground = (110, 180, 200)                                   # dry yellow-brown pitch (b, g, r)
+        img = np.full((300, 300, 3), ground, np.uint8)
+        cv2.rectangle(img, (130, 100), (170, 140), (150, 50, 20), -1)      # blue shirt
+        cv2.rectangle(img, (135, 140), (165, 190), (30, 30, 30), -1)       # dark shorts and legs
+        c = X.torso_colour(img, (120, 95, 180, 195))
+        self.assertGreater(c[0], 120)                              # blue channel high: the shirt, not the ground
+        self.assertLess(c[2], 80)
+        green = np.full((300, 300, 3), (60, 140, 50), np.uint8)    # green pitch still works
+        cv2.rectangle(green, (130, 100), (170, 140), (40, 40, 220), -1)
+        g = X.torso_colour(green, (120, 95, 180, 195))
+        self.assertGreater(g[2], 180)
+
     def test_colours_are_an_optional_sixth_value(self):
         img = np.full((720, 1280, 3), (60, 140, 50), np.uint8)
         cv2.rectangle(img, (600, 300), (630, 340), (40, 40, 220), -1)
@@ -1683,6 +1696,110 @@ class TestTeamStats(unittest.TestCase):
                 self.assertAlmostEqual(float(rows[0][col]), 10.0, delta=2.0)
             self.assertIn("A_tempo_ms", rows[0])
             self.assertIn("A_territory_pct", rows[0])
+
+    def test_chart_data_json(self):
+        import team_stats as TS
+        rng = np.random.default_rng(2)
+        fy = TS.S.SQUARE_FY
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.jsonl")
+            with open(path, "w") as fh:
+                fh.write(json.dumps({"type": "header", "start": 0.0, "fps": 3.0, "view_lons": [-60, -20, 20, 60],
+                                     "square_views": True, "colours": True}) + "\n")
+                for i in range(240):
+                    pl = []
+                    for bgr, cx in (((200, 200, 200), -8.0), ((120, 60, 30), 8.0)):
+                        for _ in range(9):
+                            x, y = cx + rng.normal(0, 8), 30 + rng.normal(0, 6)
+                            lon = math.degrees(math.atan2(x, y)) / 0.75
+                            c = min([-60, -20, 20, 60], key=lambda v: abs(v - lon))
+                            h = 1.7 * fy / (0.75 * math.hypot(x, y) * math.cos(math.radians(0.75 * (lon - c))))
+                            pl.append([lon, -10, h, 0.9, None, [int(v + rng.normal(0, 8)) for v in bgr]])
+                    fh.write(json.dumps({"t": i / 3, "players": pl, "balls": []}) + "\n")
+            out, js = os.path.join(d, "t"), os.path.join(d, "t.json")
+            self.assertEqual(TS.main(["--detections", path, "--out", out, "--k", "3", "--data-json", js]), 0)
+            data = json.load(open(js))                                     # strict JSON: no NaN
+            self.assertEqual(data["format"], "football-autopan-chart-data")
+            self.assertEqual(set(data["teams"]), {"A", "B"})
+            cnt = np.array(data["heat_map"]["counts"])
+            self.assertEqual(cnt.shape, (len(data["heat_map"]["y_edges_m"]) - 1, len(data["heat_map"]["x_edges_m"]) - 1))
+            self.assertGreater(cnt.sum(), 1000)
+            self.assertEqual(len(data["territory"]["minutes"]), len(data["territory"]["value"]))
+            self.assertAlmostEqual(data["teams"]["A"]["spread_m"][0], 10.0, delta=2.5)
+
+    def test_teams_labelled_by_eye(self):
+        import team_labels as TL
+        import team_stats as TS
+        rng = np.random.default_rng(3)
+
+        class Box:
+            def __init__(s, b, c):
+                s.xyxy, s.cls, s.conf = [np.array(b, float)], [0], [c]
+
+        class Stub:
+            names = {0: "person"}
+
+            def __call__(s, img, **kw):
+                m = (np.abs(img.astype(int) - np.array([60, 140, 50])).sum(-1) > 90).astype(np.uint8)
+                n, lab, st, _ = cv2.connectedComponentsWithStats(m)
+                res = type("R", (), {})()
+                res.boxes = [Box((x, y, x + w, y + h), .9) for x, y, w, h, a in st[1:] if a > 150]
+                return [res]
+
+        shirts = [(200, 200, 200), (190, 190, 215), (210, 70, 30), (150, 50, 20)]   # team A: two lights; team B: two blues
+
+        def frame(seed):
+            r = np.random.default_rng(seed)
+            f = np.full((X.EQ_H, X.EQ_W, 3), (60, 140, 50), np.uint8)
+            for i in range(12):
+                x, y = 900 + 80 * i, int(r.integers(780, 940))
+                cv2.rectangle(f, (x, y), (x + 22, y + 34), shirts[i % 4], -1)
+                cv2.rectangle(f, (x + 2, y + 34), (x + 20, y + 62), (20, 20, 20), -1)
+            return f
+
+        with tempfile.TemporaryDirectory() as d:
+            det = os.path.join(d, "d.jsonl")
+            with open(det, "w") as fh:
+                fh.write(json.dumps({"type": "header", "tilt": -22.0, "view_lons": [-60, -20, 20, 60], "iv_fov": 112.0,
+                                     "square_views": True, "raw_input": True, "colours": True, "start": 0.0, "fps": 3.0}) + "\n")
+                for t in range(0, 300):
+                    fh.write(json.dumps({"t": float(t), "players": [[0, -10, 40, .9, None, [1, 2, 3]]] * 12, "balls": []}) + "\n")
+            out = os.path.join(d, "g")
+            self.assertEqual(TL.main(["make", "--video", "x.mp4", "--detections", det, "--out", out, "--k", "4",
+                                      "--frames", "10", "--device", "cpu"], model=Stub(), grab=lambda t: frame(int(t))), 0)
+            self.assertTrue(os.path.getsize(out + ".teams_sheet.png") > 5000)
+            meta = json.load(open(out + ".team_labels.json"))
+            # find which groups hold which shirt: nearest centre to each known shirt colour
+            import scene_check as S2
+            feats = S2.colour_features(np.array([[float(v) for v in s] for s in shirts]))
+            grp = [int(np.argmin(((np.array(meta["centres"]) - f) ** 2).sum(1))) for f in feats]
+            a_groups, b_groups = sorted(set(grp[:2])), sorted(set(grp[2:]))
+            self.assertEqual(TL.main(["assign", "--labels", out + ".team_labels.json", "--a", *map(str, a_groups),
+                                      "--b", *map(str, b_groups), "--name-a", "Light", "--colour-b", "blue"]), 0)
+            lab = TL.Labelled(out + ".team_labels.json")
+            self.assertEqual(lab.names[0], "Light")
+            self.assertEqual(lab.colours[1], TL.COLOURS["blue"])
+            team = lab.team_of(np.array([[200, 200, 200], [190, 190, 215], [210, 70, 30], [150, 50, 20]], float))
+            self.assertEqual(team.tolist(), [0, 0, 1, 1])
+            with self.assertRaises(SystemExit):
+                TL.main(["assign", "--labels", out + ".team_labels.json", "--a", "99"])
+
+    def test_play_centre_follows_the_camera_not_the_detector(self):
+        import team_stats as TS
+        with tempfile.TemporaryDirectory() as d:
+            det, kf = os.path.join(d, "a.jsonl"), os.path.join(d, "k.json")
+            with open(det, "w") as fh:
+                fh.write(json.dumps({"type": "header", "start": 0.0, "fps": 3.0, "view_lons": [-60, -20, 20, 60],
+                                     "square_views": True, "colours": True}) + "\n")
+                for i in range(30):
+                    # one player straight ahead of the camera (lon 0), one far outside the crop (lon 80)
+                    fh.write(json.dumps({"t": i / 3.0, "balls": [], "players": [
+                        [0.0, -10, 60.0, 0.9, None, [1, 2, 3]], [80.0, -10, 60.0, 0.9, None, [1, 2, 3]]]}) + "\n")
+            with open(kf, "w") as fh:
+                json.dump([{"t": 0, "pan_deg": 0, "fov_deg": 60}, {"t": 50, "pan_deg": 0, "fov_deg": 60}], fh)
+            t, x, y = TS.load_play_centres([det], [kf], 98.0, 0.3, 0.75)
+            self.assertEqual(len(t), 30)
+            self.assertTrue(np.all(np.abs(x) < 0.5))               # only the player inside the crop counts, at lon 0
 
     def test_tempo_recovers_a_known_speed(self):
         import team_stats as TS

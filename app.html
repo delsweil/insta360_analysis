@@ -72,7 +72,7 @@ en:{sub:"Pan-and-zoom video and team statistics from your 360° recording",new:"
  needs_input:"Waiting for you",cancelled:"Stopped",stopped:"Stopped",idle:"Ready",pending:"",remaining:"about",left:"left",
  teams_h:"Which shirts are the two teams?",teams_p:"Players seen in about 40 moments of the game, grouped by shirt colour. Mark each group: team A, team B, or other (referee, goalkeepers, odd light). Several groups can belong to one team - one team often shows as a bright and a dark group.",
  A:"Team A",B:"Team B",O:"other",nameA:"Name of team A",nameB:"Name of team B",confirm:"Confirm teams",saved:"Teams saved.",
- suggested:"A first guess is already marked - please check it.",
+ hb_ok:"● Working - the numbers above update every few seconds.",hb_stale:"No sign of life for {n} - the program may be stuck. Press Stop, then Continue.",half1:"First half",half2:"Second half",vids_h:"Videos of this game",outline_use:"Ignore people outside the pitch",redo:"Plan camera again",apply:"Apply changes",pitch_used:"Pitch outline used: {n} % of the detections were outside it and are ignored.",pitch_not:"Pitch outline not used ({r}). People beside the pitch may pull the camera.",pitch_wait:"Pitch outline: not checked yet.",vids_p:"Say which half each video belongs to - the statistics are made for each half separately. Look at the outline: the pitch should be inside the line and the sidelines outside it.",draw:"Draw outline",ed_h:"Draw the pitch outline",ed_p:"Drag the points so the line follows the edge of the pitch. Double-click a line to add a point, double-click a point to remove it. Dots are players seen: green = kept, red = left out (people beside the pitch).",ed_save:"Save and plan the camera again",ed_cancel:"Cancel",ed_auto:"Back to automatic",ed_out:"left out",manual_on:"Outline drawn by you.",nothing_redo:"Nothing to redo: these settings were already in use. To make a video again tick \"Plan camera again\" for it.",redoing:"Making again:",suggested:"A first guess is already marked - please check it.",
  q_unb:"The two teams are very different in size - one of them may be missing a colour group.",q_oth:"Many players are in 'other' - check that no team shirt is left out.",
  pre_h:"The view of the first video",pre_p:"This is what the program sees. The pitch should look natural and be inside the picture. If it looks wrong, the camera may not be set up as expected.",
  untested:"This camera layout has not been tested yet.",results:"Results",folder:"Folder",
@@ -86,22 +86,25 @@ de:{sub:"Schwenk-Video und Mannschaftsstatistik aus Ihrer 360°-Aufnahme",new:"N
  needs_input:"Wartet auf Sie",cancelled:"Gestoppt",stopped:"Gestoppt",idle:"Bereit",pending:"",remaining:"noch etwa",left:"",
  teams_h:"Welche Trikots sind die beiden Mannschaften?",teams_p:"Spieler aus etwa 40 Momenten des Spiels, nach Trikotfarbe gruppiert. Markieren Sie jede Gruppe: Team A, Team B oder andere (Schiedsrichter, Torhüter, seltsames Licht). Mehrere Gruppen können zu einem Team gehören - ein Team erscheint oft als helle und dunkle Gruppe.",
  A:"Team A",B:"Team B",O:"andere",nameA:"Name von Team A",nameB:"Name von Team B",confirm:"Teams bestätigen",saved:"Teams gespeichert.",
- suggested:"Ein erster Vorschlag ist schon markiert - bitte prüfen.",
+ hb_ok:"● In Arbeit - die Zahlen oben aktualisieren sich alle paar Sekunden.",hb_stale:"Seit {n} kein Lebenszeichen - das Programm hängt evtl. Stopp drücken, dann Weiter.",half1:"1. Halbzeit",half2:"2. Halbzeit",vids_h:"Videos dieses Spiels",outline_use:"Personen außerhalb des Feldes ignorieren",redo:"Kamera neu planen",apply:"Änderungen übernehmen",pitch_used:"Spielfeldlinie genutzt: {n} % der Erkennungen lagen außerhalb und werden ignoriert.",pitch_not:"Spielfeldlinie nicht genutzt ({r}). Personen neben dem Feld können die Kamera ziehen.",pitch_wait:"Spielfeldlinie: noch nicht geprüft.",vids_p:"Legen Sie fest, zu welcher Halbzeit jedes Video gehört - die Statistik entsteht für jede Halbzeit getrennt. Prüfen Sie die Linie: das Feld soll innerhalb liegen, die Seitenlinien außerhalb.",draw:"Linie zeichnen",ed_h:"Spielfeldlinie zeichnen",ed_p:"Ziehen Sie die Punkte an den Spielfeldrand. Doppelklick auf eine Linie fügt einen Punkt ein, Doppelklick auf einen Punkt entfernt ihn. Punkte = gesehene Spieler: grün = behalten, rot = ausgeschlossen (Personen neben dem Feld).",ed_save:"Speichern und Kamera neu planen",ed_cancel:"Abbrechen",ed_auto:"Zurück zu automatisch",ed_out:"ausgeschlossen",manual_on:"Linie von Ihnen gezeichnet.",nothing_redo:"Nichts neu zu machen: diese Einstellungen waren schon aktiv. Für ein neues Video \"Kamera neu planen\" ankreuzen.",redoing:"Wird neu gemacht:",suggested:"Ein erster Vorschlag ist schon markiert - bitte prüfen.",
  q_unb:"Die beiden Teams sind sehr unterschiedlich groß - vielleicht fehlt einem eine Farbgruppe.",q_oth:"Viele Spieler sind bei 'andere' - prüfen, ob kein Mannschaftstrikot fehlt.",
  pre_h:"Die Ansicht des ersten Videos",pre_p:"So sieht das Programm das Spiel. Das Feld sollte natürlich aussehen und im Bild liegen. Sieht es falsch aus, ist die Kamera evtl. nicht wie erwartet eingestellt.",
  untested:"Dieses Kameraformat wurde noch nicht getestet.",results:"Ergebnisse",folder:"Ordner",
  video:"Video",charts:"Grafiken",data:"Datendateien",err:"Fehler",playing:"Vorschau",download:"herunterladen",
  teams_wait:"Die Mannschaftsstatistik wartet darauf, dass Sie oben die Teams bestätigen."}};
-const SL={check:["Look at the videos","Videos ansehen"],teams:["Find the shirt colours","Trikotfarben finden"],charts:["Where the play was","Wo gespielt wurde"],stats:["Team statistics","Mannschaftsstatistik"],package:["Collect the results","Ergebnisse sammeln"],extract:["Find the players","Spieler finden"],keyframes:["Plan the camera","Kamera planen"],render:["Make the video","Video erzeugen"]};
+const SL={check:["Look at the videos","Videos ansehen"],pitch:["Find the pitch lines","Spielfeldlinien finden"],teams:["Find the shirt colours","Trikotfarben finden"],charts:["Where the play was","Wo gespielt wurde"],stats:["Team statistics","Mannschaftsstatistik"],package:["Collect the results","Ergebnisse sammeln"],extract:["Find the players","Spieler finden"],keyframes:["Plan the camera","Kamera planen"],render:["Make the video","Video erzeugen"]};
 let lang=(navigator.language||"en").slice(0,2)==="de"?"de":"en";
 try{lang=localStorage.getItem("lang")||lang}catch(e){}
 const t=k=>(TX[lang]||TX.en)[k]??k;
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function toast(msg,bad){const d=document.createElement("div");d.textContent=msg;d.style.cssText="position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:99;padding:10px 18px;border-radius:10px;background:"+(bad?"#e5534b":"#3fb865")+";color:#08210f;font-weight:600;max-width:80%";document.body.appendChild(d);setTimeout(()=>d.remove(),bad?9000:4000)}
 async function api(path,body){
   const o=body===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json","X-App":"football"},body:JSON.stringify(body)};
-  const r=await fetch(path,o);return r.json();
+  let r;try{r=await fetch(path,o)}catch(e){toast("The app does not answer ("+e.message+"). Is it still running?",true);return {error:"no connection"}}
+  try{return await r.json()}catch(e){toast("Server answered "+r.status+" - the app files may be out of date (copy all of them, then restart).",true);return {error:"server "+r.status}}
 }
+window.addEventListener("unhandledrejection",e=>toast("Error: "+(e.reason&&e.reason.message||e.reason),true));
 const fmtDur=s=>{s=Math.round(s);const h=Math.floor(s/3600),m=Math.round((s%3600)/60);return h?`${h} ${t("hours")} ${m} ${t("min")}`:`${m} ${t("min")}`};
 const fmtSize=b=>b>1e9?(b/1e9).toFixed(1)+" GB":(b/1e6).toFixed(0)+" MB";
 const stageLabel=id=>{const m=id.match(/^(\D+)(\d*)$/);const base=SL[m[1]]?SL[m[1]][lang==="de"?1:0]:id;return base+(m[2]!==""?" ("+(+m[2]+1)+")":"")};
@@ -126,31 +129,33 @@ async function home(){
    <div class="grid2"><div><div class="muted" style="margin-bottom:6px">${t("pick")}</div>
      <div class="row" style="margin-bottom:6px"><button id="upd">${t("up_dir")}</button><button id="hm">${t("home")}</button><span class="muted" style="font-size:12px;overflow:hidden;text-overflow:ellipsis" title="${esc(cwd)}">${esc(cwd)}</span></div>
      <div class="files" id="fl">${ls.dirs.map(d=>`<div data-d="${esc(d)}"><span>📁 ${esc(d)}</span></div>`).join("")}${ls.files.map(f=>`<div data-f="${esc(f.name)}"><span>🎞 ${esc(f.name)}</span><span class="muted">${fmtSize(f.size)}</span></div>`).join("")}</div></div>
-    <div><div class="muted" style="margin-bottom:6px">${t("chosen")}</div><div class="files" id="sl">${picked.map((p,i)=>`<div class="sel" style="cursor:default"><span class="n" title="${esc(p)}">${i+1}. ${esc(p.split(/[\\/]/).pop())}</span><button data-up="${i}" ${i?"":"disabled"}>↑</button><button data-rm="${i}">✕</button></div>`).join("")}</div>
+    <div><div class="muted" style="margin-bottom:6px">${t("chosen")}</div><div class="files" id="sl">${picked.map((p,i)=>`<div class="sel" style="cursor:default"><span class="n" title="${esc(p.path)}">${i+1}. ${esc(p.path.split(/[\\/]/).pop())}</span><select data-half="${i}"><option value="1" ${(p.half||autoHalf(i))==1?"selected":""}>${t("half1")}</option><option value="2" ${(p.half||autoHalf(i))==2?"selected":""}>${t("half2")}</option></select><button data-up="${i}" ${i?"":"disabled"}>↑</button><button data-rm="${i}">✕</button></div>`).join("")}</div>
      <div id="pinfo" class="muted" style="margin-top:8px"></div>
      <div style="margin-top:10px"><label>${t("lang")}: <select id="fl2"><option value="en">English</option><option value="de">Deutsch</option></select></label></div>
-     <div style="margin-top:6px"><label><input type="checkbox" id="hv" ${form.halves?"checked":""}> ${t("halves")}</label></div></div></div>
+     </div></div>
    <div class="row" style="margin-top:14px"><button class="primary" id="go" ${picked.length?"":"disabled"}>${t("start")}</button><span class="muted" id="est"></span></div></div>
    <div class="card jobs"><h2>${t("games")}</h2>${jobs.jobs.length?jobs.jobs.map(j=>`<div class="j" data-id="${esc(j.id)}"><b>${esc(j.title)}</b><span class="muted">${j.videos} video${j.videos>1?"s":""}</span><span class="pill ${j.state}">${t(j.state)}</span></div>`).join(""):`<div class="muted">${t("none")}</div>`}
    <div class="muted" style="margin-top:10px;font-size:12px">${t("folder")}: ${esc(jobs.root)}</div></div>`;
-  $("#fl2").value=form.lang;$("#fl2").onchange=e=>form.lang=e.target.value;$("#hv").onchange=e=>form.halves=e.target.checked;
+  $("#fl2").value=form.lang;$("#fl2").onchange=e=>form.lang=e.target.value;
   $("#ttl").oninput=e=>form.title=e.target.value;
   $("#upd").onclick=()=>{cwd=ls.parent;home()};$("#hm").onclick=()=>{cwd="";home()};
   $("#fl").onclick=e=>{const el=e.target.closest("div[data-d],div[data-f]");if(!el)return;
     if(el.dataset.d){cwd=cwd+(cwd.endsWith("/")||cwd.endsWith("\\")?"":(cwd.includes("\\")?"\\":"/"))+el.dataset.d;home()}
-    else{const p=cwd+(cwd.includes("\\")?"\\":"/")+el.dataset.f;if(!picked.includes(p)){picked.push(p);if(!form.title)form.title=guessTitle(p);home()}}};
+    else{const p=cwd+(cwd.includes("\\")?"\\":"/")+el.dataset.f;if(!picked.some(x=>x.path===p)){picked.push({path:p,half:0});if(!form.title)form.title=guessTitle(p);home()}}};
+  $("#sl").onchange=e=>{const el=e.target.closest("select[data-half]");if(el)picked[+el.dataset.half].half=+el.value};
   $("#sl").onclick=e=>{const b=e.target.closest("button");if(!b)return;
     if(b.dataset.rm!==undefined)picked.splice(+b.dataset.rm,1);
     if(b.dataset.up!==undefined&&+b.dataset.up>0){const i=+b.dataset.up;[picked[i-1],picked[i]]=[picked[i],picked[i-1]]}
     home()};
   document.querySelectorAll(".jobs .j").forEach(el=>el.onclick=()=>{view={name:"job",id:el.dataset.id};render()});
-  $("#go").onclick=async()=>{$("#go").disabled=true;const r=await api("/api/jobs",{title:form.title||"Game",videos:picked,lang:form.lang,halves:form.halves});
+  $("#go").onclick=async()=>{$("#go").disabled=true;const r=await api("/api/jobs",{title:form.title||"Game",videos:picked.map((x,i)=>({path:x.path,half:x.half||autoHalf(i)})),lang:form.lang});
     if(r.error&&!r.id){alert(r.error);$("#go").disabled=false;return}
     if(r.error)alert(r.error);picked=[];form.title="";view={name:"job",id:r.id};render()};
-  if(picked.length){const p=await api("/api/probe",{paths:picked});probeInfo=p;
+  if(picked.length){const p=await api("/api/probe",{paths:picked.map(x=>x.path)});probeInfo=p;
     $("#pinfo").innerHTML=p.videos.map(v=>v.error?`<div class="bad">${esc(v.name)}: ${esc(v.error)}</div>`:`<div>${esc(v.name)} · ${fmtDur(v.duration)} · ${v.width}×${v.height}${v.tested?"":` <span class="warn">· ${t("untested")}</span>`}</div>`).join("");
     $("#est").textContent=`${t("est")} ${fmtDur(p.estimate_s)}`}
 }
+const autoHalf=i=>i<Math.ceil(picked.length/2)?1:2;
 const guessTitle=p=>p.split(/[\\/]/).slice(-2,-1)[0]||"Game";
 
 async function detail(id,full){
@@ -166,14 +171,15 @@ async function detail(id,full){
 function buildDetail(v){
   $("#main").innerHTML=`<div class="row" style="margin-bottom:12px"><button id="bk">${t("back")}</button><h2 style="margin:0;flex:1">${esc(v.title)}</h2><span class="pill" id="pst"></span></div>
   <div class="card"><div class="row"><div style="flex:1"><div class="bar"><i id="ov" style="width:0"></i></div></div><span id="rem" class="muted"></span></div>
+   <div id="hb" class="muted" style="font-size:13px;margin-top:6px"></div>
    <div id="stages" style="margin-top:10px"></div><div id="msg" class="bad" style="margin-top:8px"></div>
    <div class="row" style="margin-top:10px"><button id="stp">${t("stop")}</button><button id="rsm">${t("resume")}</button><button id="opn">${t("open")}</button></div></div>
-  <div id="teamsbox"></div><div id="prevbox"></div><div id="resbox"></div>`;
+  <div id="vidbox"></div><div id="teamsbox"></div><div id="prevbox"></div><div id="resbox"></div>`;
   $("#bk").onclick=()=>{view={name:"home"};render()};
   $("#stp").onclick=()=>api(`/api/jobs/${encodeURIComponent(v.id)}/cancel`,{});
   $("#rsm").onclick=async()=>{const r=await api(`/api/jobs/${encodeURIComponent(v.id)}/resume`,{});if(r.error)alert(r.error)};
   $("#opn").onclick=()=>api(`/api/jobs/${encodeURIComponent(v.id)}/open`,{});
-  teamEdit=null;builtResults="";
+  teamEdit=null;builtResults="";vidSig="";vidEdit=null;
 }
 let builtResults="";
 function paint(v){
@@ -182,11 +188,77 @@ function paint(v){
   const pst=$("#pst");pst.textContent=t(st.state);pst.className="pill "+st.state;
   $("#ov").style.width=(100*(st.overall||0))+"%";
   $("#rem").textContent=(st.state==="running"&&st.remaining_s!=null)?`${t("remaining")} ${fmtDur(st.remaining_s)} ${t("left")}`:"";
-  $("#stages").innerHTML=(st.stages||[]).map(s=>`<div class="stage"><span class="dot ${s.state}"></span><span>${esc(stageLabel(s.id))}</span><div>${s.state==="running"?`<div class="bar"><i style="width:${100*s.progress}%"></i></div>`:`<span class="muted">${s.state==="waiting"?t("teams_wait"):""}</span>`}</div></div>`).join("");
+  const age=Math.max(0,Date.now()/1000-(st.updated||0));
+  const hb=$("#hb");
+  if(st.state==="running"){hb.className=age>90?"warn":"muted";hb.textContent=age>90?t("hb_stale").replace("{n}",fmtDur(age)):t("hb_ok")}else hb.textContent="";
+  $("#stages").innerHTML=(st.stages||[]).map(s=>`<div class="stage"><span class="dot ${s.state}"></span><span>${esc(stageLabel(s.id))}${s.state==="running"&&s.note?` <span class="muted" style="font-size:12px">· ${esc(s.note)}</span>`:""}</span><div>${s.state==="running"?`<div class="bar"><i style="width:${100*s.progress}%"></i></div>`:`<span class="muted">${s.state==="waiting"?t("teams_wait"):""}</span>`}</div></div>`).join("");
   $("#msg").textContent=(st.state==="failed"||st.message)?(st.message||""):"";
   $("#stp").classList.toggle("hide",st.state!=="running");
   $("#rsm").classList.toggle("hide",st.state==="running"||st.state==="done");
-  paintTeams(v);paintPreview(v);paintResults(v);
+  paintVideos(v);paintTeams(v);paintPreview(v);paintResults(v);
+}
+let vidSig="",vidEdit=null;
+function paintVideos(v){
+  const b=$("#vidbox");if(!b||!v.videos)return;
+  const sig=v.status.state+JSON.stringify(v.videos.map(x=>[x.half,x.outline,x.pitch&&x.pitch.used,x.pitch&&x.pitch.reason,x.has_outline_picture]));
+  if(sig===vidSig&&vidEdit)return;
+  const busy=false;                                   // changing things while it works stops the job and starts it again
+  if(!vidEdit||sig!==vidSig){vidEdit=v.videos.map(x=>({half:x.half,outline:x.outline,redo:false}))}
+  vidSig=sig;
+  b.innerHTML=`<div class="card"><h2>${t("vids_h")}</h2><p class="muted" style="margin-top:0">${t("vids_p")}</p>
+   ${v.videos.map((x,i)=>{const p=x.pitch;const msg=(x.manual?t("manual_on")+" ":"")+(!p?t("pitch_wait"):p.used?t("pitch_used").replace("{n}",p.removed_pct):t("pitch_not").replace("{r}",esc(p.reason||"")));
+    return `<div style="padding:10px 0;border-top:1px solid var(--line)"><div class="row"><b style="flex:1">${i+1}. ${esc(x.name)}${x.duration?` <span class="muted">· ${fmtDur(x.duration)}</span>`:""}</b>
+     <select data-vh="${i}" ${busy?"disabled":""}><option value="1" ${vidEdit[i].half==1?"selected":""}>${t("half1")}</option><option value="2" ${vidEdit[i].half==2?"selected":""}>${t("half2")}</option></select>
+     <label><input type="checkbox" data-vo="${i}" ${vidEdit[i].outline?"checked":""} ${busy?"disabled":""}> ${t("outline_use")}</label>
+     <label><input type="checkbox" data-vr="${i}" ${busy?"disabled":""}> ${t("redo")}</label><button data-vd="${i}" ${busy?"disabled":""}>${t("draw")}</button></div>
+     <div class="muted" style="font-size:13px;margin:4px 0">${msg}</div>
+     ${x.has_outline_picture?`<a href="/files/${encodeURIComponent(v.id)}/pitch${i}_outline.jpg?t=${Date.now()}" target="_blank"><img src="/files/${encodeURIComponent(v.id)}/pitch${i}_outline.jpg" style="width:100%;max-width:640px;border-radius:8px"></a>`:""}</div>`}).join("")}
+   <div class="row" style="margin-top:10px"><button class="primary" id="vap" ${busy?"disabled":""}>${t("apply")}</button></div></div>`;
+  b.onclick=e=>{const el=e.target.closest("button[data-vd]");if(el)openEditor(v,+el.dataset.vd)};
+  b.onchange=e=>{const el=e.target;if(el.dataset.vh!==undefined)vidEdit[+el.dataset.vh].half=+el.value;if(el.dataset.vo!==undefined)vidEdit[+el.dataset.vo].outline=el.checked;if(el.dataset.vr!==undefined)vidEdit[+el.dataset.vr].redo=el.checked};
+  $("#vap").onclick=async()=>{const r=await api(`/api/jobs/${encodeURIComponent(v.id)}/setup`,{videos:vidEdit.map(x=>({half:x.half,outline:x.outline})),redo:vidEdit.map((x,i)=>x.redo?i:-1).filter(i=>i>=0)});
+    if(r.error&&!r.ok){toast(r.error,true)}
+    else if(!(r.redo||[]).length)toast(t("nothing_redo"),false);
+    else toast(t("redoing")+" "+r.redo.map(stageLabel).join(", "),false);
+    vidSig="";vidEdit=null;builtResults=""};
+}
+async function openEditor(v,i){
+  const d=await api(`/api/jobs/${encodeURIComponent(v.id)}/outline?video=${i}`);
+  if(d.error){alert(d.error);return}
+  let pts=d.points.map(p=>p.slice()),drag=-1;
+  const W=d.size[0],H=d.size[1];
+  const ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:50;overflow:auto;padding:20px";
+  ov.innerHTML=`<div class="card" style="max-width:1240px;margin:0 auto"><h2>${t("ed_h")} - ${esc(v.videos[i].name)}</h2><p class="muted" style="margin-top:0">${t("ed_p")}</p>
+   <canvas id="edc" style="width:100%;touch-action:none;border-radius:8px;cursor:crosshair"></canvas><div id="edn" class="muted" style="margin:6px 0"></div>
+   <div class="row"><button class="primary" id="eds">${t("ed_save")}</button><button id="edx">${t("ed_cancel")}</button>${v.videos[i].manual?`<button id="eda">${t("ed_auto")}</button>`:""}</div></div>`;
+  document.body.appendChild(ov);
+  const cv=ov.querySelector("#edc"),img=new Image();
+  // show the part of the picture that matters: all of it, but scaled to the page
+  cv.width=W;cv.height=H;const ctx=cv.getContext("2d");
+  const inside=(x,y)=>{let c=false;for(let a=0,b=pts.length-1;a<pts.length;b=a++){const[xi,yi]=pts[a],[xj,yj]=pts[b];if(((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi))c=!c}return c};
+  function draw(){
+    ctx.drawImage(img,0,0,W,H);
+    let out=0;
+    for(const[f,g]of d.feet){const ok=inside(f,g);if(!ok)out++;ctx.fillStyle=ok?"#3fb865":"#e5534b";ctx.fillRect(f-6,g-6,13,13)}
+    ctx.lineWidth=8;ctx.strokeStyle="#f2d04a";ctx.beginPath();pts.forEach((p,k)=>k?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();ctx.stroke();
+    pts.forEach(p=>{ctx.fillStyle="#fff";ctx.strokeStyle="#000";ctx.lineWidth=3;ctx.beginPath();ctx.arc(p[0],p[1],19,0,7);ctx.fill();ctx.stroke()});
+    ov.querySelector("#edn").textContent=d.feet.length?`${(100*out/d.feet.length).toFixed(1)} % ${t("ed_out")}`:"";
+  }
+  const pos=e=>{const r=cv.getBoundingClientRect();return[(e.clientX-r.left)*W/r.width,(e.clientY-r.top)*H/r.height]};
+  const near=(x,y)=>pts.findIndex(p=>Math.hypot(p[0]-x,p[1]-y)<40);
+  const segDist=(x,y,a,b)=>{const dx=b[0]-a[0],dy=b[1]-a[1];const L=dx*dx+dy*dy||1;let u=((x-a[0])*dx+(y-a[1])*dy)/L;u=Math.max(0,Math.min(1,u));return Math.hypot(x-(a[0]+u*dx),y-(a[1]+u*dy))};
+  cv.onpointerdown=e=>{const[x,y]=pos(e);drag=near(x,y);if(drag>=0)cv.setPointerCapture(e.pointerId)};
+  cv.onpointermove=e=>{if(drag<0)return;const[x,y]=pos(e);pts[drag]=[Math.max(0,Math.min(W,Math.round(x))),Math.max(0,Math.min(H,Math.round(y)))];draw()};
+  cv.onpointerup=()=>{drag=-1};
+  cv.ondblclick=e=>{const[x,y]=pos(e);const k=near(x,y);
+    if(k>=0){if(pts.length>3)pts.splice(k,1)}
+    else{let best=-1,bd=40;for(let a=0;a<pts.length;a++){const dd=segDist(x,y,pts[a],pts[(a+1)%pts.length]);if(dd<bd){bd=dd;best=a}}if(best>=0)pts.splice(best+1,0,[Math.round(x),Math.round(y)])}
+    draw()};
+  img.onload=draw;img.src=`/files/${encodeURIComponent(v.id)}/${d.frame}?t=${Date.now()}`;
+  ov.querySelector("#edx").onclick=()=>ov.remove();
+  ov.querySelector("#eds").onclick=async()=>{const r=await api(`/api/jobs/${encodeURIComponent(v.id)}/outline`,{video:i,points:pts});if(r.error&&!r.ok){toast(r.error,true);return}ov.remove();vidSig="";vidEdit=null;toast(r.error||"Outline saved - the camera for this video is planned again.")};
+  const ea=ov.querySelector("#eda");if(ea)ea.onclick=async()=>{const r=await api(`/api/jobs/${encodeURIComponent(v.id)}/outline`,{video:i,reset:true});if(r.error&&!r.ok){toast(r.error,true);return}ov.remove();vidSig="";vidEdit=null;toast("Back to the automatic outline.")};
 }
 function paintPreview(v){
   const b=$("#prevbox");if(!v.has_preview||b.dataset.on)return;b.dataset.on=1;

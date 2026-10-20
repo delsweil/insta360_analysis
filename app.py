@@ -67,6 +67,16 @@ def start_job(jid: str) -> str:
     return ""
 
 
+def stop_job(jid: str) -> bool:
+    """Stop a game that is being processed (if it is) and wait until it has stopped."""
+    j, t = STATE["running"].get(jid), STATE["threads"].get(jid)
+    if j is not None and t is not None and t.is_alive():
+        j.cancel()
+        t.join(60)
+        return not t.is_alive()
+    return True
+
+
 def list_dir(path: str) -> dict:
     path = os.path.abspath(os.path.expanduser(path or "~"))
     if not os.path.isdir(path):
@@ -119,7 +129,14 @@ def job_view(jid: str) -> dict:
                              "bgr": [round(x) for x in meta["mean_bgr"][j]]} for j in range(len(meta["sizes"]))],
                  "assign": meta["assign"], "suggest": meta.get("suggest", {"A": [], "B": []}),
                  "names": meta["names"], "colours": meta["colours"], "quality": TL.quality(meta)}
-    return {"id": jid, "title": job.spec.get("title"), "spec": job.spec, "status": st, "teams": teams,
+    job.migrate()
+    vids = []
+    for i, v in enumerate(job.videos()):
+        cam = job.info()[i] if i < len(job.info()) else {}
+        vids.append({"name": os.path.basename(v["path"]), "duration": cam.get("duration"), "half": v["half"],
+                     "outline": v["outline"], "manual": os.path.isfile(job.manual_file(i)), "pitch": P.read_json(job.p(f"pitch{i}.info.json")),
+                     "has_outline_picture": os.path.isfile(job.p(f"pitch{i}_outline.jpg"))})
+    return {"id": jid, "videos": vids, "title": job.spec.get("title"), "spec": job.spec, "status": st, "teams": teams,
             "cameras": job.info(), "has_preview": os.path.isfile(job.p("preview.jpg")),
             "files": job.results(), "folder": job.dir}
 
@@ -203,6 +220,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(list_dir(q.get("path", "")))
             if u.path == "/api/jobs":
                 return self._json({"jobs": list_jobs(), "root": STATE["root"]})
+            if u.path.startswith("/api/jobs/") and u.path.endswith("/outline"):
+                job = get_job(u.path.split("/")[3])
+                i = int(q.get("video", 0))
+                job.ensure_frame(i)
+                pts, src = job.outline_points(i)
+                return self._json({"points": pts, "source": src, "frame": f"pitch{i}_frame.png", "size": [2880, 1440],
+                                   "feet": job.feet(i) if os.path.isfile(job.p(f"v{i}.detections.jsonl")) else []})
             if u.path.startswith("/api/jobs/"):
                 return self._json(job_view(u.path.split("/")[3]))
             if u.path.startswith("/files/"):
@@ -263,13 +287,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(probe(body.get("paths", [])))
             if u.path == "/api/jobs":
                 vids = [{"path": v} if isinstance(v, str) else v for v in body.get("videos", [])]
+                n_v = len(vids)
+                for i, v in enumerate(vids):                      # the coach's choice, else first half = first ceil(n/2) files
+                    v["half"] = int(v.get("half") or (1 if i < (n_v + 1) // 2 else 2))
+                    v.setdefault("outline", True)
                 if not vids:
                     return self._json({"error": "choose at least one video"}, 400)
                 bad = [v["path"] for v in vids if not os.path.isfile(v["path"])]
                 if bad:
                     return self._json({"error": f"file not found: {bad[0]}"}, 400)
                 job = P.Job.create(jobs_root(), {"title": (body.get("title") or "").strip() or "Game", "videos": vids,
-                                                 "lang": body.get("lang", "en"), "halves": bool(body.get("halves", True))})
+                                                 "lang": body.get("lang", "en"), "layout": 2})
                 err = start_job(os.path.basename(job.dir))
                 return self._json({"id": os.path.basename(job.dir), "error": err})
             parts = u.path.split("/")
@@ -280,6 +308,23 @@ class Handler(BaseHTTPRequestHandler):
                     assign_teams(jid, body)
                     err = "" if is_running(jid) else start_job(jid)             # a job that was waiting goes on
                     return self._json({"ok": True, "error": err})
+                if action == "outline":
+                    if not stop_job(jid):
+                        return self._json({"error": "could not stop the running job - try Stop first"}, 400)
+                    job = P.Job(job_dir(jid))
+                    i = int(body.get("video", -1))
+                    if body.get("reset"):
+                        job.clear_manual_outline(i)
+                    else:
+                        job.set_manual_outline(i, body.get("points", []))
+                    return self._json({"ok": True, "error": start_job(jid)})
+                if action == "setup":
+                    if not stop_job(jid):
+                        return self._json({"error": "could not stop the running job - try Stop first"}, 400)
+                    job = P.Job(job_dir(jid))
+                    gone = job.reconfigure(body.get("videos", []), [int(x) for x in body.get("redo", [])])
+                    err = start_job(jid)
+                    return self._json({"ok": True, "error": err, "redo": gone})
                 if action == "resume":
                     return self._json({"error": start_job(jid)})
                 if action == "cancel":

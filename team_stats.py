@@ -21,6 +21,7 @@ not the last metre.
 from __future__ import annotations
 
 import argparse
+import json
 import csv
 import sys
 from typing import List
@@ -233,21 +234,69 @@ def static_spots(game, cell: float = 2.0, frac: float = 0.35):
     return {k for k, v in seen.items() if len(v) / n > frac}, cell
 
 
+def team_style(clusters, lang: str):
+    """chart colours and names of the two teams."""
+    T = TEXT[lang]
+    if hasattr(clusters, "colours"):                                      # labelled by eye (team_labels.py): their names and colours
+        return list(clusters.colours), list(clusters.names)
+    col = [FS.display_colour(clusters.mean_bgr[m]) for m in (0, 1)]       # the real shirt colours, lifted for the dark background
+    cn = [FS.colour_name(clusters.mean_bgr[m]) for m in (0, 1)]
+    if cn[0] != cn[1] and all(c in T["colours"] for c in cn):
+        names = [T["colour_team"].format(c=T["colours"][c]) for c in cn]
+    else:
+        names = [f"{T['team']} A", f"{T['team']} B"]
+    return col, names
+
+
+def _clean(v):
+    """numpy -> plain JSON values (NaN -> null)."""
+    a = np.asarray(v, float)
+    return [None if not np.isfinite(x) else round(float(x), 3) for x in a.ravel()]
+
+
+def chart_data(game, team, clusters, pm, tempo, box, mom, heat, keep, title, lang, cell: float = 1.0) -> dict:
+    """Everything the charts are drawn from, as plain numbers, so they can be redrawn or analysed elsewhere.
+    Coordinates are metres: x along the pitch (0 = middle, as seen from the camera), y = distance from the camera."""
+    col, names = team_style(clusters, lang)
+    minutes, value, a_right = mom
+    if heat is not None:
+        hx, hy, source = np.asarray(heat[0], float), np.asarray(heat[1], float), "camera"
+    else:
+        sel = keep if keep is not None else np.ones(len(game["x"]), bool)
+        hx, hy, source = game["x"][sel], game["y"][sel], "players"
+    x0, x1, y0, y1 = box
+    xe = np.arange(np.floor(x0 - 5), np.ceil(x1 + 5) + cell, cell)
+    ye = np.arange(np.floor(y0 - 5), np.ceil(y1 + 5) + cell, cell)
+    counts, _, _ = np.histogram2d(hy, hx, bins=[ye, xe])
+    mins = np.arange(len(pm[0]["spread"])) + 0.5
+    team_block = {}
+    for m, key in ((0, "A"), (1, "B")):
+        team_block[key] = {"name": names[m], "colour": col[m],
+                           "spread_m": _clean(pm[m]["spread"]), "width_m": _clean(pm[m]["width"]),
+                           "depth_m": _clean(pm[m]["depth"]), "centre_x_m": _clean(pm[m]["cx"]),
+                           "centre_y_m": _clean(pm[m]["cy"]), "tempo_ms": _clean(tempo[m]),
+                           "sightings_per_moment": round(float(len(game["x"][team == m]) / max(1, game["n_frames"])), 2)}
+    return {"format": "football-autopan-chart-data", "version": 1, "title": title, "lang": lang,
+            "duration_s": round(float(game["duration"]), 1), "moments": int(game["n_frames"]),
+            "pitch_box_m": [round(float(v), 2) for v in box], "team_a_attacks_right": bool(a_right),
+            "teams": team_block,
+            "heat_map": {"source": source, "cell_m": cell, "x_edges_m": [round(float(v), 2) for v in xe],
+                         "y_edges_m": [round(float(v), 2) for v in ye], "counts": counts.astype(int).tolist(),
+                         "note": "counts[row][col] = moments the play centre (or players) was in the cell; row = y (distance from camera), col = x"},
+            "territory": {"minutes": _clean(minutes), "value": _clean(value),
+                          "note": "-1..+1; positive = team A has the play in its attacking half (5 s steps, smoothed)"},
+            "per_minute": {"minute_mid": _clean(mins),
+                           "note": "spread = rms distance of a team's players from their centre (m); tempo = median speed (m/s)"},
+            "territory_share_a": round(float((value > 0).mean()), 3)}
+
+
 def draw(game, team, clusters, pm, tempo, out: str, title: str, lang: str, box, mom, switch_min=None,
          keep=None, heat=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     T = TEXT[lang]
-    if hasattr(clusters, "colours"):                                      # labelled by eye (team_labels.py): their names and colours
-        col, names = list(clusters.colours), list(clusters.names)
-    else:
-        col = [FS.display_colour(clusters.mean_bgr[m]) for m in (0, 1)]   # the real shirt colours, lifted for the dark background
-        cn = [FS.colour_name(clusters.mean_bgr[m]) for m in (0, 1)]
-        if cn[0] != cn[1] and all(c in T["colours"] for c in cn):
-            names = [T["colour_team"].format(c=T["colours"][c]) for c in cn]
-        else:
-            names = [f"{T['team']} A", f"{T['team']} B"]
+    col, names = team_style(clusters, lang)
 
     fig = plt.figure(figsize=(14, 15.5), facecolor=FS.BG)
     gs = fig.add_gridspec(4, 2, height_ratios=[1.5, 0.8, 0.7, 0.7], hspace=0.40, wspace=0.10, top=0.925, bottom=0.07)
@@ -363,6 +412,8 @@ def main(argv=None) -> int:
     p.add_argument("--team-labels", default=None,
                    help="team_labels.json made with team_labels.py: the teams as you labelled them by eye "
                         "(use this when the shirt colours are unreliable, e.g. floodlights)")
+    p.add_argument("--data-json", default=None, metavar="PATH",
+                   help="also write everything the charts are drawn from as a JSON file")
     p.add_argument("--keep-static", action="store_true", help="draw people who stand still all game into the heat map too")
     p.add_argument("--k", type=int, default=4)
     p.add_argument("--seed", type=int, default=1)
@@ -417,6 +468,12 @@ def main(argv=None) -> int:
     draw(game, team, clusters, pm, tempo, a.out + ".png", a.title, a.lang, box, mom, a.switch_at, keep,
          None if centres is None else (centres[1], centres[2]))
     write_csv(a.out + ".csv", pm, tempo, mom)
+    if a.data_json:
+        data = chart_data(game, team, clusters, pm, tempo, box, mom, None if centres is None else (centres[1], centres[2]),
+                          keep, a.title, a.lang)
+        with open(a.data_json, "w") as fh:
+            json.dump(data, fh)
+        print(f"wrote {a.data_json}")
     print(f"wrote {a.out}.png and {a.out}.csv")
     return 0
 

@@ -38,7 +38,7 @@ KEY_ARGS = ["--projection", "flat", "--fov-max", "100", "--fov-min", "70", "--ti
             "--max-dip", "8", "--tilt-margin", "4"]
 # seconds of computing per second of video (Apple silicon), used for the progress bar and the estimate
 COST = {"check": 0.0, "extract": 0.75, "keyframes": 0.0, "render": 0.8, "charts": 0.0, "stats": 0.0, "teams": 0.0}
-FIXED_SECONDS = {"check": 15, "teams": 120, "keyframes": 10, "charts": 30, "stats": 40, "package": 2}
+FIXED_SECONDS = {"check": 15, "pitch": 20, "teams": 120, "keyframes": 10, "charts": 30, "stats": 40, "package": 2}
 
 
 def safe_name(s: str) -> str:
@@ -129,8 +129,64 @@ class Job:
     def videos(self) -> List[dict]:
         out = []
         for v in self.spec["videos"]:
-            out.append({"path": v["path"], "start": float(v.get("start") or 0.0), "end": v.get("end")})
+            out.append({"path": v["path"], "start": float(v.get("start") or 0.0), "end": v.get("end"),
+                        "half": int(v.get("half") or 1), "outline": bool(v.get("outline", True))})
         return out
+
+    def migrate(self) -> None:
+        """Jobs made before halves existed: first half = the first ceil(n/2) videos; their charts are made again."""
+        if self.spec.get("layout") == 2:
+            return
+        n = len(self.spec["videos"])
+        for i, v in enumerate(self.spec["videos"]):
+            v.setdefault("half", 1 if i < (n + 1) // 2 else 2)
+            v.setdefault("outline", True)
+        self.spec["layout"] = 2
+        self.spec.pop("halves", None)
+        write_json(self.p("job.json"), self.spec)
+        self.clear("charts", "stats")
+
+    def clear(self, *ids: str) -> List[str]:
+        """Forget that these steps are done (they run again). -> the ones that really were done."""
+        gone = []
+        for sid in ids:
+            try:
+                os.remove(self.p(".done", sid))
+                gone.append(sid)
+            except OSError:
+                pass
+        return gone
+
+    def halves(self) -> List[tuple]:
+        """[(1, [video indices]), (2, [...])] for the halves that have videos."""
+        vs = self.videos()
+        return [(h, [i for i, v in enumerate(vs) if v["half"] == h]) for h in (1, 2) if any(v["half"] == h for v in vs)]
+
+    def reconfigure(self, cfg: List[dict], redo: List[int]) -> List[str]:
+        """The coach changed which half a video belongs to, or whether the pitch outline is used, or wants the
+        camera of a video planned again: whatever depends on it is made again, the rest is kept."""
+        old = self.videos()
+        gone: List[str] = []
+        if len(cfg) != len(old):
+            raise ValueError("wrong number of videos")
+        for i, c in enumerate(cfg):
+            half = int(c.get("half", old[i]["half"]))
+            if half not in (1, 2):
+                raise ValueError("half must be 1 or 2")
+            outline = bool(c.get("outline", old[i]["outline"]))
+            if half != old[i]["half"]:
+                gone += self.clear("charts", "stats")
+            if outline != old[i]["outline"] or i in redo:
+                gone += self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "charts", "stats")
+            self.spec["videos"][i]["half"], self.spec["videos"][i]["outline"] = half, outline
+        write_json(self.p("job.json"), self.spec)
+        return list(dict.fromkeys(gone))
+
+    def det_file(self, i: int) -> str:
+        """The detections the camera and the statistics are made from: without people beside the pitch if the outline was used."""
+        info = read_json(self.p(f"pitch{i}.info.json"), {})
+        f = self.p(f"v{i}.onpitch.detections.jsonl")
+        return f if info.get("used") and os.path.isfile(f) else self.p(f"v{i}.detections.jsonl")
 
     def info(self) -> List[dict]:
         return read_json(self.p("camera.json"), [])
@@ -148,6 +204,8 @@ class Job:
         st = [{"id": "check", "label": "Look at the videos"}, {"id": "teams", "label": "Find the shirt colours"}]
         for i in range(n):
             st.append({"id": f"extract{i}", "label": f"Find the players{self._of(i, n)}", "video": i})
+        for i in range(n):
+            st.append({"id": f"pitch{i}", "label": f"Find the pitch lines{self._of(i, n)}", "video": i})
         for i in range(n):
             st.append({"id": f"keyframes{i}", "label": f"Plan the camera{self._of(i, n)}", "video": i})
         st.append({"id": "charts", "label": "Where the play was"})
@@ -185,6 +243,7 @@ class Job:
     def run(self) -> str:
         """Run every stage that is not done yet. Returns the final state."""
         self.cancel_flag = False
+        self.migrate()
         stages = self.stages()
         known = {s["id"]: s for s in self.status.get("stages", [])}
         self.status["stages"] = []
@@ -212,7 +271,7 @@ class Job:
                 self.save_status()
                 t0 = time.time()
                 try:
-                    res = fn(s) if kind in ("extract", "keyframes", "render") else fn()
+                    res = fn(s) if kind in ("extract", "pitch", "keyframes", "render") else fn()
                 except Cancelled:
                     raise
                 except Exception as e:                                              # the stage failed
@@ -379,19 +438,138 @@ class Job:
 
     def s_keyframes(self, st: dict) -> None:
         i = st["video"]
-        self.exec(self.py("auto_keyframes.py", "--detections", self.p(f"v{i}.detections.jsonl"), *KEY_ARGS,
+        self.exec(self.py("auto_keyframes.py", "--detections", self.det_file(i), *KEY_ARGS,
                           "--out", self.p(f"v{i}.auto.keyframes.json")), st["id"])
 
+    # ── the pitch outline: automatic, or drawn by the coach ──────────────────
+    def manual_file(self, i: int) -> str:
+        return self.p(f"pitch{i}.manual.json")
+
+    def ensure_frame(self, i: int) -> str:
+        """The unwrapped picture (2880x1440) the outline is found in / drawn on."""
+        png = self.p(f"pitch{i}_frame.png")
+        if not os.path.isfile(png):
+            import cv2
+            import scene_check as S
+            cam = self.info()[i]
+            raw = cam["layout"] == "raw"
+            s0, d0 = self.span(i)
+            fr = S.grab_frame(cam["path"], s0 + d0 * 0.5, 112.0 if raw else None, raw)
+            if fr is None:
+                raise RuntimeError("no picture")
+            cv2.imwrite(png, fr)
+        return png
+
+    def outline_points(self, i: int) -> tuple:
+        """(points, source) for the editor: the coach's own outline, else the automatic one made simple, else a rough start."""
+        import numpy as np
+        import extract_detections as X
+        for src, f in (("manual", self.manual_file(i)), ("auto", self.p(f"pitch{i}.json"))):
+            if os.path.isfile(f):
+                try:
+                    poly = np.asarray(X.load_polygon(f), np.float32).reshape(-1, 2)
+                except Exception:
+                    continue
+                if src == "auto":
+                    import cv2
+                    eps = 4.0
+                    pts = poly
+                    while eps < 200:
+                        pts = cv2.approxPolyDP(poly.reshape(-1, 1, 2), eps, True).reshape(-1, 2)
+                        if len(pts) <= 24:
+                            break
+                        eps *= 1.5
+                    poly = pts
+                return [[round(float(x)), round(float(y))] for x, y in poly], src
+        return [[500, 870], [1440, 800], [2380, 870], [2700, 1000], [1440, 1130], [180, 1000]], "default"
+
+    def set_manual_outline(self, i: int, pts: List[List[float]]) -> None:
+        if not 0 <= i < len(self.spec["videos"]):
+            raise ValueError("no such video")
+        pts = [[float(x), float(y)] for x, y in pts]
+        if len(pts) < 3 or any(not (0 <= x <= 2880 and 0 <= y <= 1440) for x, y in pts):
+            raise ValueError("the outline needs at least 3 points inside the picture")
+        write_json(self.manual_file(i), {"pixel_polygon": pts, "manual": True})
+        self.spec["videos"][i]["outline"] = True
+        write_json(self.p("job.json"), self.spec)
+        self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "charts", "stats")
+
+    def clear_manual_outline(self, i: int) -> None:
+        try:
+            os.remove(self.manual_file(i))
+        except OSError:
+            pass
+        self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "charts", "stats")
+
+    def feet(self, i: int, max_pts: int = 3000) -> List[List[int]]:
+        """Where the feet of the detected players are in the picture (a sample), to see what an outline keeps."""
+        import kf_core as K
+        import extract_detections as X
+        with open(self.p(f"v{i}.detections.jsonl")) as fh:
+            fh.readline()
+            rows = [json.loads(l) for l in fh if l.strip()]
+        step = max(1, len(rows) // 400)
+        pts = []
+        for r in rows[::step]:
+            for p in r["players"]:
+                if len(p) > 3 and p[3] >= 0.5:
+                    x, y = K.lonlat_to_xy(p[0], p[1], X.EQ_W, X.EQ_H)
+                    pts.append([int(round(float(x))), int(round(float(y)))])
+        return pts[:: max(1, len(pts) // max_pts)]
+
+    def s_pitch(self, st: dict) -> None:
+        """Find the pitch outline in one picture of this video and leave out players standing outside it (coaches,
+        substitutes, spectators): they pull the camera sideways. If the outline looks wrong the detections are used as they are."""
+        i = st["video"]
+        info = {"used": False, "reason": "", "removed_pct": 0.0}
+        try:
+            if not self.videos()[i]["outline"]:
+                info["reason"] = "switched off"
+                return
+            import extract_detections as X
+            import pitch_filter as PF
+            manual = os.path.isfile(self.manual_file(i))
+            info["manual"] = manual
+            if manual:                                          # drawn by the coach: trusted
+                calib = self.manual_file(i)
+            else:
+                png = self.ensure_frame(i)
+                calib = self.p(f"pitch{i}.json")
+                self.exec(self.py("calibrate_auto.py", "--input", png, "--output", calib,
+                                  "--vis", self.p(f"pitch{i}_outline.jpg"), "--quiet"), st["id"])
+            share = float((X.polygon_mask(X.load_polygon(calib)) > 0).mean())
+            if not (0.02 if manual else 0.05) <= share <= 0.95:
+                info["reason"] = f"outline implausible ({100 * share:.0f} % of the picture)"
+                return
+            out = self.p(f"v{i}.onpitch.detections.jsonl")
+            n_all, n_off = PF.apply(self.p(f"v{i}.detections.jsonl"), out, calib, 25.0)
+            info["removed_pct"] = round(100.0 * n_off / max(1, n_all), 1)
+            if n_all == 0 or (n_off / n_all > 0.5 and not manual):
+                info["reason"] = f"outline would remove {info['removed_pct']} % of all players"
+                os.remove(out)
+                return
+            info["used"] = True
+        except Cancelled:
+            raise
+        except Exception as e:                                 # never stop the game for this: carry on without the outline
+            info["reason"] = f"no outline ({str(e)[-120:]})"
+        finally:
+            write_json(self.p(f"pitch{i}.info.json"), info)
+            self.log(f"pitch outline video {i + 1}: {info}")
+
+    def tag(self, h: int) -> str:
+        return f"{safe_name(self.spec.get('title') or 'game')}_half{h}"
+
     def s_charts(self) -> None:
-        n = len(self.spec["videos"])
-        dets = [self.p(f"v{i}.detections.jsonl") for i in range(n)]
-        kfs = [self.p(f"v{i}.auto.keyframes.json") for i in range(n)]
-        base = safe_name(self.spec.get("title") or "game")
         title, lang = self.spec.get("title", "Game"), ("de" if self.spec.get("lang") == "de" else "en")
-        self.exec(self.py("play_map.py", "--detections", *dets, "--keyframes", *kfs, "--out", self.p(f"{base}_play.png"),
-                          "--title", title, "--lang", lang), "charts")
-        self.exec(self.py("game_stats.py", "--detections", *dets, "--keyframes", *kfs, "--out", self.p(f"{base}_stats"),
-                          "--title", title, "--lang", lang), "charts")
+        for h, idx in self.halves():
+            dets = [self.det_file(i) for i in idx]
+            kfs = [self.p(f"v{i}.auto.keyframes.json") for i in idx]
+            t = f"{title} - {'2. Halbzeit' if h == 2 else '1. Halbzeit'}" if lang == "de" else f"{title} - {'second' if h == 2 else 'first'} half"
+            self.exec(self.py("play_map.py", "--detections", *dets, "--keyframes", *kfs,
+                              "--out", self.p(f"{self.tag(h)}_play.png"), "--title", t, "--lang", lang), "charts")
+            self.exec(self.py("game_stats.py", "--detections", *dets, "--keyframes", *kfs,
+                              "--out", self.p(f"{self.tag(h)}_stats"), "--title", t, "--lang", lang), "charts")
 
     def stem(self, i: int) -> str:
         n = len(self.spec["videos"])
@@ -431,16 +609,16 @@ class Job:
     def s_stats(self):
         if not self.labels_ready():
             return "waiting"
-        n = len(self.spec["videos"])
-        dets = [self.p(f"v{i}.detections.jsonl") for i in range(n)]
-        kfs = [self.p(f"v{i}.auto.keyframes.json") for i in range(n)]
         lang = self.spec.get("lang", "en")
-        out = self.p(f"{safe_name(self.spec.get('title') or 'game')}_teams")
-        args = ["--detections", *dets, "--keyframes", *kfs, "--team-labels", self.p("teams.team_labels.json"),
-                "--title", self.spec.get("title", "Game"), "--lang", "de" if lang == "de" else "en", "--out", out]
-        if n == 2 and self.spec.get("halves", True):
-            args += ["--switch-at", f"{self.span(0)[1] / 60.0:.2f}"]
-        self.exec(self.py("team_stats.py", *args), "stats")
+        title = self.spec.get("title", "Game")
+        for h, idx in self.halves():
+            dets = [self.det_file(i) for i in idx]
+            kfs = [self.p(f"v{i}.auto.keyframes.json") for i in idx]
+            t = f"{title} - {'2. Halbzeit' if h == 2 else '1. Halbzeit'}" if lang == "de" else f"{title} - {'second' if h == 2 else 'first'} half"
+            self.exec(self.py("team_stats.py", "--detections", *dets, "--keyframes", *kfs,
+                              "--team-labels", self.p("teams.team_labels.json"), "--title", t,
+                              "--lang", "de" if lang == "de" else "en", "--out", self.p(f"{self.tag(h)}_teams"),
+                              "--data-json", self.p(f"{self.tag(h)}_chartdata.json")), "stats")
         return None
 
     def s_package(self) -> None:
@@ -449,8 +627,9 @@ class Job:
         with open(self.p("README.txt"), "w") as fh:
             fh.write(f"{self.spec.get('title', 'Game')}\n\n"
                      "*_autopan.mp4          the video with the camera following the play\n"
-                     "*_play.png / *_stats.*  where the play was, game statistics\n"
-                     "*_teams.png / .csv      the two teams: heat map, territory, spread, tempo (CSV = numbers per 5 minutes)\n"
+                     "*_halfN_play.png / _stats.*  where the play was, game statistics (N = 1 first half, 2 second half)\n"
+                     "*_halfN_teams.png / .csv     the two teams: heat map, territory, spread, tempo (CSV = numbers per 5 minutes)\n"
+                     "*_halfN_chartdata.json       the numbers the charts of that half are drawn from (heat map grid, curves)\n"
                      "v*.detections.jsonl     every player found, 3 times a second (shirt colours included)\n"
                      "v*.auto.keyframes.json  the camera path (pan, zoom, tilt over time)\n"
                      "teams.team_labels.json  which shirt colours you called team A and B\n")
@@ -463,7 +642,7 @@ class Job:
             fp = self.p(name)
             if not os.path.isfile(fp) or name in skip or name.startswith(".") or not name.endswith(keep) or ".part" in name:
                 continue
-            if name in ("preview.jpg", "job.log"):
+            if name in ("preview.jpg", "job.log") or name.startswith("pitch") or ".onpitch." in name:
                 continue
             out.append({"name": name, "size": os.path.getsize(fp)})
         return out
