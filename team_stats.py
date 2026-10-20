@@ -5,7 +5,8 @@ The shirt colours of the whole game are grouped (k-means in Lab, like scene_chec
 clusters are the two teams, the smaller ones are referee, goalkeepers and the like (left out of the team
 numbers). Every detected player gets a team and a top-down position (metres, camera at the origin), then:
 
-  * one heat map of the whole game on a pitch (everybody seen; people standing still all game are left out),
+  * one heat map on a pitch: with --keyframes the play centre per moment (camera based, the fairer yardstick);
+    without, everybody seen (people standing still all game are left out),
   * a territory curve like a momentum chart: who has the play in their attacking half,
   * spread per minute: how far each team stretches (rms distance of its players from the team's centre),
   * tempo per minute: average running speed of each team's players,
@@ -31,7 +32,7 @@ import scene_check as S
 import football_style as FS
 
 TEXT = {
-    "en": {"heat": "Where the game was played", "spread": "Spread: how far each team stretches (m)",
+    "en": {"heat": "Where the game was played", "heat_play": "Where the play was", "spread": "Spread: how far each team stretches (m)",
            "tempo": "Tempo: typical running speed of the players (m/s)", "minute": "minute of play",
            "team": "team", "momentum": "Territory: who has the play in their attacking half",
            "attacks": "{t} attacks to the {d}", "right": "right", "left": "left",
@@ -42,7 +43,7 @@ TEXT = {
            "foot": "Teams are told apart by shirt colour; positions are approximate (box height as ruler); "
                    "pitch markings are fitted to where players were seen; the tempo includes measuring noise, "
                    "so compare the teams and the minutes, not the absolute numbers."},
-    "de": {"heat": "Wo gespielt wurde", "spread": "Streuung: wie weit sich jedes Team auseinanderzieht (m)",
+    "de": {"heat": "Wo gespielt wurde", "heat_play": "Wo das Spiel stattfand", "spread": "Streuung: wie weit sich jedes Team auseinanderzieht (m)",
            "tempo": "Tempo: typische Laufgeschwindigkeit der Spieler (m/s)", "minute": "Spielminute",
            "team": "Team", "momentum": "Territorium: wer spielt in der gegnerischen Hälfte",
            "attacks": "{t} greift nach {d} an", "right": "rechts", "left": "links",
@@ -84,6 +85,42 @@ def load_game(paths: List[str], max_lon: float, min_conf: float, min_height: flo
             "n_frames": n_frames, "duration": offset}
 
 
+def load_play_centres(paths: List[str], keyframes: List[str], max_lon: float, min_conf: float, k_angle: float):
+    """One point per moment, like play_map.py: the middle of the players inside the camera crop, weighted
+    toward the crop centre. The camera path is the fairer yardstick: it does not depend on which players
+    the detector happened to find, or on their shirt colour. -> t (s of play), x, y (m)"""
+    import kf_core as K
+    ts, xs, ys = [], [], []
+    offset = 0.0
+    for path, kpath in zip(paths, keyframes):
+        hdr, frames = AK.load_detections(path, max_lon=max_lon)
+        fy = S.SQUARE_FY if hdr.get("square_views") else S.LEGACY_FY
+        views = np.array(hdr["view_lons"], float)
+        t0, fps = float(hdr.get("start", 0.0)), float(hdr.get("fps", 3.0))
+        kp = K.Path(K.KeyframeSet.load(kpath).items, "pchip")
+        t = np.array([r["t"] for r in frames])
+        pan, fov = kp.at(t)
+        cam = np.array([K.wrap180(K.PAN_SIGN * p) for p in pan])
+        for i, r in enumerate(frames):
+            P = [p for p in r["players"] if p[3] >= min_conf]
+            if not P:
+                continue
+            lon = np.array([p[0] for p in P])
+            d = np.array([K.wrap180(v - cam[i]) for v in lon])
+            inside = np.abs(d) <= fov[i] / 2
+            if not inside.any():
+                continue
+            sig = max(fov[i] / 4.0, 5.0)
+            w = np.exp(-0.5 * (d[inside] / sig) ** 2) * np.array([p[3] for p in P])[inside]
+            xy = np.array([S.ground_position(p[0], p[2], float(views[np.argmin(np.abs(views - p[0]))]), fy, k_angle)
+                           for p in P])[inside]
+            ts.append(offset + (r["t"] - t0))
+            xs.append(float(np.average(xy[:, 0], weights=w)))
+            ys.append(float(np.average(xy[:, 1], weights=w)))
+        offset += (frames[-1]["t"] - t0 + 1.0 / fps) if frames else 0.0
+    return np.array(ts), np.array(xs), np.array(ys)
+
+
 def shape(x: np.ndarray, y: np.ndarray):
     """centre, spread (rms distance to the centre), width and depth (std) of one team in one moment."""
     cx, cy = x.mean(), y.mean()
@@ -114,21 +151,25 @@ def per_minute(game, team, minute_len: float = 60.0, min_players: int = 4):
     return out
 
 
-def territory(game, team, box, switch_min: float = None, min_players: int = 6, bin_s: float = 5.0, sigma_bins: float = 3.0):
+def territory(game, team, box, switch_min: float = None, min_players: int = 6, bin_s: float = 5.0, sigma_bins: float = 3.0,
+              centre=None):
     """Momentum proxy per 5 s: where the play is, relative to the middle of the pitch, seen from team A.
 
     Mean sideways position of all players of the two teams -> -1 (play at the left goal line) .. +1 (right).
     Team A is taken to attack to the right when its centre of gravity is, on average, left of team B's
     (it defends the left goal); after `switch_min` minutes the teams have changed ends. + = team A has the
-    play in its attacking half. -> (minutes, value in -1..1, A attacks right?)"""
+    play in its attacking half. -> (minutes, value in -1..1, A attacks right?)
+    With `centre` = (t, x) of the play centre per moment (see load_play_centres) that is used instead of the
+    mean of all players."""
     sel = team >= 0
     fr = game["frame"][sel]
     tt, xx, tm = game["t"][sel], game["x"][sel], team[sel]
     ok = np.isin(fr, [f for f, c in zip(*np.unique(fr, return_counts=True)) if c >= min_players])
     nb = int(game["duration"] // bin_s) + 1
     sx, sn = np.zeros(nb), np.zeros(nb)
-    bi = np.minimum((tt[ok] // bin_s).astype(int), nb - 1)
-    np.add.at(sx, bi, xx[ok])
+    bt, bx = (tt[ok], xx[ok]) if centre is None else (centre[0], centre[1])
+    bi = np.minimum((bt // bin_s).astype(int), nb - 1)
+    np.add.at(sx, bi, bx)
     np.add.at(sn, bi, 1)
     mid, half = (box[0] + box[1]) / 2, (box[1] - box[0]) / 2
     x = np.where(sn > 0, sx / np.maximum(sn, 1), np.nan)
@@ -193,17 +234,20 @@ def static_spots(game, cell: float = 2.0, frac: float = 0.35):
 
 
 def draw(game, team, clusters, pm, tempo, out: str, title: str, lang: str, box, mom, switch_min=None,
-         keep=None):
+         keep=None, heat=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     T = TEXT[lang]
-    col = [FS.display_colour(clusters.mean_bgr[m]) for m in (0, 1)]       # the real shirt colours, lifted for the dark background
-    cn = [FS.colour_name(clusters.mean_bgr[m]) for m in (0, 1)]
-    if cn[0] != cn[1] and all(c in T["colours"] for c in cn):
-        names = [T["colour_team"].format(c=T["colours"][c]) for c in cn]
+    if hasattr(clusters, "colours"):                                      # labelled by eye (team_labels.py): their names and colours
+        col, names = list(clusters.colours), list(clusters.names)
     else:
-        names = [f"{T['team']} A", f"{T['team']} B"]
+        col = [FS.display_colour(clusters.mean_bgr[m]) for m in (0, 1)]   # the real shirt colours, lifted for the dark background
+        cn = [FS.colour_name(clusters.mean_bgr[m]) for m in (0, 1)]
+        if cn[0] != cn[1] and all(c in T["colours"] for c in cn):
+            names = [T["colour_team"].format(c=T["colours"][c]) for c in cn]
+        else:
+            names = [f"{T['team']} A", f"{T['team']} B"]
 
     fig = plt.figure(figsize=(14, 15.5), facecolor=FS.BG)
     gs = fig.add_gridspec(4, 2, height_ratios=[1.5, 0.8, 0.7, 0.7], hspace=0.40, wspace=0.10, top=0.925, bottom=0.07)
@@ -212,11 +256,14 @@ def draw(game, team, clusters, pm, tempo, out: str, title: str, lang: str, box, 
     # combined heat map: everybody seen
     ax = fig.add_subplot(gs[0, 0])
     FS.style_axes(ax)
-    sel = keep if keep is not None else np.ones(len(game["x"]), bool)
-    FS.draw_heat(ax, game["x"][sel], game["y"][sel], box)
+    if heat is not None:                                      # the play centre per moment (camera based)
+        FS.draw_heat(ax, heat[0], heat[1], box, sigma=4.0)
+    else:
+        sel = keep if keep is not None else np.ones(len(game["x"]), bool)
+        FS.draw_heat(ax, game["x"][sel], game["y"][sel], box)
     FS.draw_pitch(ax, box)
     ax.scatter([0], [box[2] - 0.03 * (box[3] - box[2])], marker="^", c=FS.MUTED, s=50, zorder=4, clip_on=False)
-    ax.set_title(T["heat"], loc="left", fontsize=13, color=FS.TEXT, pad=8)
+    ax.set_title(T["heat_play"] if heat is not None else T["heat"], loc="left", fontsize=13, color=FS.TEXT, pad=8)
 
     # key numbers
     ax = fig.add_subplot(gs[0, 1])
@@ -309,7 +356,13 @@ def main(argv=None) -> int:
                    help="pitch rectangle in metres (default: estimated from where players were seen)")
     p.add_argument("--switch-at", type=float, default=None, metavar="MIN",
                    help="minute of play at which the teams change ends (a game given as both halves)")
+    p.add_argument("--keyframes", nargs="+", default=None,
+                   help="the camera-path file of each detections file (same order): the heat map and the territory "
+                        "then follow the play (camera based) instead of counting every detected player")
     p.add_argument("--tempo-stride", type=int, default=3, help="moments between the two positions a speed is measured over (3 = 1 s)")
+    p.add_argument("--team-labels", default=None,
+                   help="team_labels.json made with team_labels.py: the teams as you labelled them by eye "
+                        "(use this when the shirt colours are unreliable, e.g. floodlights)")
     p.add_argument("--keep-static", action="store_true", help="draw people who stand still all game into the heat map too")
     p.add_argument("--k", type=int, default=4)
     p.add_argument("--seed", type=int, default=1)
@@ -326,29 +379,43 @@ def main(argv=None) -> int:
         raise SystemExit("too few players with colours")
     rng = np.random.default_rng(a.seed)
     idx = rng.choice(len(game["t"]), min(a.fit_max, len(game["t"])), replace=False)
-    clusters = S.Clusters(game["bgr"][idx], a.k, a.seed)
-    lab, amb = clusters.assign(game["bgr"])
-    team = np.where(amb > a.ambiguous, -1, lab)
-    team = np.where(team > 1, -1, team)                      # referee, goalkeepers, ...: not a team
-    print("clusters (fit sample): " + ", ".join(f"{clusters.name(j)} {clusters.sizes[j]}" for j in range(len(clusters.centres))))
+    if a.team_labels:
+        import team_labels as TL
+        clusters = TL.Labelled(a.team_labels)
+        team = clusters.team_of(game["bgr"])
+        print(f"teams as labelled by eye: {clusters.names[0]} / {clusters.names[1]}")
+    else:
+        clusters = S.Clusters(game["bgr"][idx], a.k, a.seed)
+        lab, amb = clusters.assign(game["bgr"])
+        team = np.where(amb > a.ambiguous, -1, lab)
+        team = np.where(team > 1, -1, team)                  # referee, goalkeepers, ...: not a team
+        print("clusters (fit sample): " + ", ".join(f"{clusters.name(j)} {clusters.sizes[j]}" for j in range(len(clusters.centres))))
     print(f"{len(team)} player sightings in {game['n_frames']} moments: team A {int((team == 0).sum())}, "
           f"team B {int((team == 1).sum())}, other/ambiguous {int((team < 0).sum())}")
     pm = per_minute(game, team)
     tempo = tempo_per_minute(game, team, a.tempo_stride)
     ok = team >= 0
     box = tuple(a.box) if a.box else FS.estimate_box(game["x"][ok], game["y"][ok])
-    mom = territory(game, team, box, a.switch_at)
+    centres = None
+    if a.keyframes:
+        if len(a.keyframes) != len(a.detections):
+            raise SystemExit("give one --keyframes file for each --detections file, in the same order")
+        ct, cx, cy = load_play_centres(a.detections, a.keyframes, a.max_lon, 0.3, a.angle_factor)
+        centres = (ct, cx, cy)
+        print(f"play centre: {len(ct)} moments (camera based)")
+    mom = territory(game, team, box, a.switch_at, centre=None if centres is None else (centres[0], centres[1]))
     print(f"pitch box (x0 x1 y0 y1, m): {', '.join(f'{v:.1f}' for v in box)}   team A attacks "
           f"{'right' if mom[2] else 'left'}")
     keep = np.ones(len(game["x"]), bool)
-    if not a.keep_static:
+    if not a.keep_static and centres is None:
         cells, cell = static_spots(game)
         if cells:
             cid = list(zip(np.floor(game["x"] / cell).astype(int), np.floor(game["y"] / cell).astype(int)))
             keep = np.array([c not in cells for c in cid])
             print(f"heat map: {len(cells)} static spot(s) left out (somebody stands there in >35% of the moments: "
                   f"coaches, bench); use --keep-static to include them")
-    draw(game, team, clusters, pm, tempo, a.out + ".png", a.title, a.lang, box, mom, a.switch_at, keep)
+    draw(game, team, clusters, pm, tempo, a.out + ".png", a.title, a.lang, box, mom, a.switch_at, keep,
+         None if centres is None else (centres[1], centres[2]))
     write_csv(a.out + ".csv", pm, tempo, mom)
     print(f"wrote {a.out}.png and {a.out}.csv")
     return 0
