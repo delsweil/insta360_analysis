@@ -38,7 +38,7 @@ KEY_ARGS = ["--projection", "flat", "--fov-max", "100", "--fov-min", "70", "--ti
             "--max-dip", "8", "--tilt-margin", "4"]
 # seconds of computing per second of video (Apple silicon), used for the progress bar and the estimate
 COST = {"check": 0.0, "extract": 0.75, "keyframes": 0.0, "render": 0.8, "charts": 0.0, "stats": 0.0, "teams": 0.0}
-FIXED_SECONDS = {"check": 15, "pitch": 20, "teams": 120, "keyframes": 10, "charts": 30, "stats": 40, "package": 2}
+FIXED_SECONDS = {"check": 15, "pitch": 20, "merge": 60, "teams": 120, "keyframes": 10, "charts": 30, "stats": 40, "package": 2}
 
 
 VERIFY_RENDER = True        # look into every finished video before it replaces the old one
@@ -198,7 +198,7 @@ class Job:
             if half != old[i]["half"]:
                 gone += self.clear("charts", "stats")
             if outline != old[i]["outline"] or i in redo:
-                gone += self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "charts", "stats")
+                gone += self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "merge", "charts", "stats")
             self.spec["videos"][i]["half"], self.spec["videos"][i]["outline"] = half, outline
         write_json(self.p("job.json"), self.spec)
         return list(dict.fromkeys(gone))
@@ -232,6 +232,8 @@ class Job:
         st.append({"id": "charts", "label": "Where the play was"})
         for i in range(n):
             st.append({"id": f"render{i}", "label": f"Make the video{self._of(i, n)}", "video": i})
+        if n > 1:
+            st.append({"id": "merge", "label": "Join the videos for YouTube"})
         st.append({"id": "stats", "label": "Team statistics"})
         st.append({"id": "package", "label": "Collect the results"})
         return st
@@ -387,7 +389,10 @@ class Job:
         self.status["remaining_s"] = max(0.0, (tot - done) * ratio)
 
     def set_progress(self, sid: str, frac: float, note: str = "") -> None:
-        rec = self._rec(sid)
+        try:
+            rec = self._rec(sid)
+        except StopIteration:                                  # a step run on its own, not through run()
+            return
         rec["progress"] = max(0.0, min(0.999, frac))
         if note:
             rec["note"] = note
@@ -579,7 +584,7 @@ class Job:
             self.log(f"outline picture not made: {e}")
         self.spec["videos"][i]["outline"] = True
         write_json(self.p("job.json"), self.spec)
-        self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "charts", "stats")
+        self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "merge", "charts", "stats")
 
     def clear_manual_outline(self, i: int) -> None:
         for f in (self.manual_file(i), self.p(f"pitch{i}_outline.jpg")):     # the picture comes back with the automatic outline
@@ -587,7 +592,7 @@ class Job:
                 os.remove(f)
             except OSError:
                 pass
-        self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "charts", "stats")
+        self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "merge", "charts", "stats")
 
     def feet(self, i: int, max_pts: int = 3000) -> List[List[int]]:
         """Where the feet of the detected players are in the picture (a sample), to see what an outline keeps."""
@@ -696,6 +701,48 @@ class Job:
                 raise RuntimeError(f"The new video is damaged ({problems[0]}). Make it again with 'Plan camera again'.")
         os.replace(out + ".part.mp4", out)
 
+    def s_merge(self) -> None:
+        """One video of the whole game for YouTube: the finished videos in playing order, joined without re-encoding
+        (they all come out of the same settings), plus a text file with the start of each part for YouTube chapters."""
+        order = [i for _, idx in self.halves() for i in idx]
+        files = [self.p(f"{self.stem(i)}_autopan.mp4") for i in order]
+        for f in files:
+            if not os.path.isfile(f):
+                raise RuntimeError(f"missing video: {os.path.basename(f)}")
+        base = safe_name(self.spec.get("title") or "game")
+        out = self.p(f"{base}_full_game.mp4")
+        lst = self.p(".merge.txt")
+        with open(lst, "w") as fh:
+            for f in files:
+                fh.write("file '" + f.replace("'", "'\\''") + "'\n")
+        total = sum(self.span(i)[1] for i in order)
+        pat = re.compile(r"time=(\d+):(\d+):([\d.]+)")
+
+        def parse(line):
+            m = pat.search(line)
+            return (int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))) / max(1.0, total) if m else None
+        self.exec(["ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats", "-y", "-f", "concat", "-safe", "0", "-i", lst,
+                   "-c", "copy", "-movflags", "+faststart", out + ".part.mp4"], "merge", parse)
+        if VERIFY_RENDER:
+            problems = verify_video(out + ".part.mp4")
+            if problems:
+                os.remove(out + ".part.mp4")
+                raise RuntimeError(f"The joined video is damaged ({problems[0]}).")
+        os.replace(out + ".part.mp4", out)
+        try:                                                    # chapters: where each part starts (YouTube wants 0:00 first)
+            import kf_core as K
+            t, lines = 0.0, []
+            for n, (i, f) in enumerate(zip(order, files)):
+                h = self.videos()[i]["half"]
+                label = f"{'Second' if h == 2 else 'First'} half" + (f" (part {n + 1})" if len(files) > 2 else "")
+                lines.append(f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{int(t % 60):02d} {label}" if t >= 3600 else
+                             f"{int(t // 60)}:{int(t % 60):02d} {label}")
+                t += float(K.probe_video(f)["duration"])
+            with open(self.p(f"{base}_chapters.txt"), "w") as fh:
+                fh.write("\n".join(lines) + "\n")
+        except Exception as e:
+            self.log(f"chapters not written: {e}")
+
     def labels(self) -> Optional[dict]:
         return read_json(self.p("teams.team_labels.json"))
 
@@ -723,7 +770,9 @@ class Job:
         write_json(self.p("results.json"), {"title": self.spec.get("title"), "files": files})
         with open(self.p("README.txt"), "w") as fh:
             fh.write(f"{self.spec.get('title', 'Game')}\n\n"
-                     "*_autopan.mp4          the video with the camera following the play\n"
+                     "*_autopan.mp4          the video with the camera following the play (one per file)\n"
+                     "*_full_game.mp4        all parts joined in playing order: upload this one to YouTube\n"
+                     "*_chapters.txt         where each part starts, to paste into the YouTube description\n"
                      "*_halfN_play.png / _stats.*  where the play was, game statistics (N = 1 first half, 2 second half)\n"
                      "*_halfN_teams.png / .csv     the two teams: heat map, territory, spread, tempo (CSV = numbers per 5 minutes)\n"
                      "*_halfN_chartdata.json       the numbers the charts of that half are drawn from (heat map grid, curves)\n"

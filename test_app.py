@@ -61,6 +61,8 @@ def fake_exec(self, cmd, sid, parse=None):
         open(arg(cmd, "--output"), "wb").write(b"mp4")
     elif script == "play_map.py":
         open(arg(cmd, "--out"), "wb").write(b"png")
+    elif cmd[0] == "ffmpeg":                                 # joining the videos
+        open(cmd[-1], "wb").write(b"mp4")
     elif script in ("game_stats.py", "team_stats.py"):
         open(arg(cmd, "--out") + ".png", "wb").write(b"png")
         if script == "team_stats.py":
@@ -367,6 +369,39 @@ class TestVerify(Base):
         self.assertFalse(os.path.exists(old + ".part.mp4"))
 
 
+class TestMerge(Base):
+    def test_videos_are_joined_in_playing_order(self):
+        P.Job.exec = self._exec                                           # real ffmpeg
+        j = P.Job.create(self.root, {"title": "Cup", "layout": 2, "videos": [
+            {"path": self.vid, "half": 1}, {"path": self.vid, "half": 1}, {"path": self.vid, "half": 2}]})
+        j.s_check()
+        for i in range(3):
+            make_video(j.p(f"{j.stem(i)}_autopan.mp4"), 640, 360, 2 + i)  # 2 s, 3 s, 4 s
+        self.assertIn("merge", [s["id"] for s in j.stages()])
+        P.VERIFY_RENDER = True
+        j.s_merge()
+        import kf_core as K
+        info = K.probe_video(j.p("Cup_full_game.mp4"))
+        self.assertAlmostEqual(float(info["duration"]), 9.0, delta=0.6)
+        lines = open(j.p("Cup_chapters.txt")).read().split("\n")
+        self.assertTrue(lines[0].startswith("0:00 First half"))
+        self.assertTrue(lines[1].startswith("0:02 "))
+        self.assertTrue(lines[2].startswith("0:05 Second half"))
+        self.assertNotIn("Cup_full_game.mp4.part.mp4", os.listdir(j.dir))
+
+    def test_single_video_has_no_merge_step(self):
+        j = P.Job.create(self.root, {"title": "One", "layout": 2, "videos": [{"path": self.vid, "half": 1}]})
+        self.assertNotIn("merge", [s["id"] for s in j.stages()])
+
+    def test_redoing_a_video_redoes_the_merge(self):
+        j = P.Job.create(self.root, {"title": "Two", "layout": 2, "videos": [{"path": self.vid, "half": 1}, {"path": self.vid, "half": 2}]})
+        j.run()
+        self.assertTrue(j.done("merge"))
+        self.assertIn("Two_full_game.mp4", [f["name"] for f in j.results()])
+        j.reconfigure([{"half": 1, "outline": True}, {"half": 2, "outline": True}], [1])
+        self.assertFalse(j.done("merge"))
+
+
 class TestQuality(unittest.TestCase):
     def test_suggest_and_quality(self):
         import team_labels as TL
@@ -519,6 +554,28 @@ class TestServer(Base):
         v = self.until(jid, lambda v: v["status"]["state"] in ("needs_input", "done"))
         self.assertTrue(v["videos"][1]["manual"] and v["videos"][1]["pitch"]["manual"])
         self.assertFalse(v["videos"][0]["manual"])
+
+    def test_steps_added_by_a_newer_version_can_be_continued(self):
+        code, r = self.call("/api/jobs", {"title": "m", "videos": [self.vid, self.vid]})
+        jid = r["id"]
+        self.wait(jid, ("needs_input",))
+        code, r = self.call(f"/api/jobs/{jid}/teams", {"a": [0], "b": [1]})
+        v = self.wait(jid, ("done",))
+        self.assertFalse(v["status"]["can_continue"])
+        d = os.path.join(self.root, jid)
+        os.remove(os.path.join(d, ".done", "merge"))                       # as if the job was made before the merge step existed
+        st = json.load(open(os.path.join(d, "status.json")))
+        st["stages"] = [s for s in st["stages"] if s["id"] != "merge"]
+        json.dump(st, open(os.path.join(d, "status.json"), "w"))
+        code, v = self.call(f"/api/jobs/{jid}")
+        ids = {s["id"]: s["state"] for s in v["status"]["stages"]}
+        self.assertEqual(ids["merge"], "pending")
+        self.assertTrue(v["status"]["can_continue"])
+        self.assertEqual(v["status"]["state"], "incomplete")
+        code, r = self.call(f"/api/jobs/{jid}/resume", {})
+        v = self.wait(jid, ("done",))
+        self.assertFalse(v["status"]["can_continue"])
+        self.assertIn("m_full_game.mp4", [f["name"] for f in v["files"]])
 
     def test_team_confirmation_needs_both_teams(self):
         code, r = self.call("/api/jobs", {"title": "g", "videos": [self.vid]})

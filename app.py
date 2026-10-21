@@ -120,6 +120,24 @@ def job_view(jid: str) -> dict:
     st = dict(job.status)
     if st["state"] == "running" and not is_running(jid):
         st["state"] = "stopped"                                   # the app was closed while it was working
+    st["can_continue"] = False
+    if st["state"] != "running":
+        old = {r["id"]: r for r in st.get("stages", [])}
+        merged, missing = [], False
+        for s in job.stages():                                    # steps added by a newer version of the app show up as waiting
+            r = dict(old.get(s["id"]) or {"id": s["id"], "label": s["label"], "state": "pending", "progress": 0.0, "note": ""})
+            r["label"] = s["label"]
+            if job.done(s["id"]):
+                r["state"], r["progress"] = "done", 1.0
+            elif r.get("state") == "done" and s["id"] != "package":
+                r["state"], r["progress"] = "pending", 0.0
+            merged.append(r)
+            if s["id"] != "package" and r["state"] in ("pending", "failed"):
+                missing = True
+        st["stages"] = merged
+        if missing and st["state"] in ("done", "needs_input", "idle"):
+            st["state"] = "incomplete" if st["state"] == "done" else st["state"]
+        st["can_continue"] = missing
     meta = job.labels()
     teams = None
     if meta:
