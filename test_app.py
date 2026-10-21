@@ -82,9 +82,11 @@ class Base(unittest.TestCase):
         os.makedirs(self.root)
         self._exec = P.Job.exec
         P.Job.exec = fake_exec
+        self._verify, P.VERIFY_RENDER = P.VERIFY_RENDER, False
 
     def tearDown(self):
         P.Job.exec = self._exec
+        P.VERIFY_RENDER = self._verify
         shutil.rmtree(self.tmp, ignore_errors=True)
 
 
@@ -252,6 +254,11 @@ class TestHalvesAndOutline(Base):
         with self.assertRaises(ValueError):
             j.set_manual_outline(0, [[0, 0], [9999, 10], [10, 10]])    # outside the picture
         j.set_manual_outline(0, [[400, 600], [1800, 600], [1800, 1100], [400, 1100]])
+        import cv2
+        pic = cv2.imread(j.p("pitch0_outline.jpg"))                      # the new line is shown at once
+        self.assertEqual(pic.shape[:2], (720, 1440))
+        yellow = (np.abs(pic.astype(int) - np.array([60, 220, 240])).sum(-1) < 90)
+        self.assertGreater(yellow.sum(), 500)
         self.assertFalse(j.done("pitch0") or j.done("keyframes0") or j.done("render0") or j.done("charts"))
         j.run()
         self.assertNotIn("calibrate_auto.py", calls)                    # the coach's line is used as drawn
@@ -289,7 +296,9 @@ class TestHalvesAndOutline(Base):
         j.run()
         for sid in ("charts", "keyframes0", "keyframes1", "render1", "pitch1"):
             self.assertTrue(j.done(sid), sid)
-        j.reconfigure([{"half": 1, "outline": True}, {"half": 1, "outline": True}], [])     # only the half changed
+        self.assertEqual(j.reconfigure([{"half": 1, "outline": True}, {"half": 2, "outline": True}], []), [])   # nothing changed
+        gone = j.reconfigure([{"half": 1, "outline": True}, {"half": 1, "outline": True}], [])     # only the half changed
+        self.assertEqual(gone, ["charts"])                       # stats was still waiting for the teams
         self.assertFalse(j.done("charts"))
         self.assertTrue(j.done("keyframes1") and j.done("render1"))
         j.run()
@@ -303,6 +312,22 @@ class TestHalvesAndOutline(Base):
         with self.assertRaises(ValueError):
             j.reconfigure([{"half": 3}, {"half": 1}], [])
 
+    def test_step_left_by_an_earlier_run_is_stopped(self):
+        j = self.job(1)
+        tag = os.path.join(j.dir, "x")
+        p = subprocess.Popen(["sh", "-c", "sleep 300", tag], start_new_session=True)       # 'ffmpeg' of a closed app, job path in its command line
+        write_json = P.write_json
+        write_json(j.p(".proc"), {"pid": p.pid, "step": "render0"})
+        self.assertTrue(P.Job(j.dir).reap())
+        self.assertIsNotNone(p.wait(10))
+        self.assertFalse(os.path.exists(j.p(".proc")))
+        # a process number that now belongs to something else is left alone
+        q = subprocess.Popen(["sleep", "300"], start_new_session=True)
+        write_json(j.p(".proc"), {"pid": q.pid, "step": "render0"})
+        self.assertFalse(P.Job(j.dir).reap())
+        self.assertIsNone(q.poll())
+        q.kill()
+
     def test_old_jobs_are_migrated(self):
         j = P.Job.create(self.root, {"title": "old", "videos": [{"path": self.vid}] * 3, "halves": True})
         os.makedirs(j.p(".done"), exist_ok=True)
@@ -313,6 +338,33 @@ class TestHalvesAndOutline(Base):
         self.assertEqual([v["half"] for v in j.videos()], [1, 1, 2])
         self.assertFalse(j.done("charts") or j.done("stats"))
         self.assertTrue(j.done("keyframes2"))
+
+
+class TestVerify(Base):
+    def test_good_video_passes_damaged_one_fails(self):
+        good = os.path.join(self.tmp, "good.mp4")
+        make_video(good, 640, 360, 4)
+        self.assertEqual(P.verify_video(good), [])
+        bad = os.path.join(self.tmp, "bad.mp4")
+        data = bytearray(open(good, "rb").read())
+        rng = np.random.default_rng(0)
+        a, b = int(len(data) * 0.15), int(len(data) * 0.9)         # the picture data damaged, the index at the end intact
+        data[a:b] = rng.integers(0, 256, b - a, dtype=np.uint8).tobytes()
+        open(bad, "wb").write(bytes(data))
+        self.assertTrue(P.verify_video(bad))
+        self.assertTrue(P.verify_video(os.path.join(self.tmp, "missing.mp4")))
+
+    def test_damaged_render_stops_the_step_and_keeps_the_old_video(self):
+        P.VERIFY_RENDER = True
+        j = P.Job.create(self.root, {"title": "v", "videos": [{"path": self.vid}], "layout": 2})
+        j.s_check()
+        old = j.p("v_autopan.mp4")
+        open(old, "wb").write(b"old")
+        with self.assertRaises(RuntimeError) as cm:
+            j.s_render({"id": "render0", "video": 0})                   # the fake writes 3 bytes, not a video
+        self.assertIn("damaged", str(cm.exception))
+        self.assertEqual(open(old, "rb").read(), b"old")
+        self.assertFalse(os.path.exists(old + ".part.mp4"))
 
 
 class TestQuality(unittest.TestCase):

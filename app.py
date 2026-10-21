@@ -135,7 +135,8 @@ def job_view(jid: str) -> dict:
         cam = job.info()[i] if i < len(job.info()) else {}
         vids.append({"name": os.path.basename(v["path"]), "duration": cam.get("duration"), "half": v["half"],
                      "outline": v["outline"], "manual": os.path.isfile(job.manual_file(i)), "pitch": P.read_json(job.p(f"pitch{i}.info.json")),
-                     "has_outline_picture": os.path.isfile(job.p(f"pitch{i}_outline.jpg"))})
+                     "has_outline_picture": os.path.isfile(job.p(f"pitch{i}_outline.jpg")),
+                     "outline_t": int(os.path.getmtime(job.p(f"pitch{i}_outline.jpg"))) if os.path.isfile(job.p(f"pitch{i}_outline.jpg")) else 0})
     return {"id": jid, "videos": vids, "title": job.spec.get("title"), "spec": job.spec, "status": st, "teams": teams,
             "cameras": job.info(), "has_preview": os.path.isfile(job.p("preview.jpg")),
             "files": job.results(), "folder": job.dir}
@@ -358,15 +359,30 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     STATE["root"] = os.path.abspath(os.path.expanduser(a.folder))
     os.makedirs(STATE["root"], exist_ok=True)
+    for n in os.listdir(STATE["root"]):                  # steps left running by an earlier run of the app
+        if os.path.isfile(os.path.join(STATE["root"], n, "job.json")):
+            if P.Job(os.path.join(STATE["root"], n)).reap():
+                print(f"stopped a step of '{n}' that an earlier run had left running")
     srv = make_server(a.port)
     url = f"http://127.0.0.1:{a.port}"
     print(f"Football Autopan is running at {url}   (results in {STATE['root']})   Ctrl+C to stop")
     if not a.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    import signal
+
+    def bye(*_):
+        raise KeyboardInterrupt
+    for sg in (signal.SIGTERM, getattr(signal, "SIGHUP", signal.SIGTERM)):
+        signal.signal(sg, bye)                           # closing the terminal window stops the steps too
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        for jid, j in list(STATE["running"].items()):    # do not leave steps running after the app is gone
+            j.cancel()
+        for t in list(STATE["threads"].values()):
+            t.join(15)
     return 0
 
 

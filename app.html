@@ -200,7 +200,7 @@ function paint(v){
 let vidSig="",vidEdit=null;
 function paintVideos(v){
   const b=$("#vidbox");if(!b||!v.videos)return;
-  const sig=v.status.state+JSON.stringify(v.videos.map(x=>[x.half,x.outline,x.pitch&&x.pitch.used,x.pitch&&x.pitch.reason,x.has_outline_picture]));
+  const sig=v.status.state+JSON.stringify(v.videos.map(x=>[x.half,x.outline,x.pitch&&x.pitch.used,x.pitch&&x.pitch.reason,x.has_outline_picture,x.outline_t,x.manual]));
   if(sig===vidSig&&vidEdit)return;
   const busy=false;                                   // changing things while it works stops the job and starts it again
   if(!vidEdit||sig!==vidSig){vidEdit=v.videos.map(x=>({half:x.half,outline:x.outline,redo:false}))}
@@ -212,7 +212,7 @@ function paintVideos(v){
      <label><input type="checkbox" data-vo="${i}" ${vidEdit[i].outline?"checked":""} ${busy?"disabled":""}> ${t("outline_use")}</label>
      <label><input type="checkbox" data-vr="${i}" ${busy?"disabled":""}> ${t("redo")}</label><button data-vd="${i}" ${busy?"disabled":""}>${t("draw")}</button></div>
      <div class="muted" style="font-size:13px;margin:4px 0">${msg}</div>
-     ${x.has_outline_picture?`<a href="/files/${encodeURIComponent(v.id)}/pitch${i}_outline.jpg?t=${Date.now()}" target="_blank"><img src="/files/${encodeURIComponent(v.id)}/pitch${i}_outline.jpg" style="width:100%;max-width:640px;border-radius:8px"></a>`:""}</div>`}).join("")}
+     ${x.has_outline_picture?`<a href="/files/${encodeURIComponent(v.id)}/pitch${i}_outline.jpg?t=${x.outline_t}" target="_blank"><img src="/files/${encodeURIComponent(v.id)}/pitch${i}_outline.jpg?t=${x.outline_t}" style="width:100%;max-width:640px;border-radius:8px"></a>`:""}</div>`}).join("")}
    <div class="row" style="margin-top:10px"><button class="primary" id="vap" ${busy?"disabled":""}>${t("apply")}</button></div></div>`;
   b.onclick=e=>{const el=e.target.closest("button[data-vd]");if(el)openEditor(v,+el.dataset.vd)};
   b.onchange=e=>{const el=e.target;if(el.dataset.vh!==undefined)vidEdit[+el.dataset.vh].half=+el.value;if(el.dataset.vo!==undefined)vidEdit[+el.dataset.vo].outline=el.checked;if(el.dataset.vr!==undefined)vidEdit[+el.dataset.vr].redo=el.checked};

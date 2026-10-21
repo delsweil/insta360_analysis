@@ -41,6 +41,27 @@ COST = {"check": 0.0, "extract": 0.75, "keyframes": 0.0, "render": 0.8, "charts"
 FIXED_SECONDS = {"check": 15, "pitch": 20, "teams": 120, "keyframes": 10, "charts": 30, "stats": 40, "package": 2}
 
 
+VERIFY_RENDER = True        # look into every finished video before it replaces the old one
+
+
+def verify_video(path: str, positions: int = 6, seconds: float = 3.0) -> List[str]:
+    """Play a few seconds at several places of a finished video; -> the problems found (empty = looks fine)."""
+    import kf_core as K
+    try:
+        dur = float(K.probe_video(path)["duration"])
+    except Exception as e:
+        return [f"cannot be opened ({str(e)[-100:]})"]
+    problems = []
+    for k in range(positions):
+        t = dur * (k + 0.5) / positions
+        r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-t", f"{seconds:g}", "-i", path, "-f", "null", "-"],
+                           capture_output=True, text=True)
+        err = (r.stderr or "").strip()
+        if r.returncode != 0 or err:
+            problems.append(f"at {t / 60:.1f} min: {err.splitlines()[0][:100] if err else 'decoding failed'}")
+    return problems
+
+
 def safe_name(s: str) -> str:
     s = re.sub(r"[^\w\-. ]+", "", s, flags=re.UNICODE).strip().replace(" ", "_")
     return s or "game"
@@ -230,6 +251,39 @@ class Job:
             return max(1.0, COST.get(kind, 0.0) * dur + FIXED_SECONDS.get(kind, 0))
         return float(FIXED_SECONDS.get(kind, 5))
 
+    # ── leftovers of an earlier run ──
+    def reap(self) -> bool:
+        """Stop a step that an earlier run of the app left running (the app was closed while it worked). Two runs
+        writing the same file would spoil it. -> True if something was stopped."""
+        info = read_json(self.p(".proc"))
+        stopped = False
+        if info and os.name == "posix":
+            pid = int(info.get("pid", 0))
+            try:
+                os.kill(pid, 0)
+                cmdline = subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
+                if self.dir in cmdline:                              # really ours, not a reused process number
+                    try:
+                        os.killpg(os.getpgid(pid), signal.SIGTERM)
+                    except OSError:
+                        os.kill(pid, signal.SIGTERM)
+                    for _ in range(50):
+                        time.sleep(0.1)
+                        try:
+                            os.kill(pid, 0)
+                        except OSError:
+                            break
+                    else:
+                        os.kill(pid, signal.SIGKILL)
+                    stopped = True
+            except (OSError, ValueError):
+                pass
+        try:
+            os.remove(self.p(".proc"))
+        except OSError:
+            pass
+        return stopped
+
     # ── running ──────────────────────────────────────────────────────────────
     def cancel(self) -> None:
         self.cancel_flag = True
@@ -243,6 +297,8 @@ class Job:
     def run(self) -> str:
         """Run every stage that is not done yet. Returns the final state."""
         self.cancel_flag = False
+        if self.reap():
+            self.log("stopped a step that an earlier run had left running")
         self.migrate()
         stages = self.stages()
         known = {s["id"]: s for s in self.status.get("stages", [])}
@@ -344,6 +400,7 @@ class Job:
         env = dict(os.environ, PYTHONUNBUFFERED="1")
         kw = {"start_new_session": True} if os.name == "posix" else {}
         self.proc = subprocess.Popen(cmd, cwd=HERE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, bufsize=0, **kw)
+        write_json(self.p(".proc"), {"pid": self.proc.pid, "step": sid})
         tail: List[str] = []
         buf, last_save = b"", 0.0
         fd = self.proc.stdout.fileno()
@@ -367,6 +424,10 @@ class Job:
                     self.set_progress(sid, f, line[:90])
         rc = self.proc.wait()
         self.proc = None
+        try:
+            os.remove(self.p(".proc"))
+        except OSError:
+            pass
         if self.cancel_flag:
             raise Cancelled()
         if rc != 0:
@@ -483,6 +544,28 @@ class Job:
                 return [[round(float(x)), round(float(y))] for x, y in poly], src
         return [[500, 870], [1440, 800], [2380, 870], [2700, 1000], [1440, 1130], [180, 1000]], "default"
 
+    def draw_outline(self, i: int, pts) -> None:
+        """The picture shown in the app for a hand-drawn outline: the line on the unwrapped view, and the players
+        seen (green = inside, red = outside)."""
+        import cv2
+        import numpy as np
+        fr = cv2.imread(self.ensure_frame(i))
+        if fr is None:
+            return
+        poly = np.array(pts, np.int32).reshape(-1, 1, 2)
+        if os.path.isfile(self.p(f"v{i}.detections.jsonl")):
+            inside = np.zeros(fr.shape[:2], np.uint8)
+            cv2.fillPoly(inside, [poly], 255)
+            for x, y in self.feet(i, 1500):
+                ok = 0 <= y < inside.shape[0] and 0 <= x < inside.shape[1] and inside[y, x] > 0
+                cv2.circle(fr, (x, y), 7, (80, 200, 60) if ok else (60, 60, 230), -1)
+        cv2.polylines(fr, [poly], True, (60, 220, 240), 6)
+        for p in poly.reshape(-1, 2):
+            cv2.circle(fr, (int(p[0]), int(p[1])), 12, (255, 255, 255), -1)
+        cv2.putText(fr, "drawn by you", (40, 90), cv2.FONT_HERSHEY_SIMPLEX, 2.4, (60, 220, 240), 5)
+        cv2.imwrite(self.p(f"pitch{i}_outline.jpg"), cv2.resize(fr, (1440, 720), interpolation=cv2.INTER_AREA),
+                    [cv2.IMWRITE_JPEG_QUALITY, 88])
+
     def set_manual_outline(self, i: int, pts: List[List[float]]) -> None:
         if not 0 <= i < len(self.spec["videos"]):
             raise ValueError("no such video")
@@ -490,15 +573,20 @@ class Job:
         if len(pts) < 3 or any(not (0 <= x <= 2880 and 0 <= y <= 1440) for x, y in pts):
             raise ValueError("the outline needs at least 3 points inside the picture")
         write_json(self.manual_file(i), {"pixel_polygon": pts, "manual": True})
+        try:
+            self.draw_outline(i, pts)                          # the new line is visible at once
+        except Exception as e:
+            self.log(f"outline picture not made: {e}")
         self.spec["videos"][i]["outline"] = True
         write_json(self.p("job.json"), self.spec)
         self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "charts", "stats")
 
     def clear_manual_outline(self, i: int) -> None:
-        try:
-            os.remove(self.manual_file(i))
-        except OSError:
-            pass
+        for f in (self.manual_file(i), self.p(f"pitch{i}_outline.jpg")):     # the picture comes back with the automatic outline
+            try:
+                os.remove(f)
+            except OSError:
+                pass
         self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "charts", "stats")
 
     def feet(self, i: int, max_pts: int = 3000) -> List[List[int]]:
@@ -532,6 +620,10 @@ class Job:
             info["manual"] = manual
             if manual:                                          # drawn by the coach: trusted
                 calib = self.manual_file(i)
+                try:
+                    self.draw_outline(i, read_json(calib)["pixel_polygon"])
+                except Exception as e:
+                    self.log(f"outline picture not made: {e}")
             else:
                 png = self.ensure_frame(i)
                 calib = self.p(f"pitch{i}.json")
@@ -597,6 +689,11 @@ class Job:
         self.exec(self.py("render_keyframes.py", "--input", self.videos()[i]["path"], "--keyframes",
                           self.p(f"v{i}.auto.keyframes.json"), "--output", out + ".part.mp4", "--audio", *self.encoder()),
                   st["id"], parse)
+        if VERIFY_RENDER:
+            problems = verify_video(out + ".part.mp4")
+            if problems:
+                os.remove(out + ".part.mp4")
+                raise RuntimeError(f"The new video is damaged ({problems[0]}). Make it again with 'Plan camera again'.")
         os.replace(out + ".part.mp4", out)
 
     def labels(self) -> Optional[dict]:
