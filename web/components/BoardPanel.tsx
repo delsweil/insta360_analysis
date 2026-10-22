@@ -22,7 +22,7 @@ function spread(v: number[]) {
   return q(0.9) - q(0.1)
 }
 
-function Pitch({ box }: { box: Box }) {
+function Pitch({ box, grass = 1 }: { box: Box; grass?: number }) {
   const [x0, x1, y0, y1] = box
   const L = x1 - x0
   const W = y1 - y0
@@ -35,9 +35,9 @@ function Pitch({ box }: { box: Box }) {
   const bands = Array.from({ length: 10 }, (_, i) => i)
   return (
     <g>
-      <rect x={x0 - PAD} y={y0 - PAD} width={L + 2 * PAD} height={W + 2 * PAD} fill="#2a7344" />
+      <rect x={x0 - PAD} y={y0 - PAD} width={L + 2 * PAD} height={W + 2 * PAD} fill="#2a7344" fillOpacity={grass} />
       {bands.map(i => (
-        <rect key={i} x={x0 + (L / 10) * i} y={y0} width={L / 10} height={W} fill={i % 2 ? '#2f7d49' : '#2a7344'} />
+        <rect key={i} x={x0 + (L / 10) * i} y={y0} width={L / 10} height={W} fill={i % 2 ? '#2f7d49' : '#2a7344'} fillOpacity={grass} />
       ))}
       <g fill="none" stroke={line} strokeWidth={lw}>
         <rect x={x0} y={y0} width={L} height={W} />
@@ -69,9 +69,10 @@ interface ViewProps {
   trails: boolean
   svgRef?: React.Ref<SVGSVGElement>
   maxHeight?: string
+  translucent?: boolean   // small see-through version for over the video: pitch lines and dots only
 }
 
-function BoardView({ board, t, trails, svgRef, maxHeight }: ViewProps) {
+function BoardView({ board, t, trails, svgRef, maxHeight, translucent }: ViewProps) {
   const part = partAt(board, t)
   const [x0, x1, y0, y1] = boxOf(board, part)
   const idx = frameAt(board, t)
@@ -101,19 +102,19 @@ function BoardView({ board, t, trails, svgRef, maxHeight }: ViewProps) {
     <svg
       ref={svgRef}
       viewBox={`${x0 - PAD} ${-(y1 + PAD)} ${vbW} ${vbH}`}
-      style={{ display: 'block', width: '100%', maxHeight, borderRadius: 8, background: '#2a7344' }}
+      style={{ display: 'block', width: '100%', maxHeight, borderRadius: 8, background: translucent ? 'transparent' : '#2a7344' }}
       role="img"
       aria-label="Top-down board of the players"
     >
       <g transform="scale(1,-1)">
-        <Pitch box={[x0, x1, y0, y1]} />
+        <Pitch box={[x0, x1, y0, y1]} grass={translucent ? 0.42 : 1} />
         {wedge && <path d={wedge} fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.45)" strokeWidth={0.2} strokeDasharray="1.2 0.8" />}
         {old.map((p, i) => (
           <circle key={`o${i}`} cx={p.x} cy={p.y} r={0.55} fill={colours[p.team] ?? OTHER_COLOUR} opacity={0.4 - p.age * 0.05} />
         ))}
         {[2, 1, 0].map(team =>
           players.filter(p => p.team === team).map((p, i) => (
-            <circle key={`${team}-${i}`} cx={p.x} cy={p.y} r={team === 2 ? 0.95 : 1.35}
+            <circle key={`${team}-${i}`} cx={p.x} cy={p.y} r={team === 2 ? (translucent ? 1.2 : 0.95) : (translucent ? 1.8 : 1.35)}
               fill={colours[team]} stroke="#0a1a3a" strokeWidth={0.3} opacity={team === 2 ? 0.8 : 1} />
           )),
         )}
@@ -171,6 +172,7 @@ interface Props {
   reload: () => void
   currentTime: number
   isCoach: boolean
+  compact?: boolean     // only the see-through pitch, no card, text or buttons (mobile HUD)
 }
 
 const btn: React.CSSProperties = {
@@ -178,7 +180,7 @@ const btn: React.CSSProperties = {
   borderRadius: 99, padding: '3px 10px', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
 }
 
-export default function BoardPanel({ gameId, gameTitle, state, reload, currentTime, isCoach }: Props) {
+export default function BoardPanel({ gameId, gameTitle, state, reload, currentTime, isCoach, compact }: Props) {
   const board = state.status === 'ready' ? state.board : null
   const raw = state.status === 'ready' ? state.raw : null
   const [trails, setTrails] = useState(false)
@@ -254,6 +256,7 @@ export default function BoardPanel({ gameId, gameTitle, state, reload, currentTi
   }
 
   const t = currentTime + shift
+  if (compact) return <BoardView board={board} t={t} trails={false} translucent />
   const part = partAt(board, t)
   const idx = frameAt(board, t)
   const players = idx >= 0 ? playersOf(board.frames[idx]) : []

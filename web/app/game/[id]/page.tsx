@@ -1503,32 +1503,28 @@ export default function GamePage({ params }: Props) {
           )}
         </div>
 
-        {/* ── Tactical board (stays on screen, also when the HUD hides) ── */}
+        {/* ── Tactical board: small see-through pitch (stays on screen, also when the HUD hides) ── */}
         {showBoard && boardState.status === 'ready' && (
           <div
-            onClick={e => e.stopPropagation()}
             style={{
-              position: 'absolute', zIndex: 18,
+              position: 'absolute', zIndex: 18, pointerEvents: 'none',
               right: 'max(8px, env(safe-area-inset-right))',
-              top: 'max(48px, calc(env(safe-area-inset-top) + 38px))',
-              bottom: 'max(64px, calc(env(safe-area-inset-bottom) + 56px))',
-              width: 'min(46vw, 380px)',
+              top: 'max(52px, calc(env(safe-area-inset-top) + 42px))',
+              width: 'min(30vw, 260px)',
             }}
           >
+            <BoardPanel gameId={id} gameTitle={game.title} state={boardState} reload={reloadBoard} currentTime={currentTime} isCoach={false} compact />
             <button
               onClick={() => setShowBoard(false)}
               aria-label="Close board"
               style={{
-                position: 'absolute', top: 0, left: -34, width: 28, height: 28, borderRadius: '50%',
-                border: '1px solid rgba(255,255,255,0.3)', background: 'rgba(0,0,0,0.55)',
-                color: '#fff', fontSize: 14, cursor: 'pointer',
+                position: 'absolute', top: -4, left: -30, width: 26, height: 26, borderRadius: '50%', pointerEvents: 'auto',
+                border: '1px solid rgba(255,255,255,0.3)', background: 'rgba(0,0,0,0.5)',
+                color: '#fff', fontSize: 13, cursor: 'pointer',
               }}
             >
               ✕
             </button>
-            <div style={{ height: '100%', overflowY: 'auto', borderRadius: 12, boxShadow: '0 4px 24px rgba(0,0,0,0.5)' }}>
-              <BoardPanel gameId={id} gameTitle={game.title} state={boardState} reload={reloadBoard} currentTime={currentTime} isCoach={false} />
-            </div>
           </div>
         )}
 
