@@ -51,7 +51,6 @@ export default function GamePage({ params }: Props) {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [isMobile, setIsMobile] = useState(false)
   const [showAnnotations, setShowAnnotations] = useState(false)
-  const [showBoard, setShowBoard] = useState(false) // mobile: board under the timeline
   const { state: boardState, reload: reloadBoard } = useBoard(id)
   const [showShare, setShowShare] = useState(false)
   const [markIn, setMarkIn] = useState<number | null>(null)
@@ -80,6 +79,11 @@ export default function GamePage({ params }: Props) {
   const autoResumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [showVeoImport, setShowVeoImport] = useState(false)
   const [editingLabelId, setEditingLabelId] = useState<string | null>(null)
+  const [hudVisible, setHudVisible] = useState(false)
+  const [mobilePlaybackRate, setMobilePlaybackRate] = useState(1)
+  const [isMuted, setIsMuted] = useState(true) // starts muted for autoplay
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [showFsHint, setShowFsHint] = useState(false)
 
   // Shapes belonging to whichever tactical annotation's [shown, removed]
   // window currently contains playback — a pure time-range check now, not
@@ -205,6 +209,13 @@ export default function GamePage({ params }: Props) {
     return () => clearInterval(interval)
   }, [])
 
+  // Track fullscreen state (handles Escape key / browser exit)
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', handler)
+    return () => document.removeEventListener('fullscreenchange', handler)
+  }, [])
+
   const seekTo = useCallback((sec: number) => {
     firedAnnotationIds.current.clear() // allow re-triggering annotations when a viewer jumps around
     playerRef.current?.contentWindow?.postMessage(
@@ -233,6 +244,12 @@ export default function GamePage({ params }: Props) {
   const resumeVideo = useCallback(() => {
     playerRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*'
+    )
+  }, [])
+
+  const setVideoRate = useCallback((rate: number) => {
+    playerRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'setPlaybackRate', args: [rate] }), '*'
     )
   }, [])
 
@@ -805,233 +822,803 @@ export default function GamePage({ params }: Props) {
     </div>
   )
 
-  // ── MOBILE LAYOUT ──────────────────────────────────────────────
-  if (isMobile) {
-    return (
-      <div style={{
-        minHeight: '100vh', background: '#F8F8F6',
-        fontFamily: 'DM Sans, sans-serif', color: '#111318',
-        display: 'flex', flexDirection: 'column',
-      }}>
-        <Topbar role={userRole} />
+  // Shared style for HUD transport buttons (used inside the isMobile block)
+  const hudTransportBtn: React.CSSProperties = {
+    background: 'rgba(0,0,0,0.45)',
+    backdropFilter: 'blur(8px)',
+    border: '1px solid rgba(255,255,255,0.15)',
+    borderRadius: '50%',
+    color: '#fff',
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    width: 44,
+    height: 44,
+  }
 
-        {/* Game title */}
-        <div style={{ padding: '10px 14px 0' }}>
+  // ── MOBILE LAYOUT — landscape fullscreen HUD ───────────────────
+  if (isMobile) {
+    const activeLabelDef = LABEL_DEFS.find(l => l.key === selectedLabel)
+    const activeLabelColor = labelColor(selectedLabel)
+    const activeLabelDisplay = labelDisplay(selectedLabel, game.home_team, game.away_team)
+
+    // HUD auto-hides after 3 s of no interaction; tap video to show/hide
+    // We track this with a simple toggle + timeout ref.
+
+    const mobileMarkClip = () => {
+      if (markIn === null) {
+        // First tap: mark in
+        setMarkIn(currentTime)
+        setIsRecording(true)
+        setSaved(false)
+      } else {
+        // Second tap: save the range
+        const startTime = markIn
+        const endTime = currentTime > markIn + 0.5 ? currentTime : markIn + 1
+        ;(async () => {
+          setSaving(true)
+          const { data: { user } } = await supabase.auth.getUser()
+          if (!user) { setSaving(false); return }
+          const { data } = await supabase
+            .from('annotations')
+            .insert({
+              game_id: id, user_id: user.id,
+              timestamp_sec: startTime,
+              end_timestamp_sec: endTime,
+              label: selectedLabel,
+              note: note.trim() || null,
+              is_public: true,
+            })
+            .select('*, profiles(display_name)')
+            .single()
+          if (data) {
+            setAnnotations(prev => [...prev, data].sort((a, b) => a.timestamp_sec - b.timestamp_sec))
+            setSaved(true)
+            setTimeout(() => setSaved(false), 1500)
+          }
+          setMarkIn(null)
+          setIsRecording(false)
+          setSaving(false)
+        })()
+      }
+    }
+
+    const SPEED_STEPS = [0.5, 1, 1.25, 1.5, 2]
+
+    const cycleSpeed = () => {
+      const idx = SPEED_STEPS.indexOf(mobilePlaybackRate)
+      const next = SPEED_STEPS[(idx + 1) % SPEED_STEPS.length]
+      setMobilePlaybackRate(next)
+      setVideoRate(next)
+    }
+
+    return (
+      <div
+        style={{
+          position: 'fixed', inset: 0,
+          background: '#000',
+          fontFamily: 'DM Sans, sans-serif',
+          overflow: 'hidden',
+        }}
+      >
+        {/* ── VIDEO fills the entire screen ── */}
+        <iframe
+          ref={playerRef}
+          src={`${game.video_url}?enablejsapi=1&controls=0&rel=0&modestbranding=1&autoplay=1&mute=1&playsinline=1`}
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
+          allowFullScreen
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        />
+
+        {/* Invisible tap-catcher — sits above the iframe (zIndex 7).
+            Receives taps on the video area and toggles HUD visibility.
+            Disabled while drawing so pointer events reach AnnotationCanvas. */}
+        <div
+          onClick={() => { if (!isDrawing) setHudVisible(v => !v) }}
+          style={{
+            position: 'absolute', inset: 0, zIndex: 7, background: 'transparent',
+            pointerEvents: isDrawing ? 'none' : 'auto',
+          }}
+        />
+
+        {/* ── HUD wrapper — shown/hidden by tap ── */}
+        {/* Tapping the wrapper background (not a button) hides the HUD.
+            While drawing, always visible so the draw toolbar stays accessible. */}
+        <div
+          onClick={() => { if (!isDrawing) setHudVisible(false) }}
+          style={{
+            position: 'absolute', inset: 0,
+            opacity: (hudVisible || isDrawing) ? 1 : 0,
+            transition: 'opacity 0.2s ease',
+            pointerEvents: (hudVisible || isDrawing) ? 'auto' : 'none',
+            zIndex: 8,
+          }}
+        >
+
+        {/* Tactical shapes overlay */}
+        <AnnotationCanvas
+          ref={mobileCanvasRef}
+          shapes={activeTacticalShapes}
+          editable={isDrawing}
+          tool={drawTool}
+          onAddShape={s => setDraftShapes(prev => [...prev, s])}
+          onUpdateShape={(shapeId, patch) =>
+            setDraftShapes(prev => prev.map(s => s.id === shapeId ? { ...s, ...patch } as Shape : s))
+          }
+          onRemoveShape={shapeId => setDraftShapes(prev =>
+            prev.filter(s => s.id !== shapeId)
+              .filter(s => !(s.type === 'connector' && (s.fromId === shapeId || s.toId === shapeId)))
+          )}
+          onToggleVideo={undefined}
+        />
+
+        {/* Orange recording border */}
+        {isRecording && (
           <div style={{
-            fontFamily: 'Bebas Neue, sans-serif',
-            fontSize: 17, color: '#0f2972', letterSpacing: '0.02em', lineHeight: 1.1,
+            position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 5,
+            border: '3px solid rgba(232,120,10,0.75)',
+            boxShadow: 'inset 0 0 0 1px rgba(232,120,10,0.3)',
+          }} />
+        )}
+
+        {/* ── HUD — transparent overlay ── */}
+        {/* Top gradient */}
+        <div style={{
+          position: 'absolute', top: 0, left: 0, right: 0, height: '35%',
+          background: 'linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, transparent 100%)',
+          pointerEvents: 'none', zIndex: 6,
+        }} />
+        {/* Bottom gradient */}
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0, height: '50%',
+          background: 'linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)',
+          pointerEvents: 'none', zIndex: 6,
+        }} />
+
+        {/* Top bar — safe-area-inset-top pushes content below Dynamic Island / notch */}
+        <div onClick={e => e.stopPropagation()} style={{
+          position: 'absolute', top: 0, left: 0, right: 0,
+          zIndex: 10, display: 'flex', alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingTop: 'max(10px, env(safe-area-inset-top))',
+          paddingLeft: 14, paddingRight: 14, paddingBottom: 0,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button
+              onClick={() => window.history.back()}
+              style={{
+                background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(255,255,255,0.15)',
+                borderRadius: 8, color: 'rgba(255,255,255,0.7)',
+                fontSize: 12, fontWeight: 600, padding: '5px 10px', cursor: 'pointer',
+              }}
+            >
+              ← Zurück
+            </button>
+            {/* Unmute button — prominent until user unmutes */}
+            {isMuted && (
+              <button
+                onClick={() => {
+                  playerRef.current?.contentWindow?.postMessage(
+                    JSON.stringify({ event: 'command', func: 'unMute', args: [] }), '*'
+                  )
+                  setIsMuted(false)
+                }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  background: '#E8780A', border: 'none',
+                  borderRadius: 8, color: '#fff',
+                  fontSize: 12, fontWeight: 700, padding: '5px 10px', cursor: 'pointer',
+                }}
+              >
+                🔇 Ton an
+              </button>
+            )}
+          </div>
+          <div style={{
+            fontFamily: 'Bebas Neue, sans-serif', fontSize: 14,
+            color: 'rgba(255,255,255,0.9)', letterSpacing: '0.08em',
+            textShadow: '0 1px 4px rgba(0,0,0,0.5)',
           }}>
             {game.title}
           </div>
-          <div style={{ fontSize: 11, color: '#8A8F9E', marginTop: 1 }}>
-            {new Date(game.date).toLocaleDateString('de-DE', {
-              day: '2-digit', month: 'long', year: 'numeric'
-            })}
-            &nbsp;·&nbsp;
-            <span style={{ color: '#E8780A', fontWeight: 600 }}>{annotations.length}</span>
-            &nbsp;annotations&nbsp;·&nbsp;
-            <span style={{ color: '#22c55e', fontWeight: 600 }}>● live</span>
+          <div style={{
+            fontFamily: 'Bebas Neue, sans-serif', fontSize: 16,
+            color: '#fff', letterSpacing: '0.1em',
+            background: 'rgba(255,255,255,0.12)', backdropFilter: 'blur(6px)',
+            padding: '3px 12px', borderRadius: 7,
+          }}>
+            {annotations.filter(a => a.label === 'goal_home').length}
+            {' – '}
+            {annotations.filter(a => a.label === 'goal_away').length}
           </div>
         </div>
 
-        {showAnnotations ? (
-          // Annotations list view
-          <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px' }}>
+        {/* Transport controls — centred vertically */}
+        <div onClick={e => e.stopPropagation()} style={{
+          position: 'absolute', top: '50%', left: '50%',
+          transform: 'translate(-50%, -50%)',
+          zIndex: 10, display: 'flex', alignItems: 'center', gap: 14,
+        }}>
+          {([-30, -10] as const).map(delta => (
             <button
-              onClick={() => setShowAnnotations(false)}
+              key={delta}
+              onClick={() => seekTo(Math.max(0, currentTime + delta))}
+              style={hudTransportBtn}
+            >
+              {delta === -30
+                ? <svg width="18" height="18" viewBox="0 0 18 18" fill="white"><polygon points="15,3 6,9 15,15"/><rect x="2" y="3" width="2.5" height="12" rx="1" fill="white"/></svg>
+                : <svg width="18" height="18" viewBox="0 0 18 18" fill="white"><polygon points="14,3 5,9 14,15"/></svg>
+              }
+              <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.04em', color: 'rgba(255,255,255,0.6)' }}>
+                {delta}s
+              </span>
+            </button>
+          ))}
+
+          {/* Play/Pause */}
+          <button
+            onClick={() => isPlaying ? pauseVideo() : resumeVideo()}
+            style={{
+              ...hudTransportBtn,
+              width: 56, height: 56,
+              background: 'rgba(255,255,255,0.2)',
+              borderColor: 'rgba(255,255,255,0.4)',
+            }}
+          >
+            {isPlaying
+              ? <svg width="22" height="22" viewBox="0 0 22 22" fill="white"><rect x="4" y="3" width="4.5" height="16" rx="1.5"/><rect x="13.5" y="3" width="4.5" height="16" rx="1.5"/></svg>
+              : <svg width="22" height="22" viewBox="0 0 22 22" fill="white"><polygon points="5,3 19,11 5,19"/></svg>
+            }
+          </button>
+
+          {([10, 30] as const).map(delta => (
+            <button
+              key={delta}
+              onClick={() => seekTo(Math.min(duration || 9999, currentTime + delta))}
+              style={hudTransportBtn}
+            >
+              {delta === 10
+                ? <svg width="18" height="18" viewBox="0 0 18 18" fill="white"><polygon points="4,3 13,9 4,15"/></svg>
+                : <svg width="18" height="18" viewBox="0 0 18 18" fill="white"><polygon points="3,3 12,9 3,15"/><rect x="13.5" y="3" width="2.5" height="12" rx="1" fill="white"/></svg>
+              }
+              <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.04em', color: 'rgba(255,255,255,0.6)' }}>
+                +{delta}s
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {/* ── Bottom HUD ── */}
+        <div onClick={e => e.stopPropagation()} style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0,
+          zIndex: 10,
+          paddingTop: 0, paddingLeft: 12, paddingRight: 12,
+          paddingBottom: 'max(10px, env(safe-area-inset-bottom))',
+        }}>
+          {/* Timeline row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <span style={{
+              fontFamily: 'Bebas Neue, sans-serif', fontSize: 13,
+              color: 'rgba(255,255,255,0.85)', letterSpacing: '0.06em',
+              flexShrink: 0, minWidth: 38,
+            }}>
+              {formatTime(currentTime)}
+            </span>
+
+            {/* Scrub bar */}
+            <div
               style={{
-                marginBottom: 10, fontSize: 12, fontWeight: 600,
-                color: '#0f2972', background: 'none', border: 'none',
-                cursor: 'pointer', padding: 0,
+                flex: 1, height: 32, position: 'relative',
+                cursor: 'pointer', touchAction: 'none',
+              }}
+              onPointerDown={e => {
+                e.currentTarget.setPointerCapture(e.pointerId)
+                const r = e.currentTarget.getBoundingClientRect()
+                scrubTo(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * (duration || 1))
+              }}
+              onPointerMove={e => {
+                if (e.buttons !== 1) return
+                const r = e.currentTarget.getBoundingClientRect()
+                scrubTo(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * (duration || 1))
               }}
             >
-              ← Back to video
-            </button>
-            {annotations.length === 0 ? (
-              <div style={{ textAlign: 'center', color: '#8A8F9E', fontSize: 14, padding: '40px 0' }}>
-                No annotations yet.
-              </div>
-            ) : filteredAnnotations.map(ann => (
-              <AnnRow key={ann.id} ann={ann} compact />
-            ))}
-          </div>
-        ) : (
-          <>
-            {/* Video */}
-            <div style={{ background: '#091d52', aspectRatio: '16/9', flexShrink: 0, position: 'relative' }}>
-              <iframe
-                ref={playerRef}
-                src={`${game.video_url}?enablejsapi=1&controls=0&rel=0&modestbranding=1`}
-                style={{ width: '100%', height: '100%', border: 'none' }}
-                allowFullScreen
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-              />
-              {activeTacticalShapes.length > 0 && (
+              {/* Track */}
+              <div style={{
+                position: 'absolute', left: 0, right: 0,
+                top: '50%', height: 5, transform: 'translateY(-50%)',
+                background: 'rgba(255,255,255,0.2)', borderRadius: 3,
+              }}>
+                {/* Progress fill */}
                 <div style={{
-                  position: 'absolute', inset: 0,
-                  background: 'rgba(9, 29, 82, 0.4)', pointerEvents: 'none',
+                  position: 'absolute', left: 0, top: 0, bottom: 0,
+                  width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%',
+                  background: '#E8780A', borderRadius: 3,
+                }} />
+                {/* markIn range highlight */}
+                {markIn !== null && duration > 0 && (
+                  <div style={{
+                    position: 'absolute', top: 0, bottom: 0,
+                    left: `${(markIn / duration) * 100}%`,
+                    width: `${((currentTime - markIn) / duration) * 100}%`,
+                    background: 'rgba(232,120,10,0.6)',
+                  }} />
+                )}
+              </div>
+              {/* Playhead */}
+              <div style={{
+                position: 'absolute', top: '50%',
+                transform: 'translate(-50%, -50%)',
+                left: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%',
+                width: 14, height: 14, borderRadius: '50%',
+                background: '#fff',
+                boxShadow: isRecording ? '0 0 0 2px #E8780A, 0 0 8px rgba(232,120,10,0.6)' : '0 0 0 2px #E8780A',
+              }} />
+              {/* markIn pin */}
+              {markIn !== null && duration > 0 && (
+                <div style={{
+                  position: 'absolute', top: '50%', transform: 'translate(-50%, -50%)',
+                  left: `${(markIn / duration) * 100}%`,
+                  width: 3, height: 22, background: '#E8780A', borderRadius: 2,
                 }} />
               )}
-              <AnnotationCanvas
-                ref={mobileCanvasRef}
-                shapes={activeTacticalShapes}
-                editable={isDrawing}
-                tool={drawTool}
-                onAddShape={s => setDraftShapes(prev => [...prev, s])}
-                onUpdateShape={(shapeId, patch) =>
-                  setDraftShapes(prev => prev.map(s => s.id === shapeId ? { ...s, ...patch } as Shape : s))
-                }
-                onRemoveShape={shapeId => setDraftShapes(prev =>
-                  prev.filter(s => s.id !== shapeId)
-                    // cascade delete: drop any connector that referenced the removed shape
-                    .filter(s => !(s.type === 'connector' && (s.fromId === shapeId || s.toId === shapeId)))
-                )}
-                onToggleVideo={() => (isPlaying ? pauseVideo() : resumeVideo())}
-              />
-            </div>
-
-            {/* Filter bar - mobile */}
-            <div style={{ padding: '6px 14px 0', flexShrink: 0, overflowX: 'auto' }}>
-              <AnnotationFilter
-                filter={filter}
-                onChange={setFilter}
-                counts={filterCounts}
-              />
-            </div>
-
-            {/* Timeline */}
-            <div style={{ padding: '6px 14px 4px', flexShrink: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-                <span style={{
-                  fontFamily: 'Bebas Neue, sans-serif',
-                  fontSize: 14, color: '#0f2972', letterSpacing: '0.04em',
-                }}>
-                  {formatTime(currentTime)}
-                </span>
-                <span style={{ display: 'flex', gap: 6 }}>
-                  {boardState.status === 'ready' && (
-                    <button
-                      onClick={() => setShowBoard(v => !v)}
-                      style={{
-                        fontSize: 11, fontWeight: 600, color: showBoard ? '#fff' : '#0f2972',
-                        background: showBoard ? '#0f2972' : '#e8edf8', border: 'none', borderRadius: 99,
-                        padding: '3px 10px', cursor: 'pointer',
-                      }}
-                    >
-                      Board
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setShowAnnotations(true)}
-                    style={{
-                      fontSize: 11, fontWeight: 600, color: '#0f2972',
-                      background: '#e8edf8', border: 'none', borderRadius: 99,
-                      padding: '3px 10px', cursor: 'pointer',
-                    }}
-                  >
-                    Annotations ({annotations.length})
-                  </button>
-                </span>
-              </div>
-              <Timeline height={20} mobileSize />
-            </div>
-
-            {/* Tactical board - mobile */}
-            {showBoard && (
-              <div style={{ padding: '6px 14px', flexShrink: 0 }}>
-                <BoardPanel gameId={id} gameTitle={game.title} state={boardState} reload={reloadBoard} currentTime={currentTime} isCoach={false} />
-              </div>
-            )}
-
-            {/* Label picker */}
-            <div style={{ padding: '6px 14px', flexShrink: 0, overflowX: 'auto' }}>
-              <LabelPicker size="large" />
-            </div>
-
-            {/* Coach note */}
-            {isCoach && (
-              <div style={{ padding: '4px 14px', flexShrink: 0 }}>
-                <input
-                  type="text"
-                  placeholder="Tactical note..."
-                  value={note}
-                  onChange={e => setNote(e.target.value)}
+              {/* Annotation markers */}
+              {annotations.map(ann => (
+                <div
+                  key={ann.id}
+                  onClick={e => { e.stopPropagation(); seekTo(ann.timestamp_sec) }}
                   style={{
-                    width: '100%', fontSize: 13, padding: '8px 12px',
-                    border: '1px solid #E4E6EE', borderRadius: 8,
-                    outline: 'none', fontFamily: 'DM Sans, sans-serif',
-                    color: '#111318', background: '#fff', boxSizing: 'border-box',
+                    position: 'absolute', top: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    left: duration > 0 ? `${(ann.timestamp_sec / duration) * 100}%` : '0%',
+                    width: 10, height: 10, borderRadius: '50%',
+                    background: labelColor(ann.label),
+                    border: '2px solid rgba(0,0,0,0.4)',
+                    cursor: 'pointer', zIndex: 2,
                   }}
                 />
-              </div>
-            )}
+              ))}
+            </div>
 
-            {/* Clip recorder */}
-            {!isRecording ? (
-              <div style={{ padding: '8px 14px 20px', flexShrink: 0 }}>
+            <span style={{
+              fontFamily: 'Bebas Neue, sans-serif', fontSize: 13,
+              color: 'rgba(255,255,255,0.5)', letterSpacing: '0.06em',
+              flexShrink: 0,
+            }}>
+              {formatTime(duration)}
+            </span>
+          </div>
+
+          {/* Action row — drawing mode replaces normal controls */}
+          {isDrawing ? (
+            /* ── Mobile draw toolbar ── */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+              {/* Tool picker row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, overflowX: 'auto', paddingBottom: 2 }}>
+                {([
+                  { key: 'select',    icon: '↖', label: 'Auswahl' },
+                  { key: 'zone',      icon: '▭', label: 'Zone' },
+                  { key: 'curve',     icon: '↝', label: 'Linie' },
+                  { key: 'connector', icon: '⌇', label: 'Pfeil' },
+                  { key: 'cone',      icon: '◣', label: 'Spieler' },
+                  { key: 'highlight', icon: '◎', label: 'Spot' },
+                  { key: 'label',     icon: 'T', label: 'Text' },
+                  { key: 'number',    icon: '①', label: 'Nr.' },
+                ] as const).map(t => {
+                  const isSelected = drawTool === t.key
+                  return (
+                    <button
+                      key={t.key}
+                      onClick={() => setDrawTool(t.key as typeof drawTool)}
+                      title={t.label}
+                      style={{
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+                        padding: '5px 8px', borderRadius: 8, flexShrink: 0,
+                        border: `1.5px solid ${isSelected ? '#4ade80' : 'rgba(255,255,255,0.2)'}`,
+                        background: isSelected ? 'rgba(74,222,128,0.15)' : 'rgba(255,255,255,0.07)',
+                        color: isSelected ? '#4ade80' : 'rgba(255,255,255,0.7)',
+                        cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
+                      }}
+                    >
+                      <span style={{ fontSize: 14 }}>{t.icon}</span>
+                      <span style={{ fontSize: 8, fontWeight: 600, letterSpacing: '0.03em' }}>{t.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+              {/* Undo / Clear / Done row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <button
+                  onClick={() => setDraftShapes(prev => prev.slice(0, -1))}
+                  disabled={draftShapes.length === 0}
+                  style={{
+                    padding: '0 12px', height: 36,
+                    background: 'rgba(255,255,255,0.07)',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    borderRadius: 9,
+                    color: draftShapes.length > 0 ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.25)',
+                    fontSize: 12, fontWeight: 600,
+                    fontFamily: 'DM Sans, sans-serif', cursor: draftShapes.length > 0 ? 'pointer' : 'default',
+                    flexShrink: 0,
+                  }}
+                >↩ Undo</button>
+                <button
+                  onClick={() => setDraftShapes([])}
+                  style={{
+                    padding: '0 12px', height: 36,
+                    background: 'rgba(239,68,68,0.1)',
+                    border: '1px solid rgba(239,68,68,0.3)',
+                    borderRadius: 9, color: 'rgba(239,68,68,0.85)',
+                    fontSize: 12, fontWeight: 600,
+                    fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+                  }}
+                >✕ Clear</button>
+                <div style={{ flex: 1 }} />
+                {/* Hint */}
+                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', flexShrink: 0 }}>
+                  {draftShapes.length} shapes
+                </span>
                 <button
                   onClick={() => {
-                    setMarkIn(currentTime)
-                    setIsRecording(true)
-                    setSaved(false)
+                    mobileCanvasRef.current?.finalizePending()
+                    desktopCanvasRef.current?.finalizePending()
+                    setIsDrawing(false)
+                    setDrawTool('select')
+                    setEditingAnnotationId(null)
+                    setMarkIn(null)
+                    setAnnotationEndSec(null)
+                    setClipEndSec(null)
                   }}
                   style={{
-                    width: '100%', padding: '16px',
-                    fontSize: 15, fontWeight: 700,
-                    fontFamily: 'DM Sans, sans-serif',
-                    borderRadius: 12, border: 'none',
-                    background: '#0f2972', color: '#fff', cursor: 'pointer',
+                    padding: '0 16px', height: 36,
+                    background: '#0f2972', border: 'none',
+                    borderRadius: 9, color: '#fff',
+                    fontSize: 12, fontWeight: 700,
+                    fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+                  }}
+                >✓ Fertig</button>
+
+                {/* Fullscreen toggle (drawing mode) */}
+                <button
+                  onClick={() => {
+                    if (!document.fullscreenElement) {
+                      document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {})
+                    } else {
+                      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {})
+                    }
+                  }}
+                  style={{
+                    padding: '0 11px', height: 36,
+                    background: 'rgba(255,255,255,0.08)',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    cursor: 'pointer', flexShrink: 0,
                   }}
                 >
-                  Start clip — {formatTime(currentTime)}
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    {isFullscreen
+                      ? <path d="M5 2H2v3M9 2h3v3M5 12H2V9M9 12h3V9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      : <path d="M2 5V2h3M9 2h3v3M2 9v3h3M12 9v3H9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    }
+                  </svg>
                 </button>
               </div>
-            ) : (
-              <ClipRecorder
-                currentTime={currentTime}
-                saving={saving}
-                saved={saved}
-                onSave={async (startTime, endTime) => {
-                  setSaving(true)
-                  const { data: { user } } = await supabase.auth.getUser()
-                  if (!user) { setSaving(false); return }
-                  const { data } = await supabase
-                    .from('annotations')
-                    .insert({
-                      game_id: id, user_id: user.id,
-                      timestamp_sec: startTime,
-                      end_timestamp_sec: endTime,
-                      label: selectedLabel,
-                      note: note.trim() || null,
-                      is_public: true,
-                    })
-                    .select('*, profiles(display_name)')
-                    .single()
-                  if (data) {
-                    setAnnotations(prev =>
-                      [...prev, data].sort((a, b) => a.timestamp_sec - b.timestamp_sec)
-                    )
-                    setSaved(true)
-                    setTimeout(() => {
-                      setSaved(false)
-                      setIsRecording(false)
-                      setMarkIn(null)
-                    }, 1500)
-                  }
-                  setSaving(false)
+            </div>
+          ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            {/* Mark / Save clip button */}
+            <button
+              onClick={mobileMarkClip}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 7,
+                padding: '0 14px', height: 38,
+                background: isRecording ? '#E8780A' : '#0f2972',
+                border: 'none', borderRadius: 9,
+                color: '#fff', fontSize: 13, fontWeight: 700,
+                fontFamily: 'DM Sans, sans-serif', cursor: 'pointer',
+                flexShrink: 0,
+                boxShadow: isRecording ? '0 0 0 0 rgba(232,120,10,0.5)' : 'none',
+                animation: isRecording ? 'mobilePulse 1.2s infinite' : 'none',
+              }}
+            >
+              {isRecording
+                ? <>
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <path d="M2 7l3.5 3.5 6.5-7" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                    {saving ? 'Speichern…' : `Speichern · ${formatTime(markIn ?? 0)}–${formatTime(currentTime)}`}
+                  </>
+                : <>
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <circle cx="7" cy="7" r="5.5" stroke="white" strokeWidth="1.5"/>
+                      <line x1="7" y1="4" x2="7" y2="10" stroke="white" strokeWidth="1.5"/>
+                      <line x1="4" y1="7" x2="10" y2="7" stroke="white" strokeWidth="1.5"/>
+                    </svg>
+                    Clip markieren
+                  </>
+              }
+            </button>
+
+            {/* Cancel (only while recording) */}
+            {isRecording && (
+              <button
+                onClick={() => { setMarkIn(null); setIsRecording(false); setSaved(false) }}
+                style={{
+                  padding: '0 10px', height: 38,
+                  background: 'rgba(239,68,68,0.15)',
+                  border: '1px solid rgba(239,68,68,0.35)',
+                  borderRadius: 9, color: 'rgba(239,68,68,0.9)',
+                  fontSize: 12, fontWeight: 600,
+                  fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
                 }}
-                onCancel={() => {
-                  setIsRecording(false)
-                  setMarkIn(null)
-                  setSaved(false)
-                }}
-              />
+              >
+                ✕
+              </button>
             )}
-          </>
+
+            {/* Label pill */}
+            <button
+              onClick={() => setShowAnnotations(prev => !prev)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '0 11px', height: 38,
+                background: 'rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)',
+                border: `1px solid ${activeLabelColor}66`,
+                borderRadius: 9, color: '#fff',
+                fontSize: 12, fontWeight: 600,
+                fontFamily: 'DM Sans, sans-serif', cursor: 'pointer',
+                flexShrink: 0,
+              }}
+              // We reuse showAnnotations to mean "show label sheet" on mobile HUD
+            >
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: activeLabelColor, flexShrink: 0 }} />
+              {activeLabelDisplay} ▾
+            </button>
+
+            {/* Tactical draw button — coaches only */}
+            {isCoach && (
+              <button
+                onClick={() => {
+                  setSelectedLabel('tactical')
+                  setHudVisible(true)
+                  startDrawing()
+                }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '0 11px', height: 38,
+                  background: 'rgba(255,255,255,0.07)',
+                  border: '1px solid rgba(255,255,255,0.18)',
+                  borderRadius: 9, color: 'rgba(255,255,255,0.8)',
+                  fontSize: 12, fontWeight: 600,
+                  fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+                }}
+              >
+                ✏ Draw
+              </button>
+            )}
+
+            {/* Playback speed */}
+            <button
+              onClick={cycleSpeed}
+              style={{
+                padding: '0 11px', height: 38,
+                background: mobilePlaybackRate !== 1 ? 'rgba(232,120,10,0.15)' : 'rgba(255,255,255,0.08)',
+                border: `1px solid ${mobilePlaybackRate !== 1 ? 'rgba(232,120,10,0.4)' : 'rgba(255,255,255,0.15)'}`,
+                borderRadius: 9,
+                color: mobilePlaybackRate !== 1 ? '#E8780A' : 'rgba(255,255,255,0.75)',
+                fontSize: 12, fontWeight: 700,
+                fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+              }}
+            >
+              {mobilePlaybackRate === 1 ? '1×' : `${mobilePlaybackRate}×`}
+            </button>
+
+            {/* Clip list toggle */}
+            <button
+              onClick={() => setFocusMode(prev => !prev)}
+              style={{
+                marginLeft: 'auto',
+                display: 'flex', alignItems: 'center', gap: 5,
+                padding: '0 11px', height: 38,
+                background: focusMode ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.08)',
+                border: '1px solid rgba(255,255,255,0.15)',
+                borderRadius: 9, color: 'rgba(255,255,255,0.75)',
+                fontSize: 12, fontWeight: 600,
+                fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+              }}
+            >
+              {focusMode ? '✕ Clips' : `≡ ${annotations.length} Clips`}
+            </button>
+
+            {/* Fullscreen / Add-to-Home-Screen button */}
+            <div style={{ position: 'relative', flexShrink: 0 }}>
+              <button
+                onClick={() => {
+                  const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent)
+                  if (isIOS) {
+                    setShowFsHint(h => !h)
+                  } else if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {})
+                  } else {
+                    document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {})
+                  }
+                }}
+                style={{
+                  padding: '0 11px', height: 38,
+                  background: 'rgba(255,255,255,0.08)',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  {isFullscreen
+                    ? <path d="M5 2H2v3M9 2h3v3M5 12H2V9M9 12h3V9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    : <path d="M2 5V2h3M9 2h3v3M2 9v3h3M12 9v3H9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  }
+                </svg>
+              </button>
+              {showFsHint && (
+                <div
+                  onClick={() => setShowFsHint(false)}
+                  style={{
+                    position: 'absolute', bottom: 46, right: 0,
+                    background: 'rgba(15,41,114,0.97)', backdropFilter: 'blur(12px)',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    borderRadius: 10, padding: '10px 14px',
+                    width: 220, zIndex: 30,
+                    color: '#fff', fontSize: 12, fontWeight: 500,
+                    fontFamily: 'DM Sans, sans-serif', lineHeight: 1.5,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>Vollbild auf iPhone</div>
+                  Tippe auf <strong>Teilen ⎋</strong> → <strong>„Zum Home-Bildschirm"</strong> — dann startet die App ohne Browserleiste.
+                  <div style={{ marginTop: 8, color: 'rgba(255,255,255,0.45)', fontSize: 11 }}>Tippe irgendwo zum Schließen</div>
+                </div>
+              )}
+            </div>
+          </div>
+          )}
+        </div>
+
+        {/* ── Label sheet (slides up from bottom) ── */}
+        {showAnnotations && (
+          <div
+            onClick={() => setShowAnnotations(false)}
+            style={{
+              position: 'absolute', inset: 0, zIndex: 20,
+              background: 'rgba(0,0,0,0.3)',
+            }}
+          >
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{
+                position: 'absolute', bottom: 0, left: 0, right: 0,
+                background: 'rgba(8,12,24,0.92)', backdropFilter: 'blur(16px)',
+                borderTop: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: '16px 16px 0 0',
+                padding: '0 14px 28px',
+              }}
+            >
+              <div style={{ width: 32, height: 4, background: 'rgba(255,255,255,0.2)', borderRadius: 2, margin: '10px auto 12px' }} />
+              <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.4)', marginBottom: 10 }}>
+                Kategorie wählen
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+                {LABEL_DEFS.filter(l => isCoach || !l.coachOnly).map(l => {
+                  const isSelected = selectedLabel === l.key
+                  const color = labelColor(l.key)
+                  return (
+                    <button
+                      key={l.key}
+                      onClick={() => {
+                        setSelectedLabel(l.key)
+                        setShowAnnotations(false)
+                      }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        padding: '9px 10px', borderRadius: 8,
+                        border: `1.5px solid ${isSelected ? color : 'rgba(255,255,255,0.1)'}`,
+                        background: isSelected ? `${color}30` : 'rgba(255,255,255,0.05)',
+                        color: isSelected ? color : 'rgba(255,255,255,0.8)',
+                        fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                        fontFamily: 'DM Sans, sans-serif',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <div style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                      {labelDisplay(l.key, game.home_team, game.away_team)}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
         )}
+
+        {/* ── Clip list panel (slides in from right) ── */}
+        {focusMode && (
+          <div style={{
+            position: 'absolute', top: 0, right: 0, bottom: 0,
+            width: '40%', maxWidth: 220,
+            background: 'rgba(6,10,22,0.88)', backdropFilter: 'blur(16px)',
+            borderLeft: '1px solid rgba(255,255,255,0.08)',
+            zIndex: 15, display: 'flex', flexDirection: 'column',
+          }}>
+            <div style={{
+              padding: '10px 12px 8px',
+              borderBottom: '1px solid rgba(255,255,255,0.07)',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            }}>
+              <span style={{
+                fontSize: 9, fontWeight: 700, textTransform: 'uppercase',
+                letterSpacing: '0.1em', color: 'rgba(255,255,255,0.35)',
+              }}>{annotations.length} Clips</span>
+              <button
+                onClick={() => setFocusMode(false)}
+                style={{
+                  background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)',
+                  fontSize: 16, cursor: 'pointer', padding: '0 2px', lineHeight: 1,
+                }}
+              >✕</button>
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {annotations.length === 0 ? (
+                <div style={{ padding: '20px 12px', fontSize: 12, color: 'rgba(255,255,255,0.3)', textAlign: 'center' }}>
+                  Noch keine Clips
+                </div>
+              ) : annotations.map(ann => {
+                const color = labelColor(ann.label)
+                const isActive = Math.abs(currentTime - ann.timestamp_sec) < 3
+                return (
+                  <div
+                    key={ann.id}
+                    onClick={() => seekTo(ann.timestamp_sec)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '8px 12px',
+                      borderBottom: '1px solid rgba(255,255,255,0.04)',
+                      cursor: 'pointer',
+                      background: isActive ? 'rgba(37,99,235,0.15)' : 'transparent',
+                    }}
+                  >
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                    <div style={{
+                      fontFamily: 'Bebas Neue, sans-serif', fontSize: 14,
+                      color: isActive ? '#93bbff' : 'rgba(255,255,255,0.75)',
+                      letterSpacing: '0.06em', flexShrink: 0, minWidth: 34,
+                    }}>
+                      {formatTime(ann.timestamp_sec)}
+                    </div>
+                    <div style={{
+                      fontSize: 10, fontWeight: 600,
+                      color: isActive ? '#93bbff' : 'rgba(255,255,255,0.5)',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {labelDisplay(ann.label, game.home_team, game.away_team)}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        </div>{/* end HUD wrapper */}
+
+        {/* Pulse animation for recording button */}
+        <style>{`
+          @keyframes mobilePulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(232,120,10,0.5); }
+            50% { box-shadow: 0 0 0 6px rgba(232,120,10,0); }
+          }
+        `}</style>
       </div>
     )
   }
+
 
   // ── DESKTOP LAYOUT ─────────────────────────────────────────────
   return (
