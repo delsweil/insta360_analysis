@@ -169,6 +169,18 @@ export default function HomePage() {
                     </div>
                     {canDelete && (
                       <button
+                        onClick={(e) => { e.stopPropagation(); router.push(`/game/${game.id}/edit`) }}
+                        style={{
+                          fontSize: 13, color: '#8A8F9E', background: 'none', border: 'none',
+                          cursor: 'pointer', padding: '4px 6px', lineHeight: 1,
+                        }}
+                        title="Spiel bearbeiten"
+                      >
+                        ✎
+                      </button>
+                    )}
+                    {canDelete && (
+                      <button
                         onClick={(e) => {
                           e.stopPropagation()
                           setConfirmDelete(
