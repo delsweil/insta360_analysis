@@ -24,6 +24,7 @@ export type Board = {
   frames: (number | null)[][]
   times: Float64Array
   box: Box              // whole-game fallback when a part carries none
+  reach: Box            // where anyone was ever drawn (0.3-99.7 %): the view never clips a player outside the pitch box
   kAngle: number
   shift: number         // seconds added to the video time before looking a moment up (saved by the coach)
 }
@@ -45,6 +46,7 @@ export function parseBoard(raw: Raw): Board {
     frames,
     times,
     box: wholeBox(frames),
+    reach: reachBox(frames),
     kAngle: typeof raw.k_angle === 'number' ? raw.k_angle : 0.75,
     shift: typeof raw.sync_shift_s === 'number' ? raw.sync_shift_s : 0,
   }
@@ -65,6 +67,21 @@ function wholeBox(frames: (number | null)[][]): Box {
   xs.sort((a, b) => a - b); ys.sort((a, b) => a - b)
   const q = (v: number[], p: number) => v[Math.min(v.length - 1, Math.max(0, Math.round(p * (v.length - 1))))]
   return [q(xs, 0.01) - 1.5, q(xs, 0.99) + 1.5, Math.max(0, q(ys, 0.01) - 1.5), q(ys, 0.99) + 1.5]
+}
+
+/** The area people were seen in, every team and the referee included, so a player beside the pitch is not cut off. */
+function reachBox(frames: (number | null)[][]): Box {
+  const xs: number[] = []
+  const ys: number[] = []
+  const step = Math.max(1, Math.floor(frames.length / 3000))
+  for (let i = 0; i < frames.length; i += step) {
+    const f = frames[i]
+    for (let k = 3; k + 2 < f.length; k += 3) { xs.push((f[k] as number) / 10); ys.push((f[k + 1] as number) / 10) }
+  }
+  if (xs.length < 20) return [0, 0, 0, 0]
+  xs.sort((a, b) => a - b); ys.sort((a, b) => a - b)
+  const q = (v: number[], p: number) => v[Math.min(v.length - 1, Math.max(0, Math.round(p * (v.length - 1))))]
+  return [q(xs, 0.003) - 1, q(xs, 0.997) + 1, Math.max(0, q(ys, 0.003) - 1), q(ys, 0.997) + 1]
 }
 
 /** Index of the moment nearest to video time t, or -1 when the board has nothing within `maxGap` seconds. */

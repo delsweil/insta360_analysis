@@ -127,9 +127,30 @@ def polygon_lon_range(poly: np.ndarray, margin: float = 12.0) -> Tuple[float, fl
     return float(lon.min() - margin), float(lon.max() + margin)
 
 
-def torso_colour(img: np.ndarray, box: Sequence[float], min_pixels: int = 12) -> np.ndarray:
-    """Median BGR of the shirt: the middle of the box, upper half, with grass-green pixels left out.
-    `img` is a BGR image, `box` = x1, y1, x2, y2 in its pixels. Returns float BGR (3,)."""
+def _background(img: np.ndarray, box: Sequence[float]):
+    """Median colour (BGR) of the ground beside the player: strips left and right of the box at leg height.
+    None when the box is too close to the picture edge or the strips are too small."""
+    h, w = img.shape[:2]
+    x1, y1, x2, y2 = box
+    bw, bh = x2 - x1, y2 - y1
+    ya, yb = int(max(0, y1 + 0.55 * bh)), int(min(h, y2 + 1))
+    strips = []
+    for xa, xb in ((x1 - 0.7 * bw, x1 - 0.15 * bw), (x2 + 0.15 * bw, x2 + 0.7 * bw)):
+        xa, xb = int(max(0, xa)), int(min(w, xb))
+        if xb - xa >= 2 and yb - ya >= 2:
+            strips.append(img[ya:yb, xa:xb].reshape(-1, 3))
+    if not strips:
+        return None
+    px = np.concatenate(strips)
+    return np.median(px.astype(np.float32), axis=0) if len(px) >= 12 else None
+
+
+def torso_colour(img: np.ndarray, box: Sequence[float], min_pixels: int = 12, bg_delta: float = 14.0) -> np.ndarray:
+    """Median BGR of the shirt: the middle of the box, upper half, with the ground left out.
+
+    The ground is taken out in two ways: green pixels (a fixed band, for green grass) and pixels that look
+    like the ground right beside the player (Lab distance below `bg_delta`), which also handles dry, yellow
+    or sandy pitches. `img` is a BGR image, `box` = x1, y1, x2, y2 in its pixels. Returns float BGR (3,)."""
     import cv2
     h, w = img.shape[:2]
     x1, y1, x2, y2 = box
@@ -140,10 +161,17 @@ def torso_colour(img: np.ndarray, box: Sequence[float], min_pixels: int = 12) ->
         return np.array([np.nan] * 3)
     patch = img[ya:yb, xa:xb].reshape(-1, 3)
     hsv = cv2.cvtColor(patch.reshape(1, -1, 3), cv2.COLOR_BGR2HSV).reshape(-1, 3)
-    grass = (hsv[:, 0] >= 35) & (hsv[:, 0] <= 85) & (hsv[:, 1] > 70) & (hsv[:, 2] > 40)
-    keep = patch[~grass]
-    if len(keep) < min_pixels:
-        keep = patch
+    drop = (hsv[:, 0] >= 35) & (hsv[:, 0] <= 85) & (hsv[:, 1] > 70) & (hsv[:, 2] > 40)
+    bg = _background(img, box)
+    if bg is not None:
+        lab = cv2.cvtColor(np.concatenate([patch, bg[None]]).astype(np.float32).reshape(1, -1, 3) / 255.0,
+                           cv2.COLOR_BGR2LAB).reshape(-1, 3)
+        drop |= np.linalg.norm(lab[:-1] - lab[-1], axis=1) < bg_delta
+    keep = patch[~drop]
+    if len(keep) < min_pixels:                       # nothing but ground: take the whole patch rather than guess
+        keep = patch[~((hsv[:, 0] >= 35) & (hsv[:, 0] <= 85) & (hsv[:, 1] > 70) & (hsv[:, 2] > 40))]
+        if len(keep) < min_pixels:
+            keep = patch
     return np.median(keep.astype(np.float32), axis=0)
 
 
@@ -274,6 +302,9 @@ def main(argv=None, player_model=None, ball_model=None) -> int:
     p.add_argument("--lon-range", type=float, nargs=2, default=None, metavar=("MIN", "MAX"),
                    help="longitudes to cover, e.g. --lon-range -80 80 (default: from calib, else -80 80)")
     p.add_argument("--view-spacing", type=float, default=40.0)
+    p.add_argument("--view-fov", type=float, default=VIEW_FOV,
+                   help="horizontal field of view of each detection view in degrees (default 100; square-pixel unwrapping only). "
+                        "A narrower view (e.g. 55) shows far players larger: for a separate pass that only feeds the tactical board")
     p.add_argument("--fps", type=float, default=3.0, help="detections per second (default 3)")
     p.add_argument("--iv-fov", type=float, default=None,
                    help="vertical field of the fisheye model that unwraps the raw video (default 200, the original; "
@@ -332,7 +363,9 @@ def main(argv=None, player_model=None, ball_model=None) -> int:
     else:
         lo, hi = -80.0, 80.0
     square_views = iv_fov != K.DEFAULT_IV_FOV           # a non-default unwrapping is meant to have square pixels
-    views = make_views(lo, hi, tilt, a.view_spacing, legacy_fov=not square_views)
+    if a.view_fov != VIEW_FOV and not square_views:
+        raise SystemExit("--view-fov needs the square-pixel unwrapping (--iv-fov 112)")
+    views = make_views(lo, hi, tilt, a.view_spacing, fov=a.view_fov, legacy_fov=not square_views)
 
     device = pick_device(a.device)
     if player_model is None:
@@ -345,11 +378,11 @@ def main(argv=None, player_model=None, ball_model=None) -> int:
         print(f"ball model {a.ball}: classes {dict(ball_model.names)} -> counting {shown}")
     print(f"{a.video}: {'raw -> equirect' if raw else 'equirect'}  {K.fmt_time(start)} + {duration:.0f}s  "
           f"@ {a.fps:g}/s  device={device}")
-    print(f"views    : {len(views)} at lon {[round(v.centre_lon) for v in views]}  tilt {tilt:+.1f}  fov {VIEW_FOV:g}")
+    print(f"views    : {len(views)} at lon {[round(v.centre_lon) for v in views]}  tilt {tilt:+.1f}  fov {a.view_fov:g}")
 
     header = {"type": "header", "video": os.path.basename(a.video), "start": start, "duration": duration,
               "video_duration": round(float(info["duration"]), 3),
-              "fps": a.fps, "tilt": tilt, "view_lons": [v.centre_lon for v in views], "view_fov": VIEW_FOV,
+              "fps": a.fps, "tilt": tilt, "view_lons": [v.centre_lon for v in views], "view_fov": a.view_fov,
               "calib": a.calib, "players_model": a.players, "ball_model": None if ball_model is None else a.ball,
               "ball_conf": a.ball_conf, "ball_classes": None if ball_ids is None else sorted(ball_ids), "player_conf": CONF_PLAYERS, "raw_input": raw}
     if raw and iv_fov != K.DEFAULT_IV_FOV:               # only written when it differs: older files stay byte-compatible

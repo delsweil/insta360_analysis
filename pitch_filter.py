@@ -35,6 +35,38 @@ def pitch_mask(calib: str, margin: float) -> np.ndarray:
     return m
 
 
+class FootTester:
+    """Is a foot on the pitch? Like the mask test above, but the allowed distance outside the outline is a length on the
+    ground, not a fixed angle: 25 px (about 3 degrees) is 3.6 m for a player 70 m away but only 0.3 m for one 5 m from the
+    camera, so people standing on the near touchline were counted as off the pitch. A foot counts when it is within
+    `margin_m` metres of the outline (but never closer than `margin_px`, the old rule). Used by the tactical board only; the
+    detections file and the camera path are not touched."""
+
+    PX_PER_DEG = 10.0                                    # mean of the unwrapped frame (8 across, 12.9 up)
+
+    def __init__(self, calib: str, margin_px: float = 25.0, margin_m: float = 1.5, fy: float = None, k: float = 0.75):
+        import cv2
+        import scene_check as S
+        m = X.polygon_mask(X.load_polygon(calib))
+        self.dist = cv2.distanceTransform((m == 0).astype(np.uint8), cv2.DIST_L2, 3)   # px to the outline, 0 inside
+        self.margin_px, self.margin_m, self.k = margin_px, margin_m, k
+        self.fy = S.SQUARE_FY if fy is None else fy
+
+    def allowed_px(self, box_h: float) -> float:
+        z = 1.7 * self.fy / (self.k * max(box_h, 4.0))   # metres from the camera along the view axis
+        deg = float(np.degrees(np.arctan2(self.margin_m, max(z, 1.0))))
+        return max(self.margin_px, deg * self.PX_PER_DEG)
+
+    def distance_px(self, lon: float, lat: float) -> float:
+        x, y = K.lonlat_to_xy(lon, lat, X.EQ_W, X.EQ_H)
+        xi = int(np.clip(round(float(x)), 0, X.EQ_W - 1))
+        yi = int(np.clip(round(float(y)), 0, X.EQ_H - 1))
+        return float(self.dist[yi, xi])
+
+    def __call__(self, lon: float, lat: float, box_h: float) -> bool:
+        return self.distance_px(lon, lat) <= self.allowed_px(box_h)
+
+
 def foot_on_mask(mask: np.ndarray, lon: float, lat: float) -> bool:
     x, y = K.lonlat_to_xy(lon, lat, X.EQ_W, X.EQ_H)
     xi = int(np.clip(round(float(x)), 0, X.EQ_W - 1))

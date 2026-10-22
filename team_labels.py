@@ -244,6 +244,29 @@ class Labelled:
         g = np.argmin(((f[:, None, :] - self.centres[None]) ** 2).sum(-1), axis=1)
         return self.group_team[g]
 
+    def groups_of(self, bgr: np.ndarray) -> np.ndarray:
+        """Index of the nearest colour group of each colour."""
+        f = S.colour_features(bgr)
+        return np.argmin(((f[:, None, :] - self.centres[None]) ** 2).sum(-1), axis=1)
+
+    def team_of_rescue(self, bgr: np.ndarray, ratio: float = 1.5) -> np.ndarray:
+        """Like team_of, but a colour whose nearest group is an 'other' one (referee, goalkeeper, or a shirt seen small and
+        washed out by the grass) still gets a team when a team group is almost as near: distance to the nearest team group
+        <= ratio x distance to the nearest group. A clearly different colour (referee) stays -1. ratio <= 1 = team_of."""
+        f = S.colour_features(bgr)
+        d = np.sqrt(((f[:, None, :] - self.centres[None]) ** 2).sum(-1))
+        g = np.argmin(d, axis=1)
+        team = self.group_team[g].copy()
+        if ratio <= 1.0 or not (self.group_team >= 0).any():
+            return team
+        tg = np.where(self.group_team >= 0)[0]
+        best = tg[np.argmin(d[:, tg], axis=1)]
+        near_d = d[np.arange(len(d)), g]
+        team_d = d[np.arange(len(d)), best]
+        rescue = (team < 0) & (team_d <= ratio * np.maximum(near_d, 1e-6))
+        team[rescue] = self.group_team[best[rescue]]
+        return team
+
 
 def main(argv=None, model=None, grab=None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

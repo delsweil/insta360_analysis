@@ -104,6 +104,113 @@ class TestBoard(unittest.TestCase):
         self.assertNotIn(" ", open(out).read().split('"note"')[0])    # compact separators
         self.assertLess(os.path.getsize(out), 12000)
 
+    def test_looser_board_thresholds_do_not_change_the_detections_file(self):
+        a = self.p("a.jsonl")
+        write_dets(a, 0.0, [0.0], extra=[[-20.0, -10.0, 60.0, 0.35, None, [230, 230, 230]]])   # found at 0.35: shown now
+        before = open(a).read()
+        data = BD.build([{"det": a, "half": 1, "video_start": 0.0, "duration": 5.0}], FakeClusters())
+        self.assertEqual(len(data["frames"][0]) - 3, 5 * 3)           # 4 as before + the 0.35 one
+        strict = BD.build([{"det": a, "half": 1, "video_start": 0.0, "duration": 5.0}], FakeClusters(), min_conf=0.5)
+        self.assertEqual(len(strict["frames"][0]) - 3, 4 * 3)
+        self.assertEqual(open(a).read(), before)                       # the camera planning reads this same file
+
+    def test_board_check_reports_bands(self):
+        import io
+        import contextlib
+        import board_check as BC
+        a = self.p("a.jsonl")
+        write_dets(a, 0.0, [i / 3 for i in range(9)])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(BC.main(["--detections", a]), 0)
+        out = buf.getvalue()
+        self.assertIn("near (< 30 m)", out)
+        self.assertIn("far (> 55 m)", out)
+        self.assertIn(">= 0.3", out)
+
+    def test_rescue_gives_washed_out_shirts_a_team_but_not_the_referee(self):
+        import scene_check as S
+        import team_labels as TL
+        labels = self.p("l.json")
+        groups = np.array([[235, 235, 235], [30, 30, 220], [20, 20, 20], [60, 150, 80]], float)   # white, red, dark, grass-green
+        json.dump({"centres": S.colour_features(groups).tolist(), "sizes": [50, 40, 5, 20], "mean_bgr": groups.tolist(),
+                   "assign": {"A": [0], "B": [1]}, "names": {"A": "A", "B": "B"}, "colours": {"A": "#fff", "B": "#f00"}},
+                  open(labels, "w"))
+        cl = TL.Labelled(labels)
+        test = np.array([[235, 235, 235],      # clean white shirt
+                         [20, 20, 20],         # the referee: clearly the dark group
+                         [140, 200, 150]], float)   # white shirt washed out by grass: nearest group is the green one
+        self.assertEqual(list(cl.team_of(test)), [0, -1, -1])
+        self.assertEqual(list(cl.team_of_rescue(test, 1.0)), [0, -1, -1])           # ratio 1 = off
+        self.assertEqual(list(cl.team_of_rescue(test, 2.0)), [0, -1, 0])            # rescued for white, referee stays unknown
+
+    def test_view_focal_length_follows_the_view_fov(self):
+        import math
+        import scene_check as S
+        self.assertAlmostEqual(S.view_fy({"square_views": True, "view_fov": 100.0}), S.SQUARE_FY, places=6)
+        self.assertAlmostEqual(S.view_fy({"square_views": True}), S.SQUARE_FY, places=6)          # old files: 100 degrees
+        self.assertAlmostEqual(S.view_fy({"square_views": True, "view_fov": 55.0}), 640 / math.tan(math.radians(27.5)), places=6)
+        self.assertEqual(S.view_fy({"view_fov": 55.0}), S.LEGACY_FY)                              # legacy views ignore it
+        a = self.p("a.jsonl")                                      # a narrow-view file puts the same box height much farther away
+        for fov, name in ((100.0, "wide.jsonl"), (55.0, "narrow.jsonl")):
+            with open(self.p(name), "w") as fh:
+                fh.write(json.dumps({"type": "header", "view_lons": [0], "start": 0.0, "fps": 3.0, "square_views": True,
+                                     "colours": True, "view_fov": fov}) + "\n")
+                fh.write(json.dumps({"t": 0.0, "players": [[0.0, -10.0, 30.0, 0.9, None, [230, 230, 230]]], "balls": []}) + "\n")
+        wide = BD.part_frames(self.p("wide.jsonl"), None, FakeClusters(), 0.0, 98.0, 0.3, 14.0, 0.75)[0]["players"][0]
+        narrow = BD.part_frames(self.p("narrow.jsonl"), None, FakeClusters(), 0.0, 98.0, 0.3, 14.0, 0.75)[0]["players"][0]
+        self.assertGreater(narrow[1], 2.0 * wide[1])
+
+    def test_outline_margin_is_in_metres_not_degrees(self):
+        import kf_core as K
+        import pitch_filter as PF
+        calib = self.p("pitch.json")
+        json.dump({"pixel_polygon": [[1100, 600], [1780, 600], [1780, 1100], [1100, 1100]]}, open(calib, "w"))
+        ft = PF.FootTester(calib, margin_px=25.0, margin_m=1.5)
+        lon, lat = K.xy_to_lonlat(1030.0, 1000.0, 2880, 1440)          # 70 px left of the outline
+        near_box, far_box = 243.0, 15.0                               # a player 5 m from the camera / one 80 m away
+        self.assertTrue(ft(float(lon), float(lat), near_box))         # 1.5 m on the ground is a wide angle up close
+        self.assertFalse(ft(float(lon), float(lat), far_box))         # far away the same angle is many metres: off
+        lon2, lat2 = K.xy_to_lonlat(1090.0, 1000.0, 2880, 1440)        # 10 px outside: the old rule keeps it too
+        self.assertTrue(ft(float(lon2), float(lat2), far_box))
+        lon3, lat3 = K.xy_to_lonlat(1400.0, 900.0, 2880, 1440)         # inside
+        self.assertTrue(ft(float(lon3), float(lat3), far_box))
+
+    def test_board_keeps_the_player_on_the_near_touchline(self):
+        import kf_core as K
+        calib, a = self.p("pitch.json"), self.p("a.jsonl")
+        json.dump({"pixel_polygon": [[1100, 600], [1780, 600], [1780, 1100], [1100, 1100]]}, open(calib, "w"))
+        lon, lat = K.xy_to_lonlat(1030.0, 1000.0, 2880, 1440)
+        with open(a, "w") as fh:
+            fh.write(json.dumps({"type": "header", "view_lons": [0], "start": 0.0, "fps": 3.0, "square_views": True, "colours": True}) + "\n")
+            fh.write(json.dumps({"t": 0.0, "players": [[float(lon), float(lat), 243.0, 0.9, None, [230, 230, 230]],   # close, beside the line
+                                                       [float(lon), float(lat), 15.0, 0.9, None, [230, 230, 230]]],  # far, beside the line
+                                 "balls": []}) + "\n")
+        part = {"det": a, "half": 1, "video_start": 0.0, "duration": 5.0, "calib": calib}
+        data = BD.build([part], FakeClusters())
+        self.assertEqual((len(data["frames"][0]) - 3) // 3, 1)        # only the close one stays
+        data = BD.build([{**part, "calib": None}], FakeClusters())
+        self.assertEqual((len(data["frames"][0]) - 3) // 3, 2)        # no outline: both
+
+    def test_probe_explains_a_drop(self):
+        import io
+        import contextlib
+        import kf_core as K
+        import board_probe as BP
+        calib, a = self.p("pitch.json"), self.p("a.jsonl")
+        json.dump({"pixel_polygon": [[1100, 600], [1780, 600], [1780, 1100], [1100, 1100]]}, open(calib, "w"))
+        lon, lat = K.xy_to_lonlat(1030.0, 1000.0, 2880, 1440)
+        with open(a, "w") as fh:
+            fh.write(json.dumps({"type": "header", "view_lons": [0], "start": 100.0, "fps": 3.0, "square_views": True}) + "\n")
+            fh.write(json.dumps({"t": 102.0, "players": [[float(lon), float(lat), 15.0, 0.9, None],
+                                                         [0.0, -10.0, 60.0, 0.1, None]], "balls": []}) + "\n")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            BP.main(["--detections", a, "--calib", calib, "--at", "102", "--source-time"])
+        out = buf.getvalue()
+        self.assertIn("outside the outline", out)
+        self.assertIn("confidence < 0.3", out)
+
     def test_no_players_is_an_error(self):
         a = self.p("a.jsonl")
         with open(a, "w") as fh:

@@ -43,6 +43,15 @@ import pitch_filter as PF
 PERSON_M = 1.7
 SQUARE_FY = 640.0 / math.tan(math.radians(50.0))      # focal length of the square-pixel 1280x720 views (~537 px)
 LEGACY_FY = 302.0                                     # the anamorphic views of the original unwrapping
+
+
+def view_fy(header: dict) -> float:
+    """Focal length (px) of the detection views of a detections file: from the view field of view when the file has square-pixel
+    views (100 degrees -> SQUARE_FY, as before; narrower views -> longer), else the legacy value."""
+    if not header.get("square_views"):
+        return LEGACY_FY
+    fov = float(header.get("view_fov") or 100.0)
+    return 640.0 / math.tan(math.radians(fov / 2.0))
 PALETTE = ["#e6194b", "#4363d8", "#ffe119", "#f58231", "#911eb4", "#3cb44b", "#bbbbbb"]
 
 

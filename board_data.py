@@ -33,13 +33,24 @@ import scene_check as S
 FORMAT = "football-autopan-board"
 VERSION = 1
 OTHER = 2                                   # referee, goalkeepers, shirt colour unknown
+# The board has its own, looser thresholds than the camera planning: the detections file keeps everything found at
+# confidence >= 0.2, the camera path is made from it by other code and is not affected by what is shown on the board.
+MIN_CONF = 0.3
+MIN_HEIGHT = 14.0                           # smallest box (px) whose shirt colour is trusted
+MARGIN_M = 1.5                              # a foot this close (metres) to the pitch outline still counts as on the pitch
+RESCUE = 1.5                                # a colour closer to a team than 1.5 x to its 'other' group still counts for the team
 
 
 def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: float, max_lon: float, min_conf: float,
-                min_height: float, k_angle: float) -> List[dict]:
+                min_height: float, k_angle: float, rescue: float = RESCUE, calib: Optional[str] = None,
+                margin_m: float = MARGIN_M) -> List[dict]:
     """One part (one detections file) -> frames {vt, pan, fov, players:[(x, y, team)]}; vt = seconds in the joined video."""
     hdr, frames = AK.load_detections(det_path, max_lon=max_lon)
-    fy = S.SQUARE_FY if hdr.get("square_views") else S.LEGACY_FY
+    fy = S.view_fy(hdr)
+    tester = None
+    if calib:                                    # the outline: people beside the pitch are left out, by metres not degrees
+        import pitch_filter as PF
+        tester = PF.FootTester(calib, margin_m=margin_m, fy=fy, k=k_angle)
     views = np.array(hdr["view_lons"], float)
     t_in = float(hdr.get("start", 0.0))
     path = None
@@ -63,7 +74,7 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
     rows, owner = [], []
     for i, r in enumerate(frames):
         for p in r["players"]:
-            if p[3] < min_conf:
+            if p[3] < min_conf or (tester is not None and not tester(p[0], p[1], p[2])):
                 continue
             centre = float(views[np.argmin(np.abs(views - p[0]))])
             x, y = S.ground_position(p[0], p[2], centre, fy, k_angle)
@@ -75,7 +86,8 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
         a = np.array(rows, float)
         ok = a[:, 2] >= 0
         if ok.any():
-            t = clusters.team_of(a[ok, 2:5])
+            fn = getattr(clusters, "team_of_rescue", None)
+            t = fn(a[ok, 2:5], rescue) if fn is not None else clusters.team_of(a[ok, 2:5])
             team[ok] = np.where(t >= 0, t, OTHER)
     out = [{"vt": float(r["t"]) - t_in + video_start,
             "pan": None if pan is None else float(pan[i]), "fov": None if fov is None else float(fov[i]), "players": []}
@@ -85,12 +97,13 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
     return [f for f in out if f["vt"] >= video_start - 1e-6]
 
 
-def build(parts: List[dict], clusters, title: str = "", lang: str = "en", max_lon: float = 98.0, min_conf: float = 0.5,
-          min_height: float = 18.0, k_angle: float = 0.75) -> dict:
+def build(parts: List[dict], clusters, title: str = "", lang: str = "en", max_lon: float = 98.0, min_conf: float = MIN_CONF,
+          min_height: float = MIN_HEIGHT, k_angle: float = 0.75, rescue: float = RESCUE,
+          margin_m: float = MARGIN_M) -> dict:
     """parts: [{det, kf, half, video_start, duration, box:[x0,x1,y0,y1], a_attacks_right}] in playing order."""
     frames, meta_parts = [], []
     for p in parts:
-        fr = part_frames(p["det"], p.get("kf"), clusters, float(p["video_start"]), max_lon, min_conf, min_height, k_angle)
+        fr = part_frames(p["det"], p.get("kf"), clusters, float(p["video_start"]), max_lon, min_conf, min_height, k_angle, rescue, p.get("calib"), margin_m)
         end = float(p["video_start"]) + float(p["duration"]) if p.get("duration") else None
         if end is not None:
             fr = [f for f in fr if f["vt"] <= end + 1e-6]
@@ -127,18 +140,24 @@ def main(argv=None) -> int:
     p.add_argument("--halves", nargs="+", type=int, required=True, help="half (1 or 2) of each part")
     p.add_argument("--durations", nargs="+", type=float, required=True, help="length in seconds of each rendered part")
     p.add_argument("--team-labels", required=True)
+    p.add_argument("--calib", nargs="+", default=None,
+                   help="pitch outline file of each part (same order; '-' = none): people beside the pitch are left out")
+    p.add_argument("--margin-m", type=float, default=MARGIN_M, help="metres outside the outline that still count as the pitch")
     p.add_argument("--chart-data", nargs="+", default=None, metavar="JSON",
                    help="<game>_halfN_chartdata.json files (pitch box and attacking direction), any order")
     p.add_argument("--title", default="")
     p.add_argument("--lang", choices=["en", "de"], default="en")
     p.add_argument("--out", required=True)
     p.add_argument("--max-lon", type=float, default=98.0)
-    p.add_argument("--min-conf", type=float, default=0.5)
-    p.add_argument("--min-height", type=float, default=18.0)
+    p.add_argument("--min-conf", type=float, default=MIN_CONF, help="lowest detector confidence shown on the board")
+    p.add_argument("--min-height", type=float, default=MIN_HEIGHT, help="smallest box (px) whose shirt colour is trusted")
     p.add_argument("--angle-factor", type=float, default=0.75)
+    p.add_argument("--rescue-ratio", type=float, default=RESCUE,
+                   help="a colour whose nearest group is neither team still gets a team if a team group is within this factor "
+                        "of that distance (1 = off); makes small, washed-out far-side shirts count")
     a = p.parse_args(argv)
     n = len(a.detections)
-    if not (len(a.halves) == len(a.durations) == n) or (a.keyframes and len(a.keyframes) != n):
+    if not (len(a.halves) == len(a.durations) == n) or (a.keyframes and len(a.keyframes) != n) or (a.calib and len(a.calib) != n):
         raise SystemExit("give one --halves, --durations (and --keyframes) value for each --detections file")
     import team_labels as TL
     clusters = TL.Labelled(a.team_labels)
@@ -153,9 +172,10 @@ def main(argv=None) -> int:
         d = by_half.get(a.halves[i], {})
         parts.append({"det": a.detections[i], "kf": a.keyframes[i] if a.keyframes else None, "half": a.halves[i],
                       "video_start": t, "duration": a.durations[i], "box": d.get("pitch_box_m"),
+                      "calib": a.calib[i] if a.calib and a.calib[i] != "-" else None,
                       "a_attacks_right": d.get("team_a_attacks_right")})
         t += a.durations[i]
-    data = build(parts, clusters, a.title, a.lang, a.max_lon, a.min_conf, a.min_height, a.angle_factor)
+    data = build(parts, clusters, a.title, a.lang, a.max_lon, a.min_conf, a.min_height, a.angle_factor, a.rescue_ratio, a.margin_m)
     write(a.out, data)
     print(f"wrote {a.out}: {len(data['frames'])} moments, {sum((len(f) - 3) // 3 for f in data['frames'])} player positions")
     return 0

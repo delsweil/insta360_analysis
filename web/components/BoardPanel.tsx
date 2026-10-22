@@ -96,12 +96,16 @@ function BoardView({ board, t, trails, svgRef, maxHeight, translucent }: ViewPro
     }
   }
 
-  const vbW = x1 - x0 + 2 * PAD
-  const vbH = y1 - y0 + 2 * PAD
+  // the view takes in the pitch and everyone ever seen beside it (near touchline, benches)
+  const r = board.reach
+  const vx0 = Math.min(x0 - PAD, r[0]), vx1 = Math.max(x1 + PAD, r[1])
+  const vy0 = Math.min(y0 - PAD, r[2]), vy1 = Math.max(y1 + PAD, r[3])
+  const vbW = vx1 - vx0
+  const vbH = vy1 - vy0
   return (
     <svg
       ref={svgRef}
-      viewBox={`${x0 - PAD} ${-(y1 + PAD)} ${vbW} ${vbH}`}
+      viewBox={`${vx0} ${-vy1} ${vbW} ${vbH}`}
       style={{ display: 'block', width: '100%', maxHeight, borderRadius: 8, background: translucent ? 'transparent' : '#2a7344' }}
       role="img"
       aria-label="Top-down board of the players"
@@ -120,7 +124,7 @@ function BoardView({ board, t, trails, svgRef, maxHeight, translucent }: ViewPro
         )}
       </g>
       {!frame && (
-        <text x={x0 - PAD + vbW / 2} y={-(y1 + PAD) + vbH / 2} textAnchor="middle" fontSize={vbW / 22} fill="#fff" opacity={0.85}>
+        <text x={vx0 + vbW / 2} y={-vy1 + vbH / 2} textAnchor="middle" fontSize={vbW / 22} fill="#fff" opacity={0.85}>
           No players tracked at this moment
         </text>
       )}

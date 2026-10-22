@@ -776,7 +776,7 @@ class Job:
         if not self.labels_ready():
             return "waiting"
         import kf_core as K
-        dets, kfs, halves, durs, charts = [], [], [], [], []
+        dets, kfs, halves, durs, charts, calibs = [], [], [], [], [], []
         for h, idx in self.halves():
             for i in idx:
                 f = self.p(f"{self.stem(i)}_autopan.mp4")
@@ -784,7 +784,10 @@ class Job:
                     dur = float(K.probe_video(f)["duration"])
                 except Exception:
                     dur = self.span(i)[1]
-                dets.append(self.det_file(i))
+                info = read_json(self.p(f"pitch{i}.info.json"), {})
+                raw = self.p(f"v{i}.detections.jsonl")          # the board has its own outline test (metres, not degrees)
+                dets.append(raw if info.get("used") else self.det_file(i))
+                calibs.append((self.manual_file(i) if info.get("manual") else self.p(f"pitch{i}.json")) if info.get("used") else "-")
                 kfs.append(self.p(f"v{i}.auto.keyframes.json"))
                 halves.append(h)
                 durs.append(dur)
@@ -797,6 +800,7 @@ class Job:
         cmd = self.py("board_data.py", "--detections", *dets, "--keyframes", *kfs, "--halves", *map(str, halves),
                       "--durations", *[f"{d:.2f}" for d in durs], "--team-labels", self.p("teams.team_labels.json"),
                       "--title", self.spec.get("title", "Game"), "--lang", lang, "--out", self.p(f"{base}_board.json"))
+        cmd += ["--calib", *calibs]
         if charts:
             cmd += ["--chart-data", *charts]
         self.exec(cmd, "board")

@@ -50,6 +50,10 @@ export default function GamePage({ params }: Props) {
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [isMobile, setIsMobile] = useState(false)
+  const [forceHud, setForceHud] = useState(() => { // fullscreen view chosen by hand (tablets), remembered on this device
+    if (typeof window === 'undefined') return false
+    try { return localStorage.getItem('hud-mode') === '1' } catch { return false }
+  })
   const [showAnnotations, setShowAnnotations] = useState(false)
   const [showBoard, setShowBoard] = useState(false) // mobile HUD: board panel over the video
   const [boardOff, setBoardOff] = useState(() => { // where the viewer dragged the mobile board to (remembered)
@@ -666,7 +670,7 @@ export default function GamePage({ params }: Props) {
         if (isLabelOpen) return
         const jumpSec = ann.label === 'tactical' && ann.context_start_sec != null ? ann.context_start_sec : ann.timestamp_sec
         seekTo(jumpSec)
-        if (isMobile) setShowAnnotations(false)
+        if (isMobile || forceHud) setShowAnnotations(false)
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -775,7 +779,7 @@ export default function GamePage({ params }: Props) {
               setEditingAnnotationId(ann.id)
               setDrawTool('select')
               setIsDrawing(true)
-              if (isMobile) setShowAnnotations(false)
+              if (isMobile || forceHud) setShowAnnotations(false)
             }}
             style={{
               fontSize: 10, color: '#0f2972', fontWeight: 600,
@@ -850,8 +854,13 @@ export default function GamePage({ params }: Props) {
     height: 44,
   }
 
-  // ── MOBILE LAYOUT — landscape fullscreen HUD ───────────────────
-  if (isMobile) {
+  const chooseHud = (on: boolean) => {
+    setForceHud(on)
+    try { localStorage.setItem('hud-mode', on ? '1' : '0') } catch {}
+  }
+
+  // ── MOBILE LAYOUT — landscape fullscreen HUD (phones, or any device where the viewer chose it) ──
+  if (isMobile || forceHud) {
     const activeLabelDef = LABEL_DEFS.find(l => l.key === selectedLabel)
     const activeLabelColor = labelColor(selectedLabel)
     const activeLabelDisplay = labelDisplay(selectedLabel, game.home_team, game.away_team)
@@ -1008,6 +1017,18 @@ export default function GamePage({ params }: Props) {
             >
               ← Zurück
             </button>
+            {!isMobile && (
+              <button
+                onClick={() => chooseHud(false)}
+                style={{
+                  background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: 8, color: 'rgba(255,255,255,0.7)',
+                  fontSize: 12, fontWeight: 600, padding: '5px 10px', cursor: 'pointer',
+                }}
+              >
+                ▭ Normale Ansicht
+              </button>
+            )}
             {/* Unmute button — prominent until user unmutes */}
             {isMuted && (
               <button
@@ -1736,6 +1757,14 @@ export default function GamePage({ params }: Props) {
               </span>
               &nbsp;·&nbsp;
               <span style={{ color: '#22c55e', fontWeight: 600 }}>● live</span>
+              &nbsp;·&nbsp;
+              <button
+                onClick={() => chooseHud(true)}
+                title="Fullscreen view with the controls over the video (remembered on this device)"
+                style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: '#0f2972', fontWeight: 600, fontSize: 11 }}
+              >
+                ⤢ Vollbild-Ansicht
+              </button>
             </div>
           </div>
           {isCoach && (
