@@ -63,6 +63,9 @@ def fake_exec(self, cmd, sid, parse=None):
         open(arg(cmd, "--out"), "wb").write(b"png")
     elif cmd[0] == "ffmpeg":                                 # joining the videos
         open(cmd[-1], "wb").write(b"mp4")
+    elif script == "board_data.py":
+        open(arg(cmd, "--out"), "w").write("{}")
+        self.board_cmd = cmd
     elif script in ("game_stats.py", "team_stats.py"):
         open(arg(cmd, "--out") + ".png", "wb").write(b"png")
         if script == "team_stats.py":
@@ -102,7 +105,7 @@ class TestPipeline(Base):
         self.assertEqual(ids[:2], ["check", "teams"])
         self.assertIn("render1", ids)
         self.assertIn("pitch1", ids)
-        self.assertEqual(ids[-2:], ["stats", "package"])
+        self.assertEqual(ids[-3:], ["stats", "board", "package"])
         # two hours of video: roughly 3.2 hours of computing
         self.assertAlmostEqual(P.estimate_seconds([3600, 3600]) / 3600, 3.2, delta=0.2)
 
@@ -143,6 +146,9 @@ class TestPipeline(Base):
         self.assertEqual(arg(cmd, "--lang"), "de")
         self.assertNotIn("--switch-at", cmd)                    # each half is analysed on its own
         self.assertEqual(len(j2.team_cmds), 2)
+        bc = j2.board_cmd                                       # the board data: parts in playing order, halves told apart
+        self.assertEqual(bc[bc.index("--halves") + 1:bc.index("--durations")], ["1", "2"])
+        self.assertIn("--chart-data", bc)
         for c in j2.team_cmds:
             self.assertEqual(len(c[c.index("--detections") + 1:c.index("--keyframes")]), 1)
         names = [f["name"] for f in j2.results()]
@@ -150,6 +156,7 @@ class TestPipeline(Base):
             self.assertIn(f"Altenberg_Cup_half{h}_teams.png", names)
             self.assertIn(f"Altenberg_Cup_half{h}_teams.csv", names)
             self.assertIn(f"Altenberg_Cup_half{h}_chartdata.json", names)
+        self.assertIn("Altenberg_Cup_board.json", names)
         self.assertNotIn("pitch0_outline.jpg", names)
         self.assertEqual(j2.status["overall"], 1.0)
         self.assertTrue(os.path.isfile(j2.p("README.txt")))

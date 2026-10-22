@@ -10,6 +10,7 @@ A *job* is a folder holding job.json (what the coach asked for) and status.json 
   charts     where the play happened, game statistics
   render     the panning video                            (~0.8 s per second of video)
   stats      team charts (needs the confirmed teams; if they are missing the job waits and carries on after)
+  board      positions of all players in the time of the joined video, for the tactical board of the web player
   package    list of results (results.json) and a short README
 
 Every finished stage leaves a marker in <job>/.done, so a job that stopped (closed lid, error, cancelled) continues
@@ -37,8 +38,8 @@ EXTRACT_ARGS = ["--lon-range", "-80", "80", "--no-ball", "--iv-fov", "112", "--t
 KEY_ARGS = ["--projection", "flat", "--fov-max", "100", "--fov-min", "70", "--tilt", str(CROP_TILT),
             "--max-dip", "8", "--tilt-margin", "4"]
 # seconds of computing per second of video (Apple silicon), used for the progress bar and the estimate
-COST = {"check": 0.0, "extract": 0.75, "keyframes": 0.0, "render": 0.8, "charts": 0.0, "stats": 0.0, "teams": 0.0}
-FIXED_SECONDS = {"check": 15, "pitch": 20, "merge": 60, "teams": 120, "keyframes": 10, "charts": 30, "stats": 40, "package": 2}
+COST = {"check": 0.0, "extract": 0.75, "keyframes": 0.0, "render": 0.8, "charts": 0.0, "stats": 0.0, "board": 0.0, "teams": 0.0}
+FIXED_SECONDS = {"check": 15, "pitch": 20, "merge": 60, "teams": 120, "keyframes": 10, "charts": 30, "stats": 40, "board": 15, "package": 2}
 
 
 VERIFY_RENDER = True        # look into every finished video before it replaces the old one
@@ -165,7 +166,7 @@ class Job:
         self.spec["layout"] = 2
         self.spec.pop("halves", None)
         write_json(self.p("job.json"), self.spec)
-        self.clear("charts", "stats")
+        self.clear("charts", "stats", "board")
 
     def clear(self, *ids: str) -> List[str]:
         """Forget that these steps are done (they run again). -> the ones that really were done."""
@@ -196,9 +197,9 @@ class Job:
                 raise ValueError("half must be 1 or 2")
             outline = bool(c.get("outline", old[i]["outline"]))
             if half != old[i]["half"]:
-                gone += self.clear("charts", "stats")
+                gone += self.clear("charts", "stats", "board")
             if outline != old[i]["outline"] or i in redo:
-                gone += self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "merge", "charts", "stats")
+                gone += self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "merge", "charts", "stats", "board")
             self.spec["videos"][i]["half"], self.spec["videos"][i]["outline"] = half, outline
         write_json(self.p("job.json"), self.spec)
         return list(dict.fromkeys(gone))
@@ -235,6 +236,7 @@ class Job:
         if n > 1:
             st.append({"id": "merge", "label": "Join the videos for YouTube"})
         st.append({"id": "stats", "label": "Team statistics"})
+        st.append({"id": "board", "label": "Board data for the web player"})
         st.append({"id": "package", "label": "Collect the results"})
         return st
 
@@ -314,7 +316,7 @@ class Job:
         self.status.update(state="running", message="")
         self.save_status()
         fns: Dict[str, Callable] = {"check": self.s_check, "teams": self.s_teams, "charts": self.s_charts,
-                                    "stats": self.s_stats, "package": self.s_package}
+                                    "stats": self.s_stats, "board": self.s_board, "package": self.s_package}
         waiting_stats = False
         try:
             for s in stages:
@@ -350,12 +352,15 @@ class Job:
                 self.save_status()
             # the team stage may have been waiting while the long steps ran: try once more
             if waiting_stats and self.labels_ready():
-                rec = self._rec("stats")
-                rec["state"] = "running"
-                self.save_status()
-                self.s_stats()
-                rec.update(state="done", progress=1.0, note="")
-                self.mark_done("stats")
+                for sid, fn in (("stats", self.s_stats), ("board", self.s_board)):
+                    rec = self._rec(sid)
+                    if rec["state"] == "done":
+                        continue
+                    rec["state"] = "running"
+                    self.save_status()
+                    fn()
+                    rec.update(state="done", progress=1.0, note="")
+                    self.mark_done(sid)
                 self.s_package()
                 waiting_stats = False
         except Cancelled:
@@ -584,7 +589,7 @@ class Job:
             self.log(f"outline picture not made: {e}")
         self.spec["videos"][i]["outline"] = True
         write_json(self.p("job.json"), self.spec)
-        self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "merge", "charts", "stats")
+        self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "merge", "charts", "stats", "board")
 
     def clear_manual_outline(self, i: int) -> None:
         for f in (self.manual_file(i), self.p(f"pitch{i}_outline.jpg")):     # the picture comes back with the automatic outline
@@ -592,7 +597,7 @@ class Job:
                 os.remove(f)
             except OSError:
                 pass
-        self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "merge", "charts", "stats")
+        self.clear(f"pitch{i}", f"keyframes{i}", f"render{i}", "merge", "charts", "stats", "board")
 
     def feet(self, i: int, max_pts: int = 3000) -> List[List[int]]:
         """Where the feet of the detected players are in the picture (a sample), to see what an outline keeps."""
@@ -765,6 +770,38 @@ class Job:
                               "--data-json", self.p(f"{self.tag(h)}_chartdata.json")), "stats")
         return None
 
+    def s_board(self):
+        """<game>_board.json: every player position (3 a second) in the time of the joined video that goes to YouTube,
+        for the tactical board of the web player. Needs the confirmed teams, like the statistics."""
+        if not self.labels_ready():
+            return "waiting"
+        import kf_core as K
+        dets, kfs, halves, durs, charts = [], [], [], [], []
+        for h, idx in self.halves():
+            for i in idx:
+                f = self.p(f"{self.stem(i)}_autopan.mp4")
+                try:
+                    dur = float(K.probe_video(f)["duration"])
+                except Exception:
+                    dur = self.span(i)[1]
+                dets.append(self.det_file(i))
+                kfs.append(self.p(f"v{i}.auto.keyframes.json"))
+                halves.append(h)
+                durs.append(dur)
+        for h, _ in self.halves():
+            cd = self.p(f"{self.tag(h)}_chartdata.json")
+            if os.path.isfile(cd):
+                charts.append(cd)
+        lang = "de" if self.spec.get("lang") == "de" else "en"
+        base = safe_name(self.spec.get("title") or "game")
+        cmd = self.py("board_data.py", "--detections", *dets, "--keyframes", *kfs, "--halves", *map(str, halves),
+                      "--durations", *[f"{d:.2f}" for d in durs], "--team-labels", self.p("teams.team_labels.json"),
+                      "--title", self.spec.get("title", "Game"), "--lang", lang, "--out", self.p(f"{base}_board.json"))
+        if charts:
+            cmd += ["--chart-data", *charts]
+        self.exec(cmd, "board")
+        return None
+
     def s_package(self) -> None:
         files = self.results()
         write_json(self.p("results.json"), {"title": self.spec.get("title"), "files": files})
@@ -776,6 +813,7 @@ class Job:
                      "*_halfN_play.png / _stats.*  where the play was, game statistics (N = 1 first half, 2 second half)\n"
                      "*_halfN_teams.png / .csv     the two teams: heat map, territory, spread, tempo (CSV = numbers per 5 minutes)\n"
                      "*_halfN_chartdata.json       the numbers the charts of that half are drawn from (heat map grid, curves)\n"
+                     "*_board.json           player positions in the time of the joined video: upload it in the web player (tactical board)\n"
                      "v*.detections.jsonl     every player found, 3 times a second (shirt colours included)\n"
                      "v*.auto.keyframes.json  the camera path (pan, zoom, tilt over time)\n"
                      "teams.team_labels.json  which shirt colours you called team A and B\n")
