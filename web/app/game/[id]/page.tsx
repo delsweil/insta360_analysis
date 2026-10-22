@@ -52,6 +52,16 @@ export default function GamePage({ params }: Props) {
   const [isMobile, setIsMobile] = useState(false)
   const [showAnnotations, setShowAnnotations] = useState(false)
   const [showBoard, setShowBoard] = useState(false) // mobile HUD: board panel over the video
+  const [boardOff, setBoardOff] = useState(() => { // where the viewer dragged the mobile board to (remembered)
+    if (typeof window === 'undefined') return { x: 0, y: 0 }
+    try {
+      const v = JSON.parse(localStorage.getItem('board-offset') || 'null')
+      if (v && typeof v.x === 'number' && typeof v.y === 'number') return { x: v.x as number, y: v.y as number }
+    } catch {}
+    return { x: 0, y: 0 }
+  })
+  const boardBox = useRef<HTMLDivElement>(null)
+  const boardDrag = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
   const { state: boardState, reload: reloadBoard } = useBoard(id)
   const [showShare, setShowShare] = useState(false)
   const [markIn, setMarkIn] = useState<number | null>(null)
@@ -1503,17 +1513,45 @@ export default function GamePage({ params }: Props) {
           )}
         </div>
 
-        {/* ── Tactical board: small see-through pitch (stays on screen, also when the HUD hides) ── */}
+        {/* ── Tactical board: small see-through pitch you can drag (stays on screen, also when the HUD hides) ── */}
         {showBoard && boardState.status === 'ready' && (
           <div
+            ref={boardBox}
             style={{
               position: 'absolute', zIndex: 18, pointerEvents: 'none',
               right: 'max(8px, env(safe-area-inset-right))',
               top: 'max(52px, calc(env(safe-area-inset-top) + 42px))',
-              width: 'min(30vw, 260px)',
+              width: 'min(22vw, 190px)',
+              transform: `translate(${boardOff.x}px, ${boardOff.y}px)`,
             }}
           >
-            <BoardPanel gameId={id} gameTitle={game.title} state={boardState} reload={reloadBoard} currentTime={currentTime} isCoach={false} compact />
+            <div
+              onPointerDown={e => {
+                e.currentTarget.setPointerCapture(e.pointerId)
+                boardDrag.current = { sx: e.clientX, sy: e.clientY, ox: boardOff.x, oy: boardOff.y }
+              }}
+              onPointerMove={e => {
+                const d = boardDrag.current
+                const el = boardBox.current
+                const parent = el?.offsetParent as HTMLElement | null
+                if (!d || !el || !parent) return
+                const r = el.getBoundingClientRect()
+                const pr = parent.getBoundingClientRect()
+                let nx = d.ox + (e.clientX - d.sx)
+                let ny = d.oy + (e.clientY - d.sy)
+                nx = Math.max(boardOff.x + (pr.left - r.left), Math.min(boardOff.x + (pr.right - r.right), nx))
+                ny = Math.max(boardOff.y + (pr.top - r.top), Math.min(boardOff.y + (pr.bottom - r.bottom), ny))
+                setBoardOff({ x: nx, y: ny })
+              }}
+              onPointerUp={() => {
+                boardDrag.current = null
+                try { localStorage.setItem('board-offset', JSON.stringify(boardOff)) } catch {}
+              }}
+              onPointerCancel={() => { boardDrag.current = null }}
+              style={{ pointerEvents: 'auto', touchAction: 'none', cursor: 'grab' }}
+            >
+              <BoardPanel gameId={id} gameTitle={game.title} state={boardState} reload={reloadBoard} currentTime={currentTime} isCoach={false} compact />
+            </div>
             <button
               onClick={() => setShowBoard(false)}
               aria-label="Close board"
