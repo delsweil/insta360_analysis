@@ -65,6 +65,19 @@ export default function GamePage({ params }: Props) {
     return { x: 0, y: 0 }
   })
   const boardBox = useRef<HTMLDivElement>(null)
+  const [boardScale, setBoardScale] = useState(() => { // size of the mobile board (1 = normal), remembered
+    if (typeof window === 'undefined') return 1
+    try {
+      const v = Number(localStorage.getItem('board-scale'))
+      if (v >= 0.6 && v <= 2.4) return v
+    } catch {}
+    return 1
+  })
+  const sizeBoard = (delta: number) => {
+    const v = Math.round(Math.min(2.4, Math.max(0.6, boardScale + delta)) * 10) / 10
+    setBoardScale(v)
+    try { localStorage.setItem('board-scale', String(v)) } catch {}
+  }
   const boardDrag = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
   const { state: boardState, reload: reloadBoard } = useBoard(id)
   const [showShare, setShowShare] = useState(false)
@@ -1542,7 +1555,7 @@ export default function GamePage({ params }: Props) {
               position: 'absolute', zIndex: 18, pointerEvents: 'none',
               right: 'max(8px, env(safe-area-inset-right))',
               top: 'max(52px, calc(env(safe-area-inset-top) + 42px))',
-              width: 'min(22vw, 190px)',
+              width: `calc(min(22vw, 190px) * ${boardScale})`,
               transform: `translate(${boardOff.x}px, ${boardOff.y}px)`,
             }}
           >
@@ -1584,6 +1597,20 @@ export default function GamePage({ params }: Props) {
             >
               ✕
             </button>
+            {([['+', 0.2, 'Bigger board', 26], ['−', -0.2, 'Smaller board', 56]] as const).map(([ch, d, label, top]) => (
+              <button
+                key={ch}
+                onClick={() => sizeBoard(d)}
+                aria-label={label}
+                style={{
+                  position: 'absolute', top, left: -30, width: 26, height: 26, borderRadius: '50%', pointerEvents: 'auto',
+                  border: '1px solid rgba(255,255,255,0.3)', background: 'rgba(0,0,0,0.5)',
+                  color: '#fff', fontSize: 15, lineHeight: 1, cursor: 'pointer',
+                }}
+              >
+                {ch}
+              </button>
+            ))}
           </div>
         )}
 
