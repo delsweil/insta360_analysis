@@ -51,6 +51,7 @@ export default function GamePage({ params }: Props) {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [isMobile, setIsMobile] = useState(false)
   const [showAnnotations, setShowAnnotations] = useState(false)
+  const [showBoard, setShowBoard] = useState(false) // mobile HUD: board panel over the video
   const { state: boardState, reload: reloadBoard } = useBoard(id)
   const [showShare, setShowShare] = useState(false)
   const [markIn, setMarkIn] = useState<number | null>(null)
@@ -1377,6 +1378,25 @@ export default function GamePage({ params }: Props) {
               {activeLabelDisplay} ▾
             </button>
 
+            {/* Tactical board — only when this game has board data */}
+            {boardState.status === 'ready' && (
+              <button
+                onClick={() => setShowBoard(v => !v)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '0 11px', height: 38,
+                  background: showBoard ? '#E8780A' : 'rgba(255,255,255,0.1)',
+                  backdropFilter: 'blur(8px)',
+                  border: '1px solid rgba(255,255,255,0.25)',
+                  borderRadius: 9, color: '#fff',
+                  fontSize: 12, fontWeight: 600,
+                  fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+                }}
+              >
+                ⚽ Board
+              </button>
+            )}
+
             {/* Tactical draw button — coaches only */}
             {isCoach && (
               <button
@@ -1482,6 +1502,35 @@ export default function GamePage({ params }: Props) {
           </div>
           )}
         </div>
+
+        {/* ── Tactical board (stays on screen, also when the HUD hides) ── */}
+        {showBoard && boardState.status === 'ready' && (
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              position: 'absolute', zIndex: 18,
+              right: 'max(8px, env(safe-area-inset-right))',
+              top: 'max(48px, calc(env(safe-area-inset-top) + 38px))',
+              bottom: 'max(64px, calc(env(safe-area-inset-bottom) + 56px))',
+              width: 'min(46vw, 380px)',
+            }}
+          >
+            <button
+              onClick={() => setShowBoard(false)}
+              aria-label="Close board"
+              style={{
+                position: 'absolute', top: 0, left: -34, width: 28, height: 28, borderRadius: '50%',
+                border: '1px solid rgba(255,255,255,0.3)', background: 'rgba(0,0,0,0.55)',
+                color: '#fff', fontSize: 14, cursor: 'pointer',
+              }}
+            >
+              ✕
+            </button>
+            <div style={{ height: '100%', overflowY: 'auto', borderRadius: 12, boxShadow: '0 4px 24px rgba(0,0,0,0.5)' }}>
+              <BoardPanel gameId={id} gameTitle={game.title} state={boardState} reload={reloadBoard} currentTime={currentTime} isCoach={false} />
+            </div>
+          </div>
+        )}
 
         {/* ── Label sheet (slides up from bottom) ── */}
         {showAnnotations && (
