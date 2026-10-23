@@ -28,6 +28,8 @@ from typing import Dict, List, Optional
 import numpy as np
 
 import auto_keyframes as AK
+import board_clean as BC
+import ground_model as GM
 import scene_check as S
 
 FORMAT = "football-autopan-board"
@@ -39,11 +41,14 @@ MIN_CONF = 0.3
 MIN_HEIGHT = 14.0                           # smallest box (px) whose shirt colour is trusted
 MARGIN_M = 1.5                              # a foot this close (metres) to the pitch outline still counts as on the pitch
 RESCUE = 1.5                                # a colour closer to a team than 1.5 x to its 'other' group still counts for the team
+MAX_TEAM = 11                               # players of one team on the pitch at one moment
+TEAM_MARGIN_M = 0.5                         # a team player this far (metres) outside the outline is shown as 'other'
 
 
 def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: float, max_lon: float, min_conf: float,
                 min_height: float, k_angle: float, rescue: float = RESCUE, calib: Optional[str] = None,
-                margin_m: float = MARGIN_M) -> List[dict]:
+                margin_m: float = MARGIN_M, tidy: bool = True, max_team: int = MAX_TEAM,
+                team_margin_m: float = TEAM_MARGIN_M, stats: Optional[dict] = None, feet: bool = True) -> List[dict]:
     """One part (one detections file) -> frames {vt, pan, fov, players:[(x, y, team)]}; vt = seconds in the joined video."""
     hdr, frames = AK.load_detections(det_path, max_lon=max_lon)
     fy = S.view_fy(hdr)
@@ -71,24 +76,65 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
         pan = np.array([K.wrap180(K.PAN_SIGN * v) for v in p])
         fov = np.asarray(f, float)
 
-    rows, owner = [], []
+    kept, centres = [], []
     for i, r in enumerate(frames):
         for p in r["players"]:
             if p[3] < min_conf or (tester is not None and not tester(p[0], p[1], p[2])):
                 continue
-            centre = float(views[np.argmin(np.abs(views - p[0]))])
-            x, y = S.ground_position(p[0], p[2], centre, fy, k_angle)
-            has_colour = len(p) > 5 and p[5] is not None and p[2] >= min_height
-            rows.append((x, y, *(p[5] if has_colour else (-1, -1, -1))))
-            owner.append(i)
+            kept.append((i, p))
+            centres.append(float(views[np.argmin(np.abs(views - p[0]))]))
+    # box height alone is a coarse ruler far away; where the feet are in the picture is a steadier one (ground_model.py)
+    h_use = np.array([p[2] for _, p in kept], float)
+    gm = None
+    if feet and kept:
+        arr = np.array([[p[0], p[1], p[2]] for r in frames for p in r["players"] if p[3] >= 0.5], float).reshape(-1, 3)
+        if len(arr):
+            cen_all = views[np.argmin(np.abs(views[None, :] - arr[:, 0:1]), axis=1)]
+            f = GM.fit(arr[:, 0], arr[:, 1], arr[:, 2], cen_all)
+            if f is not None and f[2] < 0.15:
+                gm = f
+    if gm is not None:
+        lo_ = np.array([p[0] for _, p in kept]); la_ = np.array([p[1] for _, p in kept])
+        h_use, used = GM.fuse(lo_, la_, h_use, np.array(centres), gm[0], gm[1])
+        if stats is not None:
+            stats["feet_used"] = stats.get("feet_used", 0) + int(used.sum())
+            stats["feet_gated"] = stats.get("feet_gated", 0) + int((used == 0).sum())
+    rows, owner, conf, outm = [], [], [], []
+    for k, (i, p) in enumerate(kept):
+        x, y = S.ground_position(p[0], float(h_use[k]), centres[k], fy, k_angle)
+        has_colour = len(p) > 5 and p[5] is not None and p[2] >= min_height
+        rows.append((x, y, *(p[5] if has_colour else (-1, -1, -1))))
+        owner.append(i)
+        conf.append(float(p[3]))
+        outm.append(0.0 if tester is None else tester.outside_m(p[0], p[1], p[2]))
     team = np.full(len(rows), OTHER, int)
+    weight = np.zeros(len(rows))                 # how much the detection's own label counts as a vote
+    margin = np.ones(len(rows))                  # 0 = the colour is as near one team as the other, 1 = sure
     if rows:
         a = np.array(rows, float)
+        c = np.array(conf)
         ok = a[:, 2] >= 0
         if ok.any():
             fn = getattr(clusters, "team_of_rescue", None)
             t = fn(a[ok, 2:5], rescue) if fn is not None else clusters.team_of(a[ok, 2:5])
             team[ok] = np.where(t >= 0, t, OTHER)
+            dist = getattr(clusters, "team_distances", None)
+            m = np.ones(int(ok.sum()))
+            if dist is not None:
+                d = dist(a[ok, 2:5])
+                dd = np.where(np.isfinite(d[:, :2]), d[:, :2], 1e3)
+                m = np.abs(dd[:, 0] - dd[:, 1]) / np.maximum(dd[:, 0] + dd[:, 1], 1e-6)
+            margin[ok] = m
+            sure_other = team[ok] == OTHER                       # a colour no team is near (referee, goalkeeper)
+            weight[ok] = np.where(sure_other, 0.5, np.maximum(m, 0.05)) * c[ok]
+        if tidy:
+            vt = np.array([float(r["t"]) for r in frames])
+            team, st = BC.clean(np.array(owner), vt, a[:, 0], a[:, 1], team, weight, margin, np.array(outm),
+                                max_team, team_margin_m)
+            if stats is not None:
+                for k, v in st.items():
+                    stats[k] = stats.get(k, 0) + v
+                stats["players"] = stats.get("players", 0) + len(rows)
     out = [{"vt": float(r["t"]) - t_in + video_start,
             "pan": None if pan is None else float(pan[i]), "fov": None if fov is None else float(fov[i]), "players": []}
            for i, r in enumerate(frames)]
@@ -99,11 +145,14 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
 
 def build(parts: List[dict], clusters, title: str = "", lang: str = "en", max_lon: float = 98.0, min_conf: float = MIN_CONF,
           min_height: float = MIN_HEIGHT, k_angle: float = 0.75, rescue: float = RESCUE,
-          margin_m: float = MARGIN_M) -> dict:
+          margin_m: float = MARGIN_M, tidy: bool = True, max_team: int = MAX_TEAM,
+          team_margin_m: float = TEAM_MARGIN_M, feet: bool = True) -> dict:
     """parts: [{det, kf, half, video_start, duration, box:[x0,x1,y0,y1], a_attacks_right}] in playing order."""
     frames, meta_parts = [], []
+    stats: dict = {}
     for p in parts:
-        fr = part_frames(p["det"], p.get("kf"), clusters, float(p["video_start"]), max_lon, min_conf, min_height, k_angle, rescue, p.get("calib"), margin_m)
+        fr = part_frames(p["det"], p.get("kf"), clusters, float(p["video_start"]), max_lon, min_conf, min_height, k_angle, rescue, p.get("calib"), margin_m,
+                         tidy, max_team, team_margin_m, stats, feet)
         end = float(p["video_start"]) + float(p["duration"]) if p.get("duration") else None
         if end is not None:
             fr = [f for f in fr if f["vt"] <= end + 1e-6]
@@ -115,7 +164,7 @@ def build(parts: List[dict], clusters, title: str = "", lang: str = "en", max_lo
     if not frames:
         raise SystemExit("no moments for the board (no players found)")
     frames.sort(key=lambda f: f["vt"])
-    return {"format": FORMAT, "version": VERSION, "title": title, "lang": lang, "k_angle": k_angle,
+    return {"format": FORMAT, "version": VERSION, "title": title, "lang": lang, "k_angle": k_angle, "tidy": stats or None,
             "teams": {"A": {"name": clusters.names[0], "colour": clusters.colours[0]},
                       "B": {"name": clusters.names[1], "colour": clusters.colours[1]}},
             "parts": meta_parts,
@@ -151,6 +200,11 @@ def main(argv=None) -> int:
     p.add_argument("--max-lon", type=float, default=98.0)
     p.add_argument("--min-conf", type=float, default=MIN_CONF, help="lowest detector confidence shown on the board")
     p.add_argument("--min-height", type=float, default=MIN_HEIGHT, help="smallest box (px) whose shirt colour is trusted")
+    p.add_argument("--no-tidy", action="store_true", help="skip the clean-up of the team labels (tracks, pitch outline, 11 a side)")
+    p.add_argument("--no-feet", action="store_true", help="place players by box height only (not combined with the foot position)")
+    p.add_argument("--max-team", type=int, default=MAX_TEAM, help="most players of one team at one moment")
+    p.add_argument("--team-margin-m", type=float, default=TEAM_MARGIN_M,
+                   help="a team player more than this many metres outside the outline is shown as 'other'")
     p.add_argument("--angle-factor", type=float, default=0.75)
     p.add_argument("--rescue-ratio", type=float, default=RESCUE,
                    help="a colour whose nearest group is neither team still gets a team if a team group is within this factor "
@@ -175,9 +229,17 @@ def main(argv=None) -> int:
                       "calib": a.calib[i] if a.calib and a.calib[i] != "-" else None,
                       "a_attacks_right": d.get("team_a_attacks_right")})
         t += a.durations[i]
-    data = build(parts, clusters, a.title, a.lang, a.max_lon, a.min_conf, a.min_height, a.angle_factor, a.rescue_ratio, a.margin_m)
+    data = build(parts, clusters, a.title, a.lang, a.max_lon, a.min_conf, a.min_height, a.angle_factor, a.rescue_ratio, a.margin_m,
+                 not a.no_tidy, a.max_team, a.team_margin_m, not a.no_feet)
     write(a.out, data)
     print(f"wrote {a.out}: {len(data['frames'])} moments, {sum((len(f) - 3) // 3 for f in data['frames'])} player positions")
+    st = data.get("tidy")
+    if st and "feet_used" in st:
+        print(f"positions: {st['feet_used']} combined with the foot position, {st.get('feet_gated', 0)} kept at box height only")
+    if st:
+        print(f"tidied: {st.get('relabelled', 0)} team labels changed by their track, {st.get('recovered', 0)} unreadable players "
+              f"given a team, {st.get('outside', 0)} outside the pitch shown as other, {st.get('to_other_team', 0) + st.get('to_other', 0)} "
+              f"over {a.max_team} a side moved (of {st.get('players', 0)} detections)")
     return 0
 
 

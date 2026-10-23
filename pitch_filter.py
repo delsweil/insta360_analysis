@@ -63,6 +63,15 @@ class FootTester:
         yi = int(np.clip(round(float(y)), 0, X.EQ_H - 1))
         return float(self.dist[yi, xi])
 
+    def outside_m(self, lon: float, lat: float, box_h: float) -> float:
+        """How far outside the outline the foot is, in metres on the ground (0 = inside)."""
+        d = self.distance_px(lon, lat)
+        if d <= 0.0:
+            return 0.0
+        z = 1.7 * self.fy / (self.k * max(box_h, 4.0))
+        px_per_m = float(np.degrees(np.arctan2(1.0, max(z, 1.0)))) * self.PX_PER_DEG
+        return d / max(px_per_m, 1e-6)
+
     def __call__(self, lon: float, lat: float, box_h: float) -> bool:
         return self.distance_px(lon, lat) <= self.allowed_px(box_h)
 

@@ -55,6 +55,8 @@ The app's last step writes `*_board.json`: every player position (3 a second) in
 3. The board follows the YouTube time: pause = freeze frame. There are Trails, enlarge, save as picture; share links show it too.
 4. If the board is a fraction of a second off, use the Sync buttons and **Save for everyone**.
 
+The board data is tidied before it is written (`board_clean.py`): a player's team is the vote of his short track over about 5 seconds (not just one frame's shirt colour), someone more than 0.5 m outside the pitch outline is shown as "other", and no team has more than 11 players at one moment. The app's log prints how many labels this changed; `--no-tidy` switches it off. Players are placed from both the height of their box and the position of their feet in the picture (`ground_model.py`), which steadies the far side; `--no-feet` uses the box height alone. `ground_check.py` shows how well the two agree for a video.
+
 Positions are estimated from the video (a few metres off, more on the far side): read the shape, not exact distances. This assumes the one joined video is the one on YouTube.
 
 ---

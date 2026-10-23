@@ -192,6 +192,38 @@ class TestBoard(unittest.TestCase):
         data = BD.build([{**part, "calib": None}], FakeClusters())
         self.assertEqual((len(data["frames"][0]) - 3) // 3, 2)        # no outline: both
 
+    def test_tidy_corrects_a_flickering_colour_and_can_be_switched_off(self):
+        a = self.p("a.jsonl")
+        with open(a, "w") as fh:
+            fh.write(json.dumps({"type": "header", "view_lons": [0], "start": 0.0, "fps": 3.0, "square_views": True, "colours": True}) + "\n")
+            for i in range(12):
+                shirt = [30, 30, 220] if i == 6 else [230, 230, 230]          # one moment the white shirt looked red
+                fh.write(json.dumps({"t": i / 3.0, "players": [[0.0, -10.0, 60.0, 0.9, None, shirt]], "balls": []}) + "\n")
+        part = {"det": a, "half": 1, "video_start": 0.0, "duration": 10.0}
+        teams = lambda d: [f[5] for f in d["frames"]]
+        self.assertEqual(set(teams(BD.build([part], FakeClusters()))), {0})
+        self.assertEqual(teams(BD.build([part], FakeClusters(), tidy=False))[6], 1)
+        self.assertEqual(BD.build([part], FakeClusters())["tidy"]["relabelled"], 1)
+
+    def test_feet_make_far_positions_steadier(self):
+        import test_ground_model as TG
+        lon, lat, h, cen, d, _ = TG.world(n=1500, seed=7, noise=0.08, d_lo=40.0, d_hi=75.0)
+        a = self.p("w.jsonl")
+        with open(a, "w") as fh:
+            fh.write(json.dumps({"type": "header", "view_lons": [-40, 0, 40], "start": 0.0, "fps": 3.0, "square_views": True,
+                                 "colours": True}) + "\n")
+            for i in range(150):                                              # 150 moments of 10 players each
+                sl = slice(i * 10, i * 10 + 10)
+                pl = [[float(lo), float(la), float(hh), 0.9, None, [230, 230, 230]] for lo, la, hh in zip(lon[sl], lat[sl], h[sl])]
+                fh.write(json.dumps({"t": i / 3.0, "players": pl, "balls": []}) + "\n")
+        part = {"det": a, "half": 1, "video_start": 0.0, "duration": 100.0}
+        def ys(feet):
+            d_ = BD.build([part], FakeClusters(), feet=feet, tidy=False)
+            return np.array([[f[k + 1] / 10.0 for k in range(3, len(f), 3)] for f in d_["frames"]]).ravel()
+        truth = (d * np.cos(np.radians(0.75 * lon)))[:1500].reshape(150, 10).ravel()    # the board's y: distance x cos(real angle)
+        err = lambda y: np.median(np.abs(y - truth))
+        self.assertLess(err(ys(True)), 0.7 * err(ys(False)))
+
     def test_probe_explains_a_drop(self):
         import io
         import contextlib

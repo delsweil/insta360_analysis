@@ -249,6 +249,17 @@ class Labelled:
         f = S.colour_features(bgr)
         return np.argmin(((f[:, None, :] - self.centres[None]) ** 2).sum(-1), axis=1)
 
+    def team_distances(self, bgr: np.ndarray) -> np.ndarray:
+        """(n, 3): distance of each colour to the nearest group of team A, of team B and of any other group (inf = none)."""
+        f = S.colour_features(bgr)
+        d = np.sqrt(((f[:, None, :] - self.centres[None]) ** 2).sum(-1))
+        out = np.full((len(d), 3), np.inf)
+        for c in (0, 1, 2):
+            sel = (self.group_team == c) if c < 2 else (self.group_team < 0)
+            if sel.any():
+                out[:, c] = d[:, sel].min(axis=1)
+        return out
+
     def team_of_rescue(self, bgr: np.ndarray, ratio: float = 1.5) -> np.ndarray:
         """Like team_of, but a colour whose nearest group is an 'other' one (referee, goalkeeper, or a shirt seen small and
         washed out by the grass) still gets a team when a team group is almost as near: distance to the nearest team group
