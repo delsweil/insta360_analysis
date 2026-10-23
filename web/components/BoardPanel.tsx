@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   type Board, type BoardState, type Box, type Raw,
-  boxOf, frameAt, parseBoard, partAt, playersOf, uploadBoard,
+  boxOf, frameAt, parseBoard, partAt, playersIn, uploadBoard,
 } from '@/lib/board'
 
 const NAVY = '#0f2972'
@@ -78,7 +78,7 @@ function BoardView({ board, t, trails, svgRef, maxHeight, translucent }: ViewPro
   const idx = frameAt(board, t)
   const frame = idx >= 0 ? board.frames[idx] : null
   const colours = [board.teams.A.colour, board.teams.B.colour, OTHER_COLOUR]
-  const players = frame ? playersOf(frame) : []
+  const players = frame ? playersIn(frame, [x0, x1, y0, y1]) : []
   const wedge = useMemo(() => {
     if (!frame || frame[1] == null || frame[2] == null) return null
     const k = board.kAngle
@@ -92,16 +92,13 @@ function BoardView({ board, t, trails, svgRef, maxHeight, translucent }: ViewPro
   if (trails && idx > 0) {
     for (let k = 1; k <= 6 && idx - k >= 0; k++) {
       if (board.times[idx] - board.times[idx - k] > 2.4) break
-      for (const p of playersOf(board.frames[idx - k])) old.push({ ...p, age: k })
+      for (const p of playersIn(board.frames[idx - k], [x0, x1, y0, y1])) old.push({ ...p, age: k })
     }
   }
 
-  // the view takes in the pitch and everyone ever seen beside it (near touchline, benches)
-  const r = board.reach
-  const vx0 = Math.min(x0 - PAD, r[0]), vx1 = Math.max(x1 + PAD, r[1])
-  const vy0 = Math.min(y0 - PAD, r[2]), vy1 = Math.max(y1 + PAD, r[3])
-  const vbW = vx1 - vx0
-  const vbH = vy1 - vy0
+  const vx0 = x0 - PAD, vy1 = y1 + PAD
+  const vbW = x1 - x0 + 2 * PAD
+  const vbH = y1 - y0 + 2 * PAD
   return (
     <svg
       ref={svgRef}
@@ -263,7 +260,7 @@ export default function BoardPanel({ gameId, gameTitle, state, reload, currentTi
   if (compact) return <BoardView board={board} t={t} trails={false} translucent />
   const part = partAt(board, t)
   const idx = frameAt(board, t)
-  const players = idx >= 0 ? playersOf(board.frames[idx]) : []
+  const players = idx >= 0 ? playersIn(board.frames[idx], boxOf(board, part)) : []
   const teams = [board.teams.A, board.teams.B]
   const attacksRight = part?.a_attacks_right
   const info = [0, 1].map(k => {
