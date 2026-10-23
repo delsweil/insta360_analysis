@@ -12,7 +12,8 @@ import ClipRecorder from '@/components/ClipRecorder'
 import AnnotationCanvas, { type Shape, type Tool, type AnnotationCanvasHandle } from '@/components/AnnotationCanvas'
 import RecordExportButton from '@/components/RecordExportButton'
 import TimingStrip from '@/components/TimingStrip'
-import DrawTools from '@/components/DrawTools'
+import TransportBar, { RATES } from '@/components/TransportBar'
+import FloatingDrawTools, { DRAW_TOOLS } from '@/components/FloatingDrawTools'
 import VeoImportModal from '@/components/VeoImportModal'
 import BoardPanel from '@/components/BoardPanel'
 import { useBoard } from '@/lib/board'
@@ -281,6 +282,19 @@ export default function GamePage({ params }: Props) {
     )
   }, [])
 
+  // Desktop transport: jumps keep the play state (unlike seekTo, which always plays), single frames pause first
+  const timeRef = useRef(0)
+  useEffect(() => { timeRef.current = currentTime }, [currentTime])
+  const seekBy = useCallback((delta: number) => {
+    const t = Math.min(Math.max(0, timeRef.current + delta), duration > 0 ? duration : 99999)
+    timeRef.current = t
+    setCurrentTime(t)
+    firedAnnotationIds.current.clear()
+    scrubTo(t)
+  }, [duration, scrubTo])
+  const stepFrame = useCallback((dir: 1 | -1) => { pauseVideo(); seekBy(dir / 30) }, [pauseVideo, seekBy])
+  const changeRate = useCallback((r: number) => { setMobilePlaybackRate(r); setVideoRate(r) }, [setVideoRate])
+
   const jumpSecFor = (ann: Annotation) =>
     ann.label === 'tactical' && ann.context_start_sec != null ? ann.context_start_sec : ann.timestamp_sec
 
@@ -406,6 +420,46 @@ export default function GamePage({ params }: Props) {
     setDrawTool('select')
     setIsDrawing(true)
   }, [pauseVideo])
+
+  const finishDrawing = useCallback(() => {
+    mobileCanvasRef.current?.finalizePending()
+    desktopCanvasRef.current?.finalizePending()
+    setIsDrawing(false); setDrawTool('select'); setEditingAnnotationId(null); setMarkIn(null)
+    setAnnotationEndSec(null); setClipEndSec(null)
+  }, [])
+
+  // Keyboard on the desktop layout: space/K play, arrows and J/L jump, comma/period frames, brackets speed, D draw, 1-8 tools
+  useEffect(() => {
+    if (isMobile || forceHud) return
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return
+      if (e.metaKey || e.ctrlKey) {
+        if (isDrawing && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); setDraftShapes(prev => prev.slice(0, -1)) }
+        return
+      }
+      if (e.altKey) return
+      const k = e.key
+      const idx = RATES.indexOf(mobilePlaybackRate)
+      if (k === ' ' || k === 'k' || k === 'K') { e.preventDefault(); if (isPlaying) pauseVideo(); else resumeVideo() }
+      else if (k === 'ArrowLeft') { e.preventDefault(); seekBy(e.shiftKey ? -1 : -5) }
+      else if (k === 'ArrowRight') { e.preventDefault(); seekBy(e.shiftKey ? 1 : 5) }
+      else if (k === 'j' || k === 'J') seekBy(-10)
+      else if (k === 'l' || k === 'L') seekBy(10)
+      else if (k === ',') stepFrame(-1)
+      else if (k === '.') stepFrame(1)
+      else if (k === '[') changeRate(RATES[Math.max(0, (idx < 0 ? 2 : idx) - 1)])
+      else if (k === ']') changeRate(RATES[Math.min(RATES.length - 1, (idx < 0 ? 2 : idx) + 1)])
+      else if ((k === 'd' || k === 'D') && isCoach && !isDrawing) {
+        if (selectedLabel !== 'tactical') { setSelectedLabel('tactical'); setDraftShapes([]); setEditingAnnotationId(null) }
+        startDrawing()
+      }
+      else if (isDrawing && k >= '1' && k <= String(DRAW_TOOLS.length)) setDrawTool(DRAW_TOOLS[Number(k) - 1].key)
+      else if (isDrawing && k === 'Escape') setDrawTool('select')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isMobile, forceHud, isDrawing, isPlaying, isCoach, selectedLabel, mobilePlaybackRate, pauseVideo, resumeVideo, seekBy, stepFrame, changeRate, startDrawing])
 
   const handleQuickSave = useCallback(async () => {
     if (saving) return
@@ -1963,6 +2017,17 @@ export default function GamePage({ params }: Props) {
                 )}
                 onToggleVideo={() => (isPlaying ? pauseVideo() : resumeVideo())}
               />
+              {isDrawing && (
+                <FloatingDrawTools
+                  tool={drawTool}
+                  onChange={setDrawTool}
+                  canUndo={draftShapes.length > 0}
+                  shapeCount={draftShapes.length}
+                  onUndo={() => setDraftShapes(prev => prev.slice(0, -1))}
+                  onClear={() => setDraftShapes([])}
+                  onDone={finishDrawing}
+                />
+              )}
             </div>
 
             {/* Timeline card */}
@@ -1976,35 +2041,15 @@ export default function GamePage({ params }: Props) {
                 display: 'flex', justifyContent: 'space-between',
                 alignItems: 'center', marginBottom: 8,
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <button
-                    onClick={() => (isPlaying ? pauseVideo() : resumeVideo())}
-                    title={isPlaying ? 'Pause' : 'Play'}
-                    style={{
-                      width: 28, height: 28, borderRadius: 8,
-                      border: '1px solid #E4E6EE', background: '#fff',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      cursor: 'pointer', color: '#0f2972', flexShrink: 0, padding: 0,
-                    }}
-                  >
-                    {isPlaying ? (
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                        <rect x="1" y="0" width="4" height="12" />
-                        <rect x="7" y="0" width="4" height="12" />
-                      </svg>
-                    ) : (
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                        <polygon points="1,0 11,6 1,12" />
-                      </svg>
-                    )}
-                  </button>
-                  <span style={{
-                    fontFamily: 'Bebas Neue, sans-serif',
-                    fontSize: 16, color: '#0f2972', letterSpacing: '0.04em',
-                  }}>
-                    {formatTime(currentTime)} / {formatTime(duration)}
-                  </span>
-                </div>
+                <TransportBar
+                  isPlaying={isPlaying}
+                  timeLabel={`${formatTime(currentTime)} / ${formatTime(duration)}`}
+                  rate={mobilePlaybackRate}
+                  onTogglePlay={() => (isPlaying ? pauseVideo() : resumeVideo())}
+                  onSeekBy={seekBy}
+                  onStep={stepFrame}
+                  onRate={changeRate}
+                />
                 <span style={{ fontSize: 10, color: '#8A8F9E' }}>
                   {isCoach
                     ? markIn !== null ? `Mark in: ${formatTime(markIn)}` : 'Mark in/out for range'
@@ -2048,19 +2093,13 @@ export default function GamePage({ params }: Props) {
                 <div style={{ marginBottom: 8 }}>
                   {isDrawing ? (
                     <>
-                      <DrawTools
-                        tool={drawTool}
-                        onChange={setDrawTool}
-                        canUndo={draftShapes.length > 0}
-                        onUndo={() => setDraftShapes(prev => prev.slice(0, -1))}
-                        onClear={() => setDraftShapes([])}
-                        onDone={() => {
-                          mobileCanvasRef.current?.finalizePending()
-                          desktopCanvasRef.current?.finalizePending()
-                          setIsDrawing(false); setDrawTool('select'); setEditingAnnotationId(null); setMarkIn(null)
-                          setAnnotationEndSec(null); setClipEndSec(null)
-                        }}
-                      />
+                      <div style={{ fontSize: 11, color: '#8A8F9E', padding: '2px 0 6px' }}>
+                        Drawing tools are on the video (keys 1–8, Ctrl/⌘+Z undo, Esc = select).
+                        <button onClick={finishDrawing} style={{
+                          marginLeft: 8, fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 99, border: 'none',
+                          background: '#0f2972', color: '#fff', cursor: 'pointer',
+                        }}>Done</button>
+                      </div>
                       <div style={{
                         display: 'flex', alignItems: 'center', gap: 6,
                         fontSize: 11, color: '#8A8F9E', marginTop: 4,
