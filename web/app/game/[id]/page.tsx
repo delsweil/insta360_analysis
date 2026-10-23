@@ -17,6 +17,8 @@ import FloatingDrawTools, { DRAW_TOOLS } from '@/components/FloatingDrawTools'
 import VeoImportModal from '@/components/VeoImportModal'
 import BoardPanel from '@/components/BoardPanel'
 import { useBoard } from '@/lib/board'
+import StatsPanel, { StatsCard } from '@/components/StatsPanel'
+import { useStats } from '@/lib/stats'
 
 function formatTime(sec: number) {
   const m = Math.floor(sec / 60)
@@ -81,6 +83,14 @@ export default function GamePage({ params }: Props) {
   }
   const boardDrag = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
   const { state: boardState, reload: reloadBoard } = useBoard(id)
+  const { state: statsState } = useStats(id)
+  const [showStats, setShowStats] = useState(false) // phone HUD: statistics sheet
+  // where a half starts in the video, known when the board data has it
+  const halfStart = useCallback((half: string) => {
+    if (boardState.status !== 'ready') return null
+    const p = boardState.board.parts.find(x => String(x.half) === half)
+    return p ? p.video_start : null
+  }, [boardState])
   const [showShare, setShowShare] = useState(false)
   const [markIn, setMarkIn] = useState<number | null>(null)
   const [isRecording, setIsRecording] = useState(false)
@@ -1495,6 +1505,24 @@ export default function GamePage({ params }: Props) {
               </button>
             )}
 
+            {/* Match statistics — only when this game has them */}
+            {statsState.status === 'ready' && (
+              <button
+                onClick={() => { setShowStats(true); setHudVisible(true) }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '0 11px', height: 38,
+                  background: 'rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)',
+                  border: '1px solid rgba(255,255,255,0.25)',
+                  borderRadius: 9, color: '#fff',
+                  fontSize: 12, fontWeight: 600,
+                  fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+                }}
+              >
+                📊 Statistik
+              </button>
+            )}
+
             {/* Tactical draw button — coaches only */}
             {isCoach && (
               <button
@@ -1665,6 +1693,38 @@ export default function GamePage({ params }: Props) {
                 {ch}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* ── Statistics sheet (slides up from bottom) ── */}
+        {showStats && statsState.status === 'ready' && (
+          <div
+            onClick={() => setShowStats(false)}
+            style={{ position: 'absolute', inset: 0, zIndex: 22, background: 'rgba(0,0,0,0.35)' }}
+          >
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{
+                position: 'absolute', bottom: 0, left: 0, right: 0, maxHeight: '88%',
+                display: 'flex', flexDirection: 'column',
+                background: 'rgba(8,12,24,0.96)', backdropFilter: 'blur(16px)',
+                borderTop: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px 16px 0 0',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px 6px' }}>
+                <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, letterSpacing: '0.04em', color: '#fff' }}>Statistik</div>
+                <button
+                  onClick={() => setShowStats(false)} aria-label="Schließen"
+                  style={{ width: 30, height: 30, borderRadius: '50%', border: '1px solid rgba(255,255,255,0.25)', background: 'rgba(255,255,255,0.08)', color: '#fff', fontSize: 14, cursor: 'pointer' }}
+                >✕</button>
+              </div>
+              <div style={{ overflowY: 'auto', padding: '4px 14px max(22px, env(safe-area-inset-bottom))', WebkitOverflowScrolling: 'touch' }}>
+                <StatsPanel
+                  stats={statsState.stats} dark halfStart={halfStart} now={currentTime}
+                  onSeek={sec => { seekTo(sec); setShowStats(false) }}
+                />
+              </div>
+            </div>
           </div>
         )}
 
@@ -2029,6 +2089,11 @@ export default function GamePage({ params }: Props) {
                 />
               )}
             </div>
+
+            {/* Match statistics: a card that opens under the video */}
+            {!focusMode && statsState.status === 'ready' && (
+              <StatsCard stats={statsState.stats} halfStart={halfStart} now={currentTime} onSeek={seekTo} />
+            )}
 
             {/* Timeline card */}
             {!focusMode && (

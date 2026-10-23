@@ -6,6 +6,8 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import Topbar from '@/components/Topbar'
+import StatsUpload, { EMPTY_DRAFT, type StatsDraft } from '@/components/StatsUpload'
+import { saveStats } from '@/lib/stats'
 
 const ASN = 'ASN Pfeil Phönix'
 
@@ -59,6 +61,7 @@ export default function AddGamePage() {
   const [durationMin, setDurationMin] = useState('')
   const [error, setError]         = useState('')
   const [saving, setSaving]       = useState(false)
+  const [statsDraft, setStatsDraft] = useState<StatsDraft>(EMPTY_DRAFT)
 
   const videoId = extractYouTubeId(youtubeUrl)
 
@@ -78,6 +81,7 @@ export default function AddGamePage() {
     if (!opponent.trim()) { setError('Bitte Gegner eingeben'); return }
     if (!date)            { setError('Bitte Datum auswählen'); return }
     if (youtubeUrl && !videoId) { setError('Keine gültige YouTube URL'); return }
+    if (statsDraft.problem) { setError(statsDraft.problem); return }
 
     setSaving(true)
     const { data: { user } } = await supabase.auth.getUser()
@@ -102,6 +106,16 @@ export default function AddGamePage() {
       .single()
 
     if (err) { setError(err.message); setSaving(false); return }
+    if (Object.keys(statsDraft.halves).length) {
+      const msg = await saveStats(data.id, { format: 'football-autopan-stats', version: 1, halves: statsDraft.halves })
+      if (msg) {
+        // the game exists now: carry on in the edit screen, where the statistics can be added again
+        setError(`Spiel gespeichert, aber die Statistik nicht: ${msg}. Führe web/supabase/stats.sql im Supabase SQL-Editor aus und lade sie beim Bearbeiten erneut hoch.`)
+        setSaving(false)
+        setTimeout(() => router.push(`/game/${data.id}/edit`), 4000)
+        return
+      }
+    }
     router.push(`/game/${data.id}`)
   }
 
@@ -227,6 +241,8 @@ export default function AddGamePage() {
               style={inputStyle}
             />
           </div>
+
+          <StatsUpload existing={null} onChange={setStatsDraft} />
 
           {/* YouTube preview */}
           {videoId && (

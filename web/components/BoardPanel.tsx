@@ -7,7 +7,7 @@ import {
 } from '@/lib/board'
 
 const NAVY = '#0f2972'
-const PAD = 3 // metres of grass around the pitch
+export const PAD = 3 // metres of grass around the pitch
 const OTHER_COLOUR = '#aab3c5'
 
 function fmt(sec: number) {
@@ -22,7 +22,7 @@ function spread(v: number[]) {
   return q(0.9) - q(0.1)
 }
 
-function Pitch({ box, grass = 1 }: { box: Box; grass?: number }) {
+export function Pitch({ box, grass = 1 }: { box: Box; grass?: number }) {
   const [x0, x1, y0, y1] = box
   const L = x1 - x0
   const W = y1 - y0

@@ -6,6 +6,8 @@ import React, { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase, getCurrentUserRole, isCoachOrAdmin } from '@/lib/supabase'
 import Topbar from '@/components/Topbar'
+import StatsUpload, { EMPTY_DRAFT, type StatsDraft } from '@/components/StatsUpload'
+import { fetchStats, removeStats, saveStats, type HalfStats } from '@/lib/stats'
 
 const ASN = 'ASN Pfeil Phönix'
 const STATUSES = ['raw', 'calibrated', 'autopanned', 'uploaded'] as const
@@ -44,6 +46,8 @@ export default function EditGamePage({ params }: { params: Promise<{ id: string 
   const [durationMin, setDurationMin] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [oldStats, setOldStats] = useState<Record<string, HalfStats> | null>(null)
+  const [statsDraft, setStatsDraft] = useState<StatsDraft>(EMPTY_DRAFT)
 
   const derive = (side: 'home' | 'away', opp: string) =>
     opp ? `${side === 'home' ? ASN : opp} vs. ${side === 'home' ? opp : ASN}` : ''
@@ -72,6 +76,7 @@ export default function EditGamePage({ params }: { params: Promise<{ id: string 
       setYoutubeUrl(g.video_url ?? '')
       setOldUrl(g.video_url ?? '')
       setDurationMin(g.duration_sec ? String(Math.round(g.duration_sec / 60)) : '')
+      setOldStats((await fetchStats(id))?.halves ?? {})
       setState('ready')
     }
     load()
@@ -100,6 +105,7 @@ export default function EditGamePage({ params }: { params: Promise<{ id: string 
     if (!title.trim()) { setError('Bitte einen Titel eingeben'); return }
     if (!date) { setError('Bitte Datum auswählen'); return }
     if (youtubeUrl.trim() && !videoId) { setError('Keine gültige YouTube URL'); return }
+    if (statsDraft.problem) { setError(statsDraft.problem); return }
     setSaving(true)
     const patch: Record<string, unknown> = {
       title: title.trim(),
@@ -119,6 +125,17 @@ export default function EditGamePage({ params }: { params: Promise<{ id: string 
     if (!data || data.length === 0) {
       setError('Nichts gespeichert: Die Datenbank erlaubt das Ändern nicht. Führe web/supabase/games_update.sql im Supabase SQL-Editor aus.')
       return
+    }
+    if (statsDraft.dirty) {
+      setSaving(true)
+      const none = Object.keys(statsDraft.halves).length === 0
+      const msg = none
+        ? await removeStats(id)
+        : await saveStats(id, { format: 'football-autopan-stats', version: 1, halves: statsDraft.halves })
+      if (msg) {
+        setError(`Spiel gespeichert, aber die Statistik nicht: ${msg}. Führe web/supabase/stats.sql im Supabase SQL-Editor aus.`)
+        return
+      }
     }
     router.push(`/game/${id}`)
   }
@@ -224,6 +241,8 @@ export default function EditGamePage({ params }: { params: Promise<{ id: string 
             </div>
           )}
         </div>
+
+        <StatsUpload existing={oldStats} onChange={setStatsDraft} />
 
         {/* Duration */}
         <div>

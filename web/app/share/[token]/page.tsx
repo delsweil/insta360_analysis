@@ -7,6 +7,8 @@ import { supabase } from '@/lib/supabase'
 import type { Annotation } from '@/lib/supabase'
 import BoardPanel from '@/components/BoardPanel'
 import { useBoard } from '@/lib/board'
+import { StatsCard } from '@/components/StatsPanel'
+import { useStats } from '@/lib/stats'
 
 const LABELS = [
   { key: 'goal',     label: 'Goal',     color: '#ef4444' },
@@ -51,6 +53,7 @@ export default function SharePage({ params }: Props) {
   const [title, setTitle] = useState('')
   const [gameId, setGameId] = useState<string | null>(null)
   const { state: boardState, reload: reloadBoard } = useBoard(gameId)
+  const { state: statsState } = useStats(gameId)
   const [videoUrl, setVideoUrl] = useState('')
   const [annotations, setAnnotations] = useState<Annotation[]>([])
   const [currentTime, setCurrentTime] = useState(0)
@@ -822,6 +825,17 @@ export default function SharePage({ params }: Props) {
                 <span>{formatTime(duration)}</span>
               </div>
             </div>
+
+            {statsState.status === 'ready' && (
+              <StatsCard
+                stats={statsState.stats} now={currentTime} onSeek={seekTo}
+                halfStart={half => {
+                  if (boardState.status !== 'ready') return null
+                  const p = boardState.board.parts.find(x => String(x.half) === half)
+                  return p ? p.video_start : null
+                }}
+              />
+            )}
           </div>
 
           {/* Right: tactical board + highlights list */}
