@@ -198,8 +198,10 @@ function Momentum({ th, h, videoStart, now, onSeek }: { th: Theme; h: HalfStats;
 
 const METRICS = [
   { key: 'spread_m', label: 'Kompaktheit', unit: 'm', note: 'Mittlerer Abstand der Feldspieler zum Mannschaftsschwerpunkt. Kleiner = enger zusammen.', scale: 1 },
-  { key: 'width_m', label: 'Breite', unit: 'm', note: 'Wie breit die Mannschaft das Feld macht (Querrichtung).', scale: 1 },
-  { key: 'depth_m', label: 'Tiefe', unit: 'm', note: 'Wie weit die Mannschaft in Längsrichtung auseinandergezogen ist.', scale: 1 },
+  // In the analysis files the camera's sideways axis runs along the pitch: width_m is the spread along the pitch
+  // (football: Tiefe), depth_m the spread across it (football: Breite).
+  { key: 'depth_m', label: 'Breite', unit: 'm', note: 'Wie breit die Mannschaft das Feld macht (Streuung quer zum Spielfeld).', scale: 1 },
+  { key: 'width_m', label: 'Tiefe', unit: 'm', note: 'Wie weit die Mannschaft in Längsrichtung auseinandergezogen ist (Streuung entlang des Spielfelds).', scale: 1 },
   { key: 'tempo_ms', label: 'Tempo', unit: 'km/h', note: 'Mittlere Laufgeschwindigkeit der Spieler.', scale: 3.6 },
 ] as const
 type MetricKey = typeof METRICS[number]['key']
