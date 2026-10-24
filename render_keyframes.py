@@ -44,9 +44,18 @@ import tempfile
 import numpy as np
 
 import kf_core as K
+import lens as L
 
 # The pipeline's fisheye -> equirect step. Do not change.
 RAW_TO_EQUIRECT = "v360=fisheye:equirect:ih_fov=200:iv_fov=200,scale=2880:1440"
+
+# optional clean-up after the view is cut out, before encoding: a gentle temporal denoise (noise eats bitrate that
+# real detail needs) and a gentle luma sharpen (the source is upscaled when the output is larger than ~1100 px wide)
+ENHANCE = {
+    "off":    [],
+    "light":  ["hqdn3d=1.2:1.2:2.5:2.5", "unsharp=5:5:0.5:5:5:0.0"],
+    "medium": ["hqdn3d=2.0:1.5:3.5:3.0", "unsharp=5:5:0.8:5:5:0.0"],
+}
 
 ENCODERS = {
     "libx264":            ["-c:v", "libx264", "-preset", "medium", "-crf", "{crf}", "-pix_fmt", "yuv420p",
@@ -64,23 +73,39 @@ def ff_escape(path: str) -> str:
     return path.replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
 
 
-def build_sendcmd(path: K.Path, tilt: float, n_frames: int, fps: float, start: float,
-                  out_w: int, out_h: int, legacy_fov: bool, target: str = "v360@cam",
-                  projection: str = "flat"):
-    """Per-frame v360 commands. Returns (script_text, n_command_lines, first_params).
-
-    Each command fires half a frame *before* its frame's timestamp so float rounding in
-    the timestamps can never push it onto the neighbouring frame. Frames whose camera
-    didn't change since the previous one get no command at all (holds are free)."""
+def view_params(path: K.Path, tilt: float, n_frames: int, fps: float, start: float,
+                out_w: int, out_h: int, legacy_fov: bool, projection: str = "flat",
+                lens: str = "legacy", iv_fov: float = L.DEFAULT_IV_FOV) -> list:
+    """The camera (yaw, pitch, h_fov, v_fov) of every output frame."""
     idx = np.arange(n_frames, dtype=np.float64)
     t_abs = start + idx / fps
     pan, fov = path.at(t_abs)
     # per-keyframe tilt only when some keyframe sets one; otherwise the constant `tilt`, exactly as before
     tilts = path.tilt_at(t_abs) if getattr(path, "has_tilt", False) else np.full(n_frames, float(tilt))
-    names = ("yaw", "pitch", "h_fov", "v_fov")
-    lines, last, first = [], None, None
+    out = []
     for i in range(n_frames):
         p = K.to_v360_params(float(pan[i]), float(tilts[i]), float(fov[i]), out_w, out_h, legacy_fov, projection)
+        if lens != "legacy":                  # the same view of the picture, in the true lens geometry
+            c = L.convert_view(p["yaw"], p["pitch"], p["h_fov"], out_h / out_w, iv_fov)
+            p = {k: c[k] for k in ("yaw", "pitch", "h_fov", "v_fov")}
+        out.append(p)
+    return out
+
+
+def build_sendcmd(path: K.Path, tilt: float, n_frames: int, fps: float, start: float,
+                  out_w: int, out_h: int, legacy_fov: bool, target: str = "v360@cam",
+                  projection: str = "flat", lens: str = "legacy", iv_fov: float = L.DEFAULT_IV_FOV,
+                  params: list = None):
+    """Per-frame v360 commands. Returns (script_text, n_command_lines, first_params).
+
+    Each command fires half a frame *before* its frame's timestamp so float rounding in
+    the timestamps can never push it onto the neighbouring frame. Frames whose camera
+    didn't change since the previous one get no command at all (holds are free)."""
+    if params is None:
+        params = view_params(path, tilt, n_frames, fps, start, out_w, out_h, legacy_fov, projection, lens, iv_fov)
+    names = ("yaw", "pitch", "h_fov", "v_fov")
+    lines, last, first = [], None, None
+    for i, p in enumerate(params):
         vals = [p[n] for n in names]
         if first is None:                    # frame 0 uses the filter's initial options
             first, last = p, list(vals)
@@ -98,16 +123,23 @@ def build_sendcmd(path: K.Path, tilt: float, n_frames: int, fps: float, start: f
 def build_command(a, info: dict, source: str, cmd_file: str, n_frames: int, first: dict) -> list:
     # reset_rot=1 is essential: without it v360 treats runtime yaw/pitch commands as
     # *incremental* rotations that accumulate frame after frame.
-    flat = (f"v360@cam=input=equirect:output={a.projection}:w={a.width}:h={a.height}:"
+    lens = getattr(a, "lens", "legacy")
+    if lens != "legacy" and source == "raw":      # one pass: fisheye -> view, no equirect in between
+        ih, iv = L.sg_fovs()
+        src_fmt = f"input=sg:ih_fov={ih:.4f}:iv_fov={iv:.4f}"
+    else:
+        src_fmt = "input=equirect"
+    flat = (f"v360@cam={src_fmt}:output={a.projection}:w={a.width}:h={a.height}:"
             f"interp={a.interp_filter}:reset_rot=1:"
             f"yaw={first['yaw']:.5f}:pitch={first['pitch']:.5f}:"
             f"h_fov={first['h_fov']:.5f}:v_fov={first['v_fov']:.5f}")
     parts = []
-    if source == "raw":
+    if source == "raw" and lens == "legacy":
         parts.append(K.raw_to_equirect(getattr(a, "iv_fov", None)))
     if cmd_file:                              # a static camera has no commands (sendcmd rejects an empty file)
         parts.append(f"sendcmd=f='{ff_escape(cmd_file)}'")
     parts.append(flat)
+    parts.extend(ENHANCE[getattr(a, "enhance", "off")])
     parts.append("setsar=1")                 # the conversion's scale step leaves a non-square pixel aspect; players would stretch the video
     vf = ",".join(parts)
 
@@ -143,14 +175,23 @@ def main(argv=None) -> int:
                         "own setting, else 200). It must match the one the detections were made with.")
     p.add_argument("--legacy-fov", action="store_true", default=None,
                    help="vertical FOV == horizontal FOV like py360convert's scalar fov (anamorphic)")
+    p.add_argument("--lens", choices=L.LENSES, default=None,
+                   help="x2_150: read the raw X2 frame with its fitted lens model (straight pitch lines, one resampling "
+                        "less, the view never reaches past the lens image). legacy: the original ih_fov=200 unwrapping. "
+                        "Default: the keyframe file's meta 'lens', else legacy. Raw single-lens X2 input only.")
     p.add_argument("--projection", choices=K.PROJECTIONS, default=None,
                    help="flat (rectilinear) or cylindrical; default: the one annotate.py used (meta.json)")
     p.add_argument("--interp-filter", default="cubic",
                    choices=["nearest", "linear", "cubic", "lanczos", "spline16", "gaussian"],
                    help="v360 resampling filter (default cubic)")
+    p.add_argument("--engine", choices=["auto", "opencv", "ffmpeg"], default="auto",
+                   help="opencv: fast renderer (view_render.py; needs the x2_150 lens and opencv-python); ffmpeg: v360 "
+                        "filter, slow whenever the camera moves. auto: opencv when possible (default)")
     p.add_argument("--encoder", choices=list(ENCODERS), default="libx264")
     p.add_argument("--crf", type=int, default=18)
     p.add_argument("--bitrate", default="8000k", help="for h264_videotoolbox")
+    p.add_argument("--enhance", choices=list(ENHANCE), default="off",
+                   help="light/medium: gentle denoise + sharpen before encoding (default off)")
     p.add_argument("--audio", action="store_true", help="keep (re-encode) the first audio track")
     p.add_argument("--start", type=float, default=None,
                    help="start time in seconds (default: the IN mark set in annotate.py, else 0)")
@@ -173,6 +214,10 @@ def main(argv=None) -> int:
         a.projection = meta.get("projection", "flat" if meta else "cylindrical")
         if a.projection not in K.PROJECTIONS:
             a.projection = "flat"
+    if a.lens is None:
+        a.lens = meta.get("lens", "legacy")
+        if a.lens not in L.LENSES:
+            a.lens = "legacy"
     if a.iv_fov is None:
         a.iv_fov = float(meta["iv_fov"]) if meta.get("iv_fov") is not None else K.DEFAULT_IV_FOV
     if a.interp is None:
@@ -202,6 +247,15 @@ def main(argv=None) -> int:
     if source == "auto":
         source = "equirect" if K.is_equirect_size(info["width"], info["height"]) else "raw"
 
+    if a.lens != "legacy":
+        if source != "raw" or (info["width"], info["height"]) not in ((1440, 2560), (2560, 1440)):
+            print("note     : --lens applies to raw 2560x1440 X2 recordings only; using the legacy unwrapping", file=sys.stderr)
+            a.lens = "legacy"
+        elif a.projection != "flat" or a.legacy_fov:
+            print("note     : --lens needs the flat, square-pixel view; using the legacy unwrapping", file=sys.stderr)
+            a.lens = "legacy"
+        else:
+            print(f"lens     : {a.lens} (stereographic fisheye, f={L.F_PX:g} px)")
     total = info["duration"]
     dur = a.duration if a.duration is not None else max(0.0, total - a.start)
     n_frames = max(1, int(round(dur * info["fps"])))
@@ -220,9 +274,42 @@ def main(argv=None) -> int:
     if total and last_kf > total + 1:
         print(f"warning  : last keyframe ({last_kf:.1f}s) is beyond the video ({total:.1f}s)", file=sys.stderr)
 
+    params = view_params(path, tilt, n_frames, info["fps"], a.start, a.width, a.height, a.legacy_fov,
+                         a.projection, a.lens, a.iv_fov)
+
+    engine = a.engine
+    if engine != "ffmpeg":
+        import view_render as VR
+        why = None
+        if a.lens == "legacy":
+            why = "needs the x2_150 lens"
+        elif not VR.have_cv2():
+            why = "opencv-python is not installed (pip install opencv-python)"
+        if why:
+            if engine == "opencv":
+                print(f"error: --engine opencv {why}", file=sys.stderr)
+                return 2
+            print(f"WARNING  : fast renderer not used: {why}; falling back to the slow ffmpeg path", file=sys.stderr)
+            engine = "ffmpeg"
+        else:
+            engine = "opencv"
+    print(f"engine   : {engine}")
+    if engine == "opencv":
+        enc = [x.format(crf=a.crf, bitrate=a.bitrate) for x in ENCODERS[a.encoder]]
+        if a.dry_run:
+            rcmd, wcmd = VR.build_commands(a, info, n_frames, ENHANCE[a.enhance], enc)
+            print("\n" + " ".join(shlex.quote(c) for c in rcmd) + " | [remap] | " + " ".join(shlex.quote(c) for c in wcmd))
+            return 0
+        rc = VR.run(a, info, params, n_frames, ENHANCE[a.enhance], enc)
+        if rc != 0:
+            print(f"error: render exited with code {rc}", file=sys.stderr)
+            return rc
+        print(f"\nwrote {a.output}")
+        return 0
+
     text, n_cmds, first = build_sendcmd(path, tilt, n_frames, info["fps"], a.start,
                                         a.width, a.height, a.legacy_fov,
-                                        projection=a.projection)
+                                        projection=a.projection, lens=a.lens, iv_fov=a.iv_fov, params=params)
     tmpdir = tempfile.mkdtemp(prefix="kfrender_")
     cmd_file = None
     if n_cmds:

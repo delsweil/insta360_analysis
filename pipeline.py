@@ -33,15 +33,20 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 VIDEO_EXT = (".mp4", ".mov", ".m4v", ".insv")
 KNOWN_RAW_SIZES = {(2560, 1440), (1440, 2560)}          # Insta360 X2 single-lens recording; tested
 DETECT_TILT = -22.0
+TEAM_GROUPS = 12                             # colour groups to sort: 8 mixes dark shirts with white ones under floodlights
 CROP_TILT = -20.0
 EXTRACT_ARGS = ["--lon-range", "-80", "80", "--no-ball", "--iv-fov", "112", "--tilt", str(DETECT_TILT), "--colours"]
 KEY_ARGS = ["--projection", "flat", "--fov-max", "100", "--fov-min", "70", "--tilt", str(CROP_TILT),
             "--max-dip", "8", "--tilt-margin", "4"]
 # seconds of computing per second of video (Apple silicon), used for the progress bar and the estimate
-COST = {"check": 0.0, "extract": 0.75, "keyframes": 0.0, "render": 0.8, "charts": 0.0, "stats": 0.0, "board": 0.0, "teams": 0.0}
+COST = {"check": 0.0, "extract": 0.75, "keyframes": 0.0, "render": 0.5, "charts": 0.0, "stats": 0.0, "board": 0.0, "teams": 0.0}
 FIXED_SECONDS = {"check": 15, "pitch": 20, "merge": 60, "teams": 120, "keyframes": 10, "charts": 30, "stats": 40, "board": 15, "package": 2}
 
 
+RENDER_SIZE = (1920, 1080)  # output size; (2560, 1440) looks a little better on YouTube but renders ~2x slower (measured: 3 fps vs ~6 fps)
+RENDER_ENHANCE = "light"    # gentle denoise + sharpen before encoding ("off", "light", "medium")
+RENDER_INTERP = "cubic"     # resampling filter of the view cut-out ("lanczos" costs about the same, "linear" is ~2.4x faster but softer)
+RENDER_LENS = "x2_150"      # fitted lens model for raw X2 footage (straight pitch lines, one resampling less); "legacy" = the old unwrapping
 VERIFY_RENDER = True        # look into every finished video before it replaces the old one
 
 
@@ -494,7 +499,7 @@ class Job:
             m = pat.search(line)
             return int(m.group(1)) / int(m.group(2)) if m else None
         self.exec(self.py("team_labels.py", "make", "--video", info["path"], "--detections", samp,
-                          "--out", self.p("teams"), "--frames", "40", "--iv-fov", "112"), "teams", parse)
+                          "--out", self.p("teams"), "--frames", "40", "--iv-fov", "112", "--k", str(TEAM_GROUPS)), "teams", parse)
 
     def _frames_re(self):
         pat = re.compile(r"(\d+)/(\d+) frames")
@@ -684,8 +689,8 @@ class Job:
         except OSError:
             out = ""
         if sys.platform == "darwin" and "h264_videotoolbox" in out:
-            return ["--encoder", "h264_videotoolbox", "--bitrate", "10000k"]
-        return ["--encoder", "libx264", "--crf", "20"]
+            return ["--encoder", "h264_videotoolbox", "--bitrate", "18000k"]
+        return ["--encoder", "libx264", "--crf", "18"]
 
     def s_render(self, st: dict) -> None:
         i = st["video"]
@@ -696,8 +701,11 @@ class Job:
             m = pat.search(line)
             return (int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))) / d0 if m else None
         out = self.p(f"{self.stem(i)}_autopan.mp4")
+        lens = ["--lens", RENDER_LENS] if self.info()[i].get("layout") == "raw" else []
         self.exec(self.py("render_keyframes.py", "--input", self.videos()[i]["path"], "--keyframes",
-                          self.p(f"v{i}.auto.keyframes.json"), "--output", out + ".part.mp4", "--audio", *self.encoder()),
+                          self.p(f"v{i}.auto.keyframes.json"), "--output", out + ".part.mp4", "--audio", *lens,
+                          "--width", str(RENDER_SIZE[0]), "--height", str(RENDER_SIZE[1]), "--interp-filter", RENDER_INTERP,
+                          "--enhance", RENDER_ENHANCE, *self.encoder()),
                   st["id"], parse)
         if VERIFY_RENDER:
             problems = verify_video(out + ".part.mp4")

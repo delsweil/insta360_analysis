@@ -107,7 +107,7 @@ class TestPipeline(Base):
         self.assertIn("pitch1", ids)
         self.assertEqual(ids[-3:], ["stats", "board", "package"])
         # two hours of video: roughly 3.2 hours of computing
-        self.assertAlmostEqual(P.estimate_seconds([3600, 3600]) / 3600, 3.2, delta=0.2)
+        self.assertAlmostEqual(P.estimate_seconds([3600, 3600]) / 3600, 2.6, delta=0.2)
 
     def test_camera_info(self):
         j = self.job()
