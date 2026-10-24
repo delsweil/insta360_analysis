@@ -3,6 +3,8 @@
 
 A shirt colour seen from 60 m under floodlights is a noisy witness. Three facts about the game are better witnesses:
 
+  0. Roles: a colour group can be the referee (3) or a goalkeeper (4, resolved to the keeper of A or B by board_data from where
+     he stands). They are voted along the track like a team and never count towards the 11 of a team.
   1. A player does not change team. Seen at 3 moments a second, a player moves less than a few metres between two
      moments, so the detections of consecutive moments can be chained into short tracks. The team of a detection is the
      weighted vote of its track within +-2.5 s (a sure colour counts more than an uncertain one). Small far-away boxes
@@ -23,6 +25,8 @@ from typing import Dict, Tuple
 import numpy as np
 
 OTHER = 2
+REFEREE = 3
+GK = 4                                                                # either goalkeeper; board_data tells them apart by position
 
 
 def link_tracks(frame: np.ndarray, x: np.ndarray, y: np.ndarray, vt: np.ndarray, gate_m: float = 3.0,
@@ -65,6 +69,7 @@ def vote_in_tracks(track: np.ndarray, frame: np.ndarray, vt: np.ndarray, team: n
     """Team of every detection = weighted vote of its track's detections within +-window_s (needs min_weight of evidence
     and min_share of it for one class; otherwise the detection keeps its own label)."""
     new = team.copy()
+    ncls = max(3, int(team.max()) + 1) if len(team) else 3           # 0 A, 1 B, 2 other, 3 referee, 4 goalkeeper
     t_of = vt[frame]
     order = np.argsort(track, kind="stable")
     tr = track[order]
@@ -75,8 +80,8 @@ def vote_in_tracks(track: np.ndarray, frame: np.ndarray, vt: np.ndarray, team: n
         idx = order[a:b]
         idx = idx[np.argsort(t_of[idx], kind="stable")]
         t = t_of[idx]
-        cs = np.zeros((3, len(idx) + 1))
-        for c in range(3):
+        cs = np.zeros((ncls, len(idx) + 1))
+        for c in range(ncls):
             cs[c, 1:] = np.cumsum(np.where(team[idx] == c, weight[idx], 0.0))
         lo = np.searchsorted(t, t - window_s, side="left")
         hi = np.searchsorted(t, t + window_s, side="right")
@@ -132,7 +137,8 @@ def clean(frame: np.ndarray, vt: np.ndarray, x: np.ndarray, y: np.ndarray, team:
     stats["relabelled"] = int(((voted != team) & (weight > 0)).sum())
     stats["recovered"] = int(((voted != team) & (weight <= 0) & (voted < 2)).sum())
     new = voted
-    gone = outside & (new < 2)
+    gone = outside & ((new < 2) | (new == GK))                         # a referee may be on the touchline; a keeper-coloured
+                                                                    # person outside the pitch is no keeper
     new[gone] = OTHER
     stats["outside"] = int(gone.sum())
     new, stats["to_other_team"], stats["to_other"] = cap_teams(frame, new, weight, margin, out_m, max_team)

@@ -26,10 +26,21 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState<string | null>(null)
-  const [resetting, setResetting] = useState<string | null>(null)
-  const [resetSuccess, setResetSuccess] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null) // userId pending confirmation
   const [deleting, setDeleting] = useState<string | null>(null)
+
+  // Invite link state
+  const [inviteRole, setInviteRole] = useState<'admin' | 'coach' | 'player'>('player')
+  const [generatingLink, setGeneratingLink] = useState(false)
+  const [inviteLink, setInviteLink] = useState('')
+  const [inviteCopied, setInviteCopied] = useState(false)
+
+  // Set-password state: which user's form is open, the typed password, status
+  const [pwUser, setPwUser] = useState<string | null>(null)
+  const [pwValue, setPwValue] = useState('')
+  const [pwSaving, setPwSaving] = useState(false)
+  const [pwDone, setPwDone] = useState<string | null>(null)
+  const [pwError, setPwError] = useState('')
 
   const [newEmail, setNewEmail] = useState('')
   const [newDisplayName, setNewDisplayName] = useState('')
@@ -103,29 +114,71 @@ export default function AdminUsersPage() {
     setSaving(null)
   }
 
-  const handleResetPassword = async (userId: string, email: string) => {
-    setResetting(userId)
-    setResetSuccess(null)
+  const handleGenerateInvite = async () => {
+    setGeneratingLink(true)
+    setInviteLink('')
     const { data: { session } } = await supabase.auth.getSession()
-    if (!session) { setResetting(null); return }
+    if (!session) { setGeneratingLink(false); return }
 
     try {
-      const res = await fetch('/api/admin/reset-password', {
+      const res = await fetch('/api/admin/create-invite', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ email }),
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ role: inviteRole }),
       })
-      const result = await res.json()
-      if (res.ok) {
-        setResetSuccess(userId)
-        setTimeout(() => setResetSuccess(null), 3000)
+      const data = await res.json()
+      if (res.ok && data.token) {
+        setInviteLink(`${window.location.origin}/join/${data.token}`)
       } else {
-        alert(`Reset failed: ${result.error}`)
+        alert(`Could not create the link: ${data.error ?? 'unknown error'}`)
       }
     } catch {
       alert('Network error — please try again.')
     }
-    setResetting(null)
+    setGeneratingLink(false)
+  }
+
+  const handleCopyInvite = async () => {
+    await navigator.clipboard.writeText(inviteLink)
+    setInviteCopied(true)
+    setTimeout(() => setInviteCopied(false), 2000)
+  }
+
+  const openSetPassword = (userId: string) => {
+    setPwUser(userId); setPwValue(''); setPwError('')
+  }
+
+  const generatePassword = () => {
+    const chars = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+    const bytes = crypto.getRandomValues(new Uint32Array(12))
+    setPwValue(Array.from(bytes, b => chars[b % chars.length]).join(''))
+  }
+
+  const handleSetPassword = async (userId: string) => {
+    if (pwValue.length < 8) { setPwError('At least 8 characters.'); return }
+    setPwSaving(true); setPwError('')
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) { setPwSaving(false); return }
+    try {
+      const res = await fetch('/api/admin/set-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ userId, password: pwValue }),
+      })
+      const result = await res.json()
+      if (res.ok) {
+        setPwDone(userId); setPwUser(null); setPwValue('')
+        setTimeout(() => setPwDone(null), 4000)
+      } else {
+        setPwError(result.error ?? 'Failed.')
+      }
+    } catch {
+      setPwError('Network error — please try again.')
+    }
+    setPwSaving(false)
   }
 
   const handleDeleteUser = async (userId: string) => {
@@ -317,24 +370,53 @@ export default function AdminUsersPage() {
                 </div>
               </div>
 
-              {/* Action row: reset password + delete */}
+              {/* Action row: set password + delete */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 2, borderTop: '1px solid #F0F1F5' }}>
-                {/* Reset password */}
-                <button
-                  onClick={() => handleResetPassword(user.id, user.email)}
-                  disabled={resetting === user.id}
-                  style={{
-                    fontSize: 11, fontWeight: 600,
-                    padding: '4px 12px', borderRadius: 99,
-                    border: `1.5px solid ${resetSuccess === user.id ? '#86efac' : '#E4E6EE'}`,
-                    background: resetSuccess === user.id ? '#f0fdf4' : '#fff',
-                    color: resetSuccess === user.id ? '#166534' : '#8A8F9E',
-                    cursor: resetting === user.id ? 'default' : 'pointer',
-                    opacity: resetting === user.id ? 0.6 : 1,
-                  } as any}
-                >
-                  {resetting === user.id ? '…' : resetSuccess === user.id ? '✓ Reset sent' : '↺ Reset password'}
-                </button>
+                {/* Set a new password (no email involved) */}
+                {pwUser === user.id ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      value={pwValue}
+                      onChange={e => { setPwValue(e.target.value); setPwError('') }}
+                      placeholder="New password (min 8)"
+                      autoFocus
+                      autoComplete="off"
+                      style={{
+                        fontSize: 12, padding: '4px 10px', borderRadius: 8, width: 170,
+                        border: '1px solid #E4E6EE', outline: 'none', fontFamily: 'monospace',
+                      }}
+                    />
+                    <button onClick={generatePassword} style={{
+                      fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 99,
+                      border: '1.5px solid #E4E6EE', background: '#fff', color: '#8A8F9E', cursor: 'pointer',
+                    }}>Generate</button>
+                    <button onClick={() => handleSetPassword(user.id)} disabled={pwSaving} style={{
+                      fontSize: 11, fontWeight: 700, padding: '4px 12px', borderRadius: 99,
+                      border: '1.5px solid #0f2972', background: '#0f2972', color: '#fff',
+                      cursor: pwSaving ? 'default' : 'pointer', opacity: pwSaving ? 0.6 : 1,
+                    }}>{pwSaving ? '…' : 'Save'}</button>
+                    <button onClick={() => setPwUser(null)} style={{
+                      fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 99,
+                      border: '1.5px solid #E4E6EE', background: '#fff', color: '#8A8F9E', cursor: 'pointer',
+                    }}>Cancel</button>
+                    {pwError && <span style={{ fontSize: 11, color: '#b91c1c' }}>{pwError}</span>}
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => openSetPassword(user.id)}
+                    style={{
+                      fontSize: 11, fontWeight: 600,
+                      padding: '4px 12px', borderRadius: 99,
+                      border: `1.5px solid ${pwDone === user.id ? '#86efac' : '#E4E6EE'}`,
+                      background: pwDone === user.id ? '#f0fdf4' : '#fff',
+                      color: pwDone === user.id ? '#166534' : '#8A8F9E',
+                      cursor: 'pointer',
+                    } as any}
+                  >
+                    {pwDone === user.id ? '✓ Password set' : '🔑 Set password'}
+                  </button>
+                )}
 
                 {/* Delete — two-step confirm */}
                 {confirmDelete === user.id ? (
@@ -380,6 +462,79 @@ export default function AdminUsersPage() {
               </div>
             </div>
           ))}
+        </div>
+
+        {/* Invite link */}
+        <div style={{
+          background: '#fff', border: '1px solid #E4E6EE',
+          borderRadius: 12, padding: '16px 18px', marginTop: 16, marginBottom: 8,
+        }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#111318', marginBottom: 10 }}>
+            Invite link
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select
+              value={inviteRole}
+              onChange={e => { setInviteRole(e.target.value as typeof inviteRole); setInviteLink('') }}
+              style={{
+                fontSize: 13, padding: '8px 10px',
+                border: '1px solid #E4E6EE', borderRadius: 8, outline: 'none',
+                fontFamily: 'DM Sans, sans-serif', background: '#fff',
+              }}
+            >
+              <option value="player">Player</option>
+              <option value="coach">Coach</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button
+              onClick={handleGenerateInvite}
+              disabled={generatingLink}
+              style={{
+                fontSize: 13, fontWeight: 600, padding: '8px 18px',
+                borderRadius: 8, border: 'none',
+                background: generatingLink ? '#E4E6EE' : '#0f2972',
+                color: generatingLink ? '#8A8F9E' : '#fff',
+                cursor: generatingLink ? 'default' : 'pointer',
+                fontFamily: 'DM Sans, sans-serif',
+              }}
+            >
+              {generatingLink ? 'Generating…' : 'Generate link'}
+            </button>
+          </div>
+
+          {inviteLink && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                background: '#F8F8F6', border: '1px solid #E4E6EE',
+                borderRadius: 8, padding: '8px 12px',
+              }}>
+                <span style={{
+                  fontSize: 12, color: '#111318', flex: 1,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  fontFamily: 'monospace',
+                }}>
+                  {inviteLink}
+                </span>
+                <button
+                  onClick={handleCopyInvite}
+                  style={{
+                    fontSize: 12, fontWeight: 600, padding: '4px 12px',
+                    borderRadius: 6, border: '1.5px solid #0f2972',
+                    background: inviteCopied ? '#0f2972' : '#fff',
+                    color: inviteCopied ? '#fff' : '#0f2972',
+                    cursor: 'pointer', flexShrink: 0,
+                    fontFamily: 'DM Sans, sans-serif',
+                  }}
+                >
+                  {inviteCopied ? '✓ Copied' : 'Copy'}
+                </button>
+              </div>
+              <div style={{ fontSize: 11, color: '#8A8F9E', marginTop: 6 }}>
+                Single-use · expires in 7 days · grants <strong>{inviteRole}</strong> access.
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Add user */}

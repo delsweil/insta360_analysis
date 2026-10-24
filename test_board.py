@@ -35,6 +35,19 @@ def write_dets(path, start, times, extra=None):
             fh.write(json.dumps({"t": t, "players": players, "balls": []}) + "\n")
 
 
+class RoleClusters(FakeClusters):
+    """white = A, red = B, dark = referee, [10,200,10] (green) = goalkeeper group labelled as B's, [200,10,200] = A's."""
+    has_roles = True
+
+    def role_of(self, bgr):
+        bgr = np.asarray(bgr, float)
+        out = np.full(len(bgr), -1)
+        out[bgr.mean(1) < 40] = 3
+        out[(bgr[:, 1] > 150) & (bgr[:, 0] < 50)] = 5
+        out[(bgr[:, 0] > 150) & (bgr[:, 2] > 150) & (bgr[:, 1] < 50)] = 4
+        return out
+
+
 class TestBoard(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
@@ -69,6 +82,32 @@ class TestBoard(unittest.TestCase):
         self.assertAlmostEqual(abs(white[0]) / 10.0, 0.0, delta=0.1)  # straight ahead: x ~ 0, in decimetres
         self.assertGreater(white[1] / 10.0, 5.0)                      # some metres from the camera
         self.assertIsNone(f[1])                                       # no camera path given
+
+    def test_roles_referee_and_goalkeepers_by_goal(self):
+        a = self.p("a.jsonl")
+        # two keepers wearing the colour of B's keeper: one stands far left, one far right
+        extra = [[-60.0, -10.0, 60.0, 0.9, None, [10, 200, 10]], [60.0, -10.0, 60.0, 0.9, None, [10, 200, 10]]]
+        write_dets(a, 0.0, [0.0], extra=extra)
+        box = [-50, 50, 12, 80]
+        left_is_a = BD.build([{"det": a, "half": 1, "video_start": 0.0, "duration": 5.0, "box": box, "a_attacks_right": True}],
+                             RoleClusters())["frames"][0]
+        trip = [tuple(left_is_a[3 + 3 * i:6 + 3 * i]) for i in range((len(left_is_a) - 3) // 3)]
+        codes = sorted(t[2] for t in trip)
+        self.assertIn(3, codes)                                       # the dark one is the referee now, not 'other'
+        self.assertEqual(codes.count(4), 1)
+        self.assertEqual(codes.count(5), 1)
+        gka = [t for t in trip if t[2] == 4][0]
+        self.assertLess(gka[0], 0)                                    # A attacks right: A's keeper is at the left goal
+        flipped = BD.build([{"det": a, "half": 2, "video_start": 0.0, "duration": 5.0, "box": box, "a_attacks_right": False}],
+                           RoleClusters())["frames"][0]
+        trip2 = [tuple(flipped[3 + 3 * i:6 + 3 * i]) for i in range((len(flipped) - 3) // 3)]
+        self.assertGreater([t for t in trip2 if t[2] == 4][0][0], 0)  # second half: sides swapped
+
+    def test_without_roles_nothing_changes(self):
+        a = self.p("a.jsonl")
+        write_dets(a, 0.0, [0.0])
+        f = BD.build([{"det": a, "half": 1, "video_start": 0.0, "duration": 5.0}], FakeClusters())["frames"][0]
+        self.assertNotIn(3, [f[5 + 3 * i] for i in range((len(f) - 3) // 3)])
 
     def test_camera_and_trim(self):
         a, kf = self.p("a.jsonl"), self.p("a.keyframes.json")

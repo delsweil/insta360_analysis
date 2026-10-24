@@ -20,11 +20,12 @@ export type Board = {
   title: string
   teams: { A: { name: string; colour: string }; B: { name: string; colour: string } }
   parts: BoardPart[]
-  /** frames[i] = [t, pan, fov, x1, y1, team1, x2, y2, team2, ...] (x, y in decimetres; team 0 = A, 1 = B, 2 = other) */
+  /** frames[i] = [t, pan, fov, x1, y1, team1, x2, y2, team2, ...] (x, y in decimetres; team 0 = A, 1 = B, 2 = other, 3 = referee, 4 = goalkeeper of A, 5 = goalkeeper of B) */
   frames: (number | null)[][]
   times: Float64Array
   box: Box              // whole-game fallback when a part carries none
   kAngle: number
+  roles: boolean        // the coach labelled referee / goalkeeper colour groups: 'other' is then not counted
   shift: number         // seconds added to the video time before looking a moment up (saved by the coach)
 }
 
@@ -46,6 +47,7 @@ export function parseBoard(raw: Raw): Board {
     times,
     box: wholeBox(frames),
     kAngle: typeof raw.k_angle === 'number' ? raw.k_angle : 0.75,
+    roles: raw.roles === true,
     shift: typeof raw.sync_shift_s === 'number' ? raw.sync_shift_s : 0,
   }
 }

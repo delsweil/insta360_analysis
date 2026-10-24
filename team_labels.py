@@ -10,7 +10,9 @@ the pitch. So instead of trusting colour names, you label what you see:
   2) look at the sheet and say which groups are which:
         python team_labels.py assign --labels g030.team_labels.json --a 0 3 --b 1 5 \\
                --name-a "Yellow" --name-b "Dark" --colour-a "#f2d04a" --colour-b "#3d7bd9"
-        (groups you do not name are 'other': referee, goalkeepers, coaches, odd light)
+        (groups you do not name are 'other': coaches, odd light - they are not counted. Optional roles:
+         --ref 6   --gk-a 4   --gk-b 7   a referee group and the goalkeepers' groups; a group that mixes both
+         goalkeepers can be given to either: which goal a keeper stands at tells them apart)
   3) use it:   python team_stats.py --detections ... --team-labels g030.team_labels.json ...
 
 Several groups per team are fine and useful: one team usually shows up as a bright group and a dark group
@@ -31,6 +33,9 @@ import kf_core as K
 import extract_detections as X
 import scene_check as S
 import football_style as FS
+
+ROLES = ("REF", "GKA", "GKB")                      # roles a colour group can have besides team A / team B ('other' = none)
+ROLE_CODE = {"REF": 3, "GKA": 4, "GKB": 5}         # codes on the board: 0 A, 1 B, 2 other, 3 referee, 4 GK of A, 5 GK of B
 
 COLOURS = {"white": "#ececec", "blue": "#3d7bd9", "red": "#d9392b", "yellow": "#f2d04a", "green": "#3fb865",
            "orange": "#f08a2c", "black": "#8e8e93", "dark": "#8e8e93", "purple": "#9b59b6", "grey": "#b8b8bd"}
@@ -99,6 +104,9 @@ def quality(meta: dict) -> dict:
     """How well the confirmed groups cover the sampled players: shares of team A, team B and 'other'."""
     sizes = np.array(meta["sizes"], float)
     tot = max(1.0, sizes.sum())
+    asg = meta["assign"]
+    role_groups = [j for r in ROLES for j in asg.get(r, [])]
+    sizes_roles = float(sizes[role_groups].sum()) if role_groups else 0.0
     a = float(sizes[meta["assign"]["A"]].sum() / tot) if meta["assign"]["A"] else 0.0
     b = float(sizes[meta["assign"]["B"]].sum() / tot) if meta["assign"]["B"] else 0.0
     warn = []
@@ -107,9 +115,10 @@ def quality(meta: dict) -> dict:
     else:
         if min(a, b) < 0.5 * max(a, b):
             warn.append("unbalanced")
-        if 1.0 - a - b > 0.35:
+        if 1.0 - a - b - sizes_roles / tot > 0.35:
             warn.append("many_other")
-    return {"a": a, "b": b, "other": max(0.0, 1.0 - a - b), "warnings": warn}
+    return {"a": a, "b": b, "roles": sizes_roles / tot, "other": max(0.0, 1.0 - a - b - sizes_roles / tot),
+            "warnings": warn}
 
 
 def sheet(groups, out: str, title: str, per_row: int = 14):
@@ -184,7 +193,7 @@ def make(a, model=None, grab=None) -> int:
     meta = {"note": "centres are Lab features (lightness x0.4) of the shirt colour; edit with team_labels.py assign",
             "centres": centres.tolist(), "sizes": sizes.tolist(), "mean_bgr": [g["mean_bgr"] for g in groups],
             "suggest": suggest(centres, sizes), "strips": os.path.basename(gdir),
-            "assign": {"A": [], "B": []}, "names": {"A": "team A", "B": "team B"},
+            "assign": {"A": [], "B": [], "REF": [], "GKA": [], "GKB": []}, "names": {"A": "team A", "B": "team B"},
             "colours": {"A": FS.TEAM_B, "B": FS.TEAM_A}}
     with open(a.out + ".team_labels.json", "w") as fh:
         json.dump(meta, fh, indent=1)
@@ -196,14 +205,22 @@ def assign(a) -> int:
     with open(a.labels) as fh:
         meta = json.load(fh)
     n = len(meta["centres"])
-    for key, groups in (("A", a.a), ("B", a.b)):
+    asg = meta["assign"]
+    for key, groups in (("A", getattr(a, "a", None)), ("B", getattr(a, "b", None)), ("REF", getattr(a, "ref", None)),
+                        ("GKA", getattr(a, "gk_a", None)), ("GKB", getattr(a, "gk_b", None))):
         if groups is not None:
             bad = [g for g in groups if not 0 <= g < n]
             if bad:
                 raise SystemExit(f"no such group(s): {bad} (there are {n}: 0..{n - 1})")
-            meta["assign"][key] = sorted(set(groups))
-    if set(meta["assign"]["A"]) & set(meta["assign"]["B"]):
-        raise SystemExit("a group cannot belong to both teams")
+            asg[key] = sorted(set(groups))
+    for key in ROLES:
+        asg.setdefault(key, [])
+    seen = {}
+    for key in ("A", "B") + ROLES:
+        for g in asg[key]:
+            if g in seen:
+                raise SystemExit(f"group {g} cannot be both {seen[g]} and {key}")
+            seen[g] = key
     for key, name, colour in (("A", a.name_a, a.colour_a), ("B", a.name_b, a.colour_b)):
         if name:
             meta["names"][key] = name
@@ -211,9 +228,9 @@ def assign(a) -> int:
             meta["colours"][key] = hex_colour(colour)
     with open(a.labels, "w") as fh:
         json.dump(meta, fh, indent=1)
-    other = [j for j in range(n) if j not in meta["assign"]["A"] + meta["assign"]["B"]]
-    print(f"team A '{meta['names']['A']}': groups {meta['assign']['A']}   team B '{meta['names']['B']}': "
-          f"groups {meta['assign']['B']}   other: {other}")
+    other = [j for j in range(n) if j not in seen]
+    print(f"team A '{meta['names']['A']}': groups {asg['A']}   team B '{meta['names']['B']}': groups {asg['B']}   "
+          f"referee: {asg['REF']}   goalkeeper A: {asg['GKA']}   goalkeeper B: {asg['GKB']}   other (not counted): {other}")
     return 0
 
 
@@ -233,6 +250,11 @@ class Labelled:
             self.group_team[j] = 1
         sizes = np.array(m["sizes"], float)
         mb = np.array(m["mean_bgr"], float)
+        self.group_role = np.full(len(self.centres), -1)             # 3 referee, 4 / 5 goalkeeper of A / B (-1 none)
+        for key in ROLES:
+            for j in m["assign"].get(key, []):
+                self.group_role[j] = ROLE_CODE[key]
+        self.has_roles = bool((self.group_role >= 0).any())
         self.sizes = np.array([sizes[self.group_team == t].sum() for t in (0, 1)]).astype(int)
         self.mean_bgr = np.array([np.average(mb[self.group_team == t], axis=0, weights=sizes[self.group_team == t])
                                   for t in (0, 1)])
@@ -243,6 +265,14 @@ class Labelled:
         f = S.colour_features(bgr)
         g = np.argmin(((f[:, None, :] - self.centres[None]) ** 2).sum(-1), axis=1)
         return self.group_team[g]
+
+    def role_of(self, bgr: np.ndarray) -> np.ndarray:
+        """3 referee, 4 goalkeeper of A, 5 goalkeeper of B or -1 (a team or 'other' group): the role of the nearest group."""
+        if not self.has_roles:
+            return np.full(len(bgr), -1)
+        f = S.colour_features(bgr)
+        g = np.argmin(((f[:, None, :] - self.centres[None]) ** 2).sum(-1), axis=1)
+        return self.group_role[g]
 
     def groups_of(self, bgr: np.ndarray) -> np.ndarray:
         """Index of the nearest colour group of each colour."""
@@ -300,6 +330,9 @@ def main(argv=None, model=None, grab=None) -> int:
     s.add_argument("--labels", required=True)
     s.add_argument("--a", type=int, nargs="+", default=None, help="groups of team A")
     s.add_argument("--b", type=int, nargs="+", default=None, help="groups of team B")
+    s.add_argument("--ref", type=int, nargs="+", default=None, help="groups of the referee")
+    s.add_argument("--gk-a", type=int, nargs="+", default=None, help="groups of team A's goalkeeper")
+    s.add_argument("--gk-b", type=int, nargs="+", default=None, help="groups of team B's goalkeeper")
     s.add_argument("--name-a", default=None)
     s.add_argument("--name-b", default=None)
     s.add_argument("--colour-a", default=None, help="chart colour: a name (white, blue, red, ...) or #rrggbb")

@@ -145,7 +145,8 @@ def job_view(jid: str) -> dict:
         teams = {"groups": [{"index": j, "size": int(meta["sizes"][j]),
                              "share": round(100.0 * meta["sizes"][j] / max(1, sum(meta["sizes"])), 1),
                              "bgr": [round(x) for x in meta["mean_bgr"][j]]} for j in range(len(meta["sizes"]))],
-                 "assign": meta["assign"], "suggest": meta.get("suggest", {"A": [], "B": []}),
+                 "assign": {"A": meta["assign"]["A"], "B": meta["assign"]["B"], "REF": meta["assign"].get("REF", []),
+                            "GKA": meta["assign"].get("GKA", []), "GKB": meta["assign"].get("GKB", [])}, "suggest": meta.get("suggest", {"A": [], "B": []}),
                  "names": meta["names"], "colours": meta["colours"], "quality": TL.quality(meta)}
     job.migrate()
     vids = []
@@ -188,6 +189,9 @@ def assign_teams(jid: str, body: dict) -> None:
         labels = path
         a = [int(x) for x in body.get("a", [])]
         b = [int(x) for x in body.get("b", [])]
+        ref = [int(x) for x in body.get("ref", [])]
+        gk_a = [int(x) for x in body.get("gk_a", [])]
+        gk_b = [int(x) for x in body.get("gk_b", [])]
         name_a = (body.get("name_a") or "").strip() or None
         name_b = (body.get("name_b") or "").strip() or None
         colour_a = body.get("colour_a") or None

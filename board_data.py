@@ -29,6 +29,7 @@ import numpy as np
 
 import auto_keyframes as AK
 import board_clean as BC
+import board_smooth as BSM
 import ground_model as GM
 import scene_check as S
 
@@ -42,13 +43,16 @@ MIN_HEIGHT = 14.0                           # smallest box (px) whose shirt colo
 MARGIN_M = 1.5                              # a foot this close (metres) to the pitch outline still counts as on the pitch
 RESCUE = 1.5                                # a colour closer to a team than 1.5 x to its 'other' group still counts for the team
 MAX_TEAM = 11                               # players of one team on the pitch at one moment
+GK_END_M = 10.0                             # a goalkeeper this far (metres) from the middle line stands at his own goal: that decides whose he is
 TEAM_MARGIN_M = 0.5                         # a team player this far (metres) outside the outline is shown as 'other'
 
 
 def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: float, max_lon: float, min_conf: float,
                 min_height: float, k_angle: float, rescue: float = RESCUE, calib: Optional[str] = None,
                 margin_m: float = MARGIN_M, tidy: bool = True, max_team: int = MAX_TEAM,
-                team_margin_m: float = TEAM_MARGIN_M, stats: Optional[dict] = None, feet: bool = True) -> List[dict]:
+                team_margin_m: float = TEAM_MARGIN_M, stats: Optional[dict] = None, feet: bool = True,
+                smooth: bool = True, a_attacks_right: Optional[bool] = None,
+                box: Optional[list] = None) -> List[dict]:
     """One part (one detections file) -> frames {vt, pan, fov, players:[(x, y, team)]}; vt = seconds in the joined video."""
     hdr, frames = AK.load_detections(det_path, max_lon=max_lon)
     fy = S.view_fy(hdr)
@@ -110,6 +114,7 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
     team = np.full(len(rows), OTHER, int)
     weight = np.zeros(len(rows))                 # how much the detection's own label counts as a vote
     margin = np.ones(len(rows))                  # 0 = the colour is as near one team as the other, 1 = sure
+    gk_label = np.full(len(rows), -1)            # 4 / 5 = the goalkeeper group (of A / B) the colour is nearest to
     if rows:
         a = np.array(rows, float)
         c = np.array(conf)
@@ -127,6 +132,11 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
             margin[ok] = m
             sure_other = team[ok] == OTHER                       # a colour no team is near (referee, goalkeeper)
             weight[ok] = np.where(sure_other, 0.5, np.maximum(m, 0.05)) * c[ok]
+            if getattr(clusters, "has_roles", False):         # referee / goalkeeper groups: the nearest group decides
+                rl = clusters.role_of(a[ok, 2:5])
+                gk_label[ok] = np.where(rl >= 4, rl, -1)
+                team[ok] = np.where(rl == 3, BC.REFEREE, np.where(rl >= 4, BC.GK, team[ok]))
+                weight[ok] = np.where(rl >= 3, 0.5 * c[ok], weight[ok])
         if tidy:
             vt = np.array([float(r["t"]) for r in frames])
             team, st = BC.clean(np.array(owner), vt, a[:, 0], a[:, 1], team, weight, margin, np.array(outm),
@@ -135,6 +145,29 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
                 for k, v in st.items():
                     stats[k] = stats.get(k, 0) + v
                 stats["players"] = stats.get("players", 0) + len(rows)
+    if smooth and rows:                          # Kalman/RTS smoothing along the tracks (board_smooth.py)
+        a2 = np.array(rows, float)
+        vt_all = np.array([float(r["t"]) for r in frames])
+        fr_idx = np.array(owner)
+        trk = BC.link_tracks(fr_idx, a2[:, 0], a2[:, 1], vt_all)
+        sx, sy, sst = BSM.smooth(fr_idx, vt_all, a2[:, 0], a2[:, 1], trk)
+        rows = [(float(sx[k]), float(sy[k]), *rows[k][2:]) for k in range(len(rows))]
+        if stats is not None:
+            stats["smoothed"] = stats.get("smoothed", 0) + sst["smoothed"]
+            stats["gated"] = stats.get("gated", 0) + sst["gated"]
+    if rows and (team >= BC.GK).any():             # which goalkeeper? the one whose goal he stands at, else his group's label
+        xs = np.array([r[0] for r in rows], float)
+        code = np.where(gk_label >= 4, gk_label, BC.OTHER)
+        if a_attacks_right is not None:
+            c0 = 0.5 * (float(box[0]) + float(box[1])) if box else 0.0
+            a_home_left = bool(a_attacks_right)                # A attacks right -> A defends the left goal
+            near_a = (xs < c0) == a_home_left
+            code = np.where(np.abs(xs - c0) > GK_END_M, np.where(near_a, 4, 5), code)
+        team = np.where(team == BC.GK, code, team)
+        if stats is not None:
+            stats["keepers"] = stats.get("keepers", 0) + int(((team == 4) | (team == 5)).sum())
+    if stats is not None and rows:
+        stats["referees"] = stats.get("referees", 0) + int((team == BC.REFEREE).sum())
     out = [{"vt": float(r["t"]) - t_in + video_start,
             "pan": None if pan is None else float(pan[i]), "fov": None if fov is None else float(fov[i]), "players": []}
            for i, r in enumerate(frames)]
@@ -146,13 +179,13 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
 def build(parts: List[dict], clusters, title: str = "", lang: str = "en", max_lon: float = 98.0, min_conf: float = MIN_CONF,
           min_height: float = MIN_HEIGHT, k_angle: float = 0.75, rescue: float = RESCUE,
           margin_m: float = MARGIN_M, tidy: bool = True, max_team: int = MAX_TEAM,
-          team_margin_m: float = TEAM_MARGIN_M, feet: bool = True) -> dict:
+          team_margin_m: float = TEAM_MARGIN_M, feet: bool = True, smooth: bool = True) -> dict:
     """parts: [{det, kf, half, video_start, duration, box:[x0,x1,y0,y1], a_attacks_right}] in playing order."""
     frames, meta_parts = [], []
     stats: dict = {}
     for p in parts:
         fr = part_frames(p["det"], p.get("kf"), clusters, float(p["video_start"]), max_lon, min_conf, min_height, k_angle, rescue, p.get("calib"), margin_m,
-                         tidy, max_team, team_margin_m, stats, feet)
+                         tidy, max_team, team_margin_m, stats, feet, smooth, p.get("a_attacks_right"), p.get("box"))
         end = float(p["video_start"]) + float(p["duration"]) if p.get("duration") else None
         if end is not None:
             fr = [f for f in fr if f["vt"] <= end + 1e-6]
@@ -164,13 +197,13 @@ def build(parts: List[dict], clusters, title: str = "", lang: str = "en", max_lo
     if not frames:
         raise SystemExit("no moments for the board (no players found)")
     frames.sort(key=lambda f: f["vt"])
-    return {"format": FORMAT, "version": VERSION, "title": title, "lang": lang, "k_angle": k_angle, "tidy": stats or None,
+    return {"format": FORMAT, "version": VERSION, "title": title, "lang": lang, "k_angle": k_angle, "roles": bool(getattr(clusters, "has_roles", False)), "tidy": stats or None,
             "teams": {"A": {"name": clusters.names[0], "colour": clusters.colours[0]},
                       "B": {"name": clusters.names[1], "colour": clusters.colours[1]}},
             "parts": meta_parts,
             "note": "frames[i] = [t, pan, fov, x1, y1, team1, x2, y2, team2, ...]: t = seconds in the joined video; pan/fov = "
                     "camera direction and zoom (degrees); x (sideways) and y (away from the camera) in decimetres; team 0 = A, "
-                    "1 = B, 2 = referee/goalkeeper/unknown",
+                    "1 = B, 2 = other / unknown (not counted), 3 = referee, 4 = goalkeeper of A, 5 = goalkeeper of B",
             "frames": [[round(f["vt"], 2), None if f["pan"] is None else round(f["pan"], 1),
                         None if f["fov"] is None else round(f["fov"], 1)]
                        + [v for (x, y, t) in f["players"] for v in (int(round(x * 10)), int(round(y * 10)), t)]
@@ -202,6 +235,7 @@ def main(argv=None) -> int:
     p.add_argument("--min-height", type=float, default=MIN_HEIGHT, help="smallest box (px) whose shirt colour is trusted")
     p.add_argument("--no-tidy", action="store_true", help="skip the clean-up of the team labels (tracks, pitch outline, 11 a side)")
     p.add_argument("--no-feet", action="store_true", help="place players by box height only (not combined with the foot position)")
+    p.add_argument("--no-smooth", action="store_true", help="show the raw position of every detection (no Kalman smoothing)")
     p.add_argument("--max-team", type=int, default=MAX_TEAM, help="most players of one team at one moment")
     p.add_argument("--team-margin-m", type=float, default=TEAM_MARGIN_M,
                    help="a team player more than this many metres outside the outline is shown as 'other'")
@@ -230,12 +264,14 @@ def main(argv=None) -> int:
                       "a_attacks_right": d.get("team_a_attacks_right")})
         t += a.durations[i]
     data = build(parts, clusters, a.title, a.lang, a.max_lon, a.min_conf, a.min_height, a.angle_factor, a.rescue_ratio, a.margin_m,
-                 not a.no_tidy, a.max_team, a.team_margin_m, not a.no_feet)
+                 not a.no_tidy, a.max_team, a.team_margin_m, not a.no_feet, not a.no_smooth)
     write(a.out, data)
     print(f"wrote {a.out}: {len(data['frames'])} moments, {sum((len(f) - 3) // 3 for f in data['frames'])} player positions")
     st = data.get("tidy")
     if st and "feet_used" in st:
         print(f"positions: {st['feet_used']} combined with the foot position, {st.get('feet_gated', 0)} kept at box height only")
+    if st and st.get("smoothed"):
+        print(f"smoothed: {st['smoothed']} positions along tracks, {st.get('gated', 0)} wild measurements down-weighted")
     if st:
         print(f"tidied: {st.get('relabelled', 0)} team labels changed by their track, {st.get('recovered', 0)} unreadable players "
               f"given a team, {st.get('outside', 0)} outside the pitch shown as other, {st.get('to_other_team', 0) + st.get('to_other', 0)} "

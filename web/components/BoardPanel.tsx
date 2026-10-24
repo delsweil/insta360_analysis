@@ -9,6 +9,7 @@ import {
 const NAVY = '#0f2972'
 export const PAD = 3 // metres of grass around the pitch
 const OTHER_COLOUR = '#aab3c5'
+const REFEREE_COLOUR = '#f2d04a'
 
 function fmt(sec: number) {
   const s = Math.max(0, Math.floor(sec))
@@ -77,7 +78,7 @@ function BoardView({ board, t, trails, svgRef, maxHeight, translucent }: ViewPro
   const [x0, x1, y0, y1] = boxOf(board, part)
   const idx = frameAt(board, t)
   const frame = idx >= 0 ? board.frames[idx] : null
-  const colours = [board.teams.A.colour, board.teams.B.colour, OTHER_COLOUR]
+  const colours = [board.teams.A.colour, board.teams.B.colour, OTHER_COLOUR, REFEREE_COLOUR, board.teams.A.colour, board.teams.B.colour]
   const players = frame ? playersIn(frame, [x0, x1, y0, y1]) : []
   const wedge = useMemo(() => {
     if (!frame || frame[1] == null || frame[2] == null) return null
@@ -113,11 +114,21 @@ function BoardView({ board, t, trails, svgRef, maxHeight, translucent }: ViewPro
         {old.map((p, i) => (
           <circle key={`o${i}`} cx={p.x} cy={p.y} r={0.55} fill={colours[p.team] ?? OTHER_COLOUR} opacity={0.4 - p.age * 0.05} />
         ))}
-        {[2, 1, 0].map(team =>
-          players.filter(p => p.team === team).map((p, i) => (
-            <circle key={`${team}-${i}`} cx={p.x} cy={p.y} r={team === 2 ? (translucent ? 1.2 : 0.95) : (translucent ? 1.8 : 1.35)}
-              fill={colours[team]} stroke="#0a1a3a" strokeWidth={0.3} opacity={team === 2 ? 0.8 : 1} />
-          )),
+        {[2, 3, 1, 0, 4, 5].map(team =>
+          players.filter(p => p.team === team).map((p, i) => {
+            const r = team === 2 ? (translucent ? 1.2 : 0.95) : (translucent ? 1.8 : 1.35)
+            if (team === 3) {          // the referee: a yellow diamond
+              const d = r * 1.15
+              return <path key={`${team}-${i}`} d={`M${p.x},${p.y - d} L${p.x + d},${p.y} L${p.x},${p.y + d} L${p.x - d},${p.y} Z`}
+                fill={REFEREE_COLOUR} stroke="#0a1a3a" strokeWidth={0.3} />
+            }
+            return (
+              <g key={`${team}-${i}`}>
+                {team >= 4 && <circle cx={p.x} cy={p.y} r={r + 0.7} fill="none" stroke="#fff" strokeWidth={0.35} />}
+                <circle cx={p.x} cy={p.y} r={r} fill={colours[team]} stroke="#0a1a3a" strokeWidth={0.3} opacity={team === 2 ? 0.8 : 1} />
+              </g>
+            )
+          }),
         )}
       </g>
       {!frame && (
@@ -264,7 +275,7 @@ export default function BoardPanel({ gameId, gameTitle, state, reload, currentTi
   const teams = [board.teams.A, board.teams.B]
   const attacksRight = part?.a_attacks_right
   const info = [0, 1].map(k => {
-    const pts = players.filter(p => p.team === k)
+    const pts = players.filter(p => p.team === k)   // outfield players: keepers (4, 5) are drawn but kept out of the shape
     return { n: pts.length, length: pts.length >= 4 ? spread(pts.map(p => p.x)) : null, width: pts.length >= 4 ? spread(pts.map(p => p.y)) : null }
   })
   const other = players.filter(p => p.team === 2).length
@@ -282,7 +293,7 @@ export default function BoardPanel({ gameId, gameTitle, state, reload, currentTi
             {attacksRight != null && (k === 0) !== attacksRight && ' ←'}
           </span>
         ))}
-        {other > 0 && (
+        {other > 0 && !board.roles && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: dark ? '#cbd5ee' : '#5b6377' }}>
             <span style={{ width: 10, height: 10, borderRadius: '50%', background: OTHER_COLOUR }} /> other {other}
           </span>

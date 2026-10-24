@@ -40,9 +40,10 @@ input[type=text]{background:var(--bg);border:1px solid var(--line);border-radius
 .jobs .j{display:flex;gap:12px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--line);cursor:pointer}
 .jobs .j:hover{background:var(--panel2)}
 .jobs .j b{flex:1}
-.group{display:grid;grid-template-columns:30px 1fr 150px;gap:10px;align-items:center;padding:8px;border-radius:8px;border:2px solid transparent}
+.group{display:grid;grid-template-columns:30px 1fr 330px;gap:10px;align-items:center;padding:8px;border-radius:8px;border:2px solid transparent}
 .group img{width:100%;max-width:560px;border-radius:6px;display:block}
-.group.A{border-color:var(--team-a,#ececec)}.group.B{border-color:var(--team-b,#3d7bd9)}
+.group.A{border-color:var(--team-a,#ececec)}.group.B{border-color:var(--team-b,#3d7bd9)}.group.R{border-color:#e6c200}.group.GA{border-color:var(--team-a,#ececec);border-style:dashed}.group.GB{border-color:var(--team-b,#3d7bd9);border-style:dashed}
+@media(max-width:900px){.group{grid-template-columns:30px 1fr}.group .seg{grid-column:1/-1}}
 .sw{width:26px;height:44px;border-radius:5px;border:1px solid var(--line)}
 .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
 .seg button{border:0;border-radius:0;flex:1;padding:6px 0}
@@ -70,8 +71,8 @@ en:{sub:"Pan-and-zoom video and team statistics from your 360° recording",new:"
  lang:"Language of the charts",halves:"Two files = two halves (the teams change sides)",up_dir:"⬆ up",home:"home",
  back:"← all games",stop:"Stop",resume:"Continue",open:"Open folder",done:"Finished",running:"Working",failed:"Problem",
  needs_input:"Waiting for you",cancelled:"Stopped",stopped:"Stopped",idle:"Ready",pending:"",remaining:"about",left:"left",
- teams_h:"Which shirts are the two teams?",teams_p:"Players seen in about 40 moments of the game, grouped by shirt colour. Mark each group: team A, team B, or other (referee, goalkeepers, odd light). Several groups can belong to one team - one team often shows as a bright and a dark group.",
- A:"Team A",B:"Team B",O:"other",nameA:"Name of team A",nameB:"Name of team B",confirm:"Confirm teams",saved:"Teams saved.",
+ teams_h:"Which shirts are the two teams?",teams_p:"Players seen in about 40 moments of the game, grouped by shirt colour. Mark each group: team A, team B, the referee, the goalkeeper of A or of B, or other (coaches, odd light - these are not counted). Several groups can belong to one team - one team often shows as a bright and a dark group. If both goalkeepers ended up in one group, give it to either: which goal he stands at tells them apart.",
+ A:"Team A",B:"Team B",O:"other",R:"Referee",GA:"GK A",GB:"GK B",nameA:"Name of team A",nameB:"Name of team B",confirm:"Confirm teams",saved:"Teams saved.",
  hb_ok:"● Working - the numbers above update every few seconds.",hb_stale:"No sign of life for {n} - the program may be stuck. Press Stop, then Continue.",half1:"First half",half2:"Second half",vids_h:"Videos of this game",outline_use:"Ignore people outside the pitch",redo:"Plan camera again",apply:"Apply changes",pitch_used:"Pitch outline used: {n} % of the detections were outside it and are ignored.",pitch_not:"Pitch outline not used ({r}). People beside the pitch may pull the camera.",pitch_wait:"Pitch outline: not checked yet.",vids_p:"Say which half each video belongs to - the statistics are made for each half separately. Look at the outline: the pitch should be inside the line and the sidelines outside it.",draw:"Draw outline",ed_h:"Draw the pitch outline",ed_p:"Drag the points so the line follows the edge of the pitch. Double-click a line to add a point, double-click a point to remove it. Dots are players seen: green = kept, red = left out (people beside the pitch).",ed_save:"Save and plan the camera again",ed_cancel:"Cancel",ed_auto:"Back to automatic",ed_out:"left out",manual_on:"Outline drawn by you.",nothing_redo:"Nothing to redo: these settings were already in use. To make a video again tick \"Plan camera again\" for it.",redoing:"Making again:",incomplete:"Steps missing",suggested:"A first guess is already marked - please check it.",
  q_unb:"The two teams are very different in size - one of them may be missing a colour group.",q_oth:"Many players are in 'other' - check that no team shirt is left out.",
  pre_h:"The view of the first video",pre_p:"This is what the program sees. The pitch should look natural and be inside the picture. If it looks wrong, the camera may not be set up as expected.",
@@ -84,8 +85,8 @@ de:{sub:"Schwenk-Video und Mannschaftsstatistik aus Ihrer 360°-Aufnahme",new:"N
  lang:"Sprache der Grafiken",halves:"Zwei Dateien = zwei Halbzeiten (Seitenwechsel)",up_dir:"⬆ hoch",home:"Home",
  back:"← alle Spiele",stop:"Stopp",resume:"Weiter",open:"Ordner öffnen",done:"Fertig",running:"In Arbeit",failed:"Problem",
  needs_input:"Wartet auf Sie",cancelled:"Gestoppt",stopped:"Gestoppt",idle:"Bereit",pending:"",remaining:"noch etwa",left:"",
- teams_h:"Welche Trikots sind die beiden Mannschaften?",teams_p:"Spieler aus etwa 40 Momenten des Spiels, nach Trikotfarbe gruppiert. Markieren Sie jede Gruppe: Team A, Team B oder andere (Schiedsrichter, Torhüter, seltsames Licht). Mehrere Gruppen können zu einem Team gehören - ein Team erscheint oft als helle und dunkle Gruppe.",
- A:"Team A",B:"Team B",O:"andere",nameA:"Name von Team A",nameB:"Name von Team B",confirm:"Teams bestätigen",saved:"Teams gespeichert.",
+ teams_h:"Welche Trikots sind die beiden Mannschaften?",teams_p:"Spieler aus etwa 40 Momenten des Spiels, nach Trikotfarbe gruppiert. Markieren Sie jede Gruppe: Team A, Team B, Schiedsrichter, Torwart von A oder B oder andere (Trainer, seltsames Licht - werden nicht gezählt). Mehrere Gruppen können zu einem Team gehören - oft erscheint ein Team als helle und als dunkle Gruppe. Stecken beide Torhüter in einer Gruppe, geben Sie sie einem davon: an welchem Tor er steht, unterscheidet sie.",
+ A:"Team A",B:"Team B",O:"andere",R:"Schiri",GA:"TW A",GB:"TW B",nameA:"Name von Team A",nameB:"Name von Team B",confirm:"Teams bestätigen",saved:"Teams gespeichert.",
  hb_ok:"● In Arbeit - die Zahlen oben aktualisieren sich alle paar Sekunden.",hb_stale:"Seit {n} kein Lebenszeichen - das Programm hängt evtl. Stopp drücken, dann Weiter.",half1:"1. Halbzeit",half2:"2. Halbzeit",vids_h:"Videos dieses Spiels",outline_use:"Personen außerhalb des Feldes ignorieren",redo:"Kamera neu planen",apply:"Änderungen übernehmen",pitch_used:"Spielfeldlinie genutzt: {n} % der Erkennungen lagen außerhalb und werden ignoriert.",pitch_not:"Spielfeldlinie nicht genutzt ({r}). Personen neben dem Feld können die Kamera ziehen.",pitch_wait:"Spielfeldlinie: noch nicht geprüft.",vids_p:"Legen Sie fest, zu welcher Halbzeit jedes Video gehört - die Statistik entsteht für jede Halbzeit getrennt. Prüfen Sie die Linie: das Feld soll innerhalb liegen, die Seitenlinien außerhalb.",draw:"Linie zeichnen",ed_h:"Spielfeldlinie zeichnen",ed_p:"Ziehen Sie die Punkte an den Spielfeldrand. Doppelklick auf eine Linie fügt einen Punkt ein, Doppelklick auf einen Punkt entfernt ihn. Punkte = gesehene Spieler: grün = behalten, rot = ausgeschlossen (Personen neben dem Feld).",ed_save:"Speichern und Kamera neu planen",ed_cancel:"Abbrechen",ed_auto:"Zurück zu automatisch",ed_out:"ausgeschlossen",manual_on:"Linie von Ihnen gezeichnet.",nothing_redo:"Nichts neu zu machen: diese Einstellungen waren schon aktiv. Für ein neues Video \"Kamera neu planen\" ankreuzen.",redoing:"Wird neu gemacht:",incomplete:"Schritte fehlen",suggested:"Ein erster Vorschlag ist schon markiert - bitte prüfen.",
  q_unb:"Die beiden Teams sind sehr unterschiedlich groß - vielleicht fehlt einem eine Farbgruppe.",q_oth:"Viele Spieler sind bei 'andere' - prüfen, ob kein Mannschaftstrikot fehlt.",
  pre_h:"Die Ansicht des ersten Videos",pre_p:"So sieht das Programm das Spiel. Das Feld sollte natürlich aussehen und im Bild liegen. Sieht es falsch aus, ist die Kamera evtl. nicht wie erwartet eingestellt.",
@@ -272,7 +273,8 @@ function paintTeams(v){
     const has=T.assign.A.length&&T.assign.B.length;
     const src=has?T.assign:T.suggest;
     teamEdit={map:{},nameA:T.names.A,nameB:T.names.B,cA:T.colours.A,cB:T.colours.B,confirmed:has,guess:!has};
-    T.groups.forEach(g=>teamEdit.map[g.index]=src.A.includes(g.index)?"A":src.B.includes(g.index)?"B":"O");
+    const rl=T.assign;
+    T.groups.forEach(g=>teamEdit.map[g.index]=src.A.includes(g.index)?"A":src.B.includes(g.index)?"B":(rl.REF||[]).includes(g.index)?"R":(rl.GKA||[]).includes(g.index)?"GA":(rl.GKB||[]).includes(g.index)?"GB":"O");
     buildTeams(v);
   }
   const q=T.quality;const w=$("#qwarn");if(w)w.innerHTML=(teamEdit.confirmed?q.warnings:[]).map(x=>x==="unbalanced"?t("q_unb"):x==="many_other"?t("q_oth"):"").map(x=>`<div class="warn">${x}</div>`).join("");
@@ -283,7 +285,7 @@ function buildTeams(v){
   b.innerHTML=`<div class="card"><h2>${t("teams_h")}</h2><p class="muted" style="margin-top:0">${t("teams_p")} ${E.guess?`<b>${t("suggested")}</b>`:""}</p>
    <div id="grps">${T.groups.map(g=>`<div class="group ${E.map[g.index]}" data-g="${g.index}"><div class="sw" style="background:rgb(${g.bgr[2]},${g.bgr[1]},${g.bgr[0]})"></div>
      <div><img src="/files/${encodeURIComponent(v.id)}/teams.groups/g${g.index}.png"><div class="muted" style="font-size:12px">${g.size} players (${g.share} %)</div></div>
-     <div class="seg"><button data-v="A" class="${E.map[g.index]==="A"?"on":""}">${t("A")}</button><button data-v="B" class="${E.map[g.index]==="B"?"on":""}">${t("B")}</button><button data-v="O" class="${E.map[g.index]==="O"?"on":""}">${t("O")}</button></div></div>`).join("")}</div>
+     <div class="seg">${["A","B","R","GA","GB","O"].map(r=>`<button data-v="${r}" class="${E.map[g.index]===r?"on":""}">${t(r)}</button>`).join("")}</div></div>`).join("")}</div>
    <div class="grid2" style="margin-top:12px"><div><div class="muted">${t("nameA")}</div><input type="text" id="nA" value="${esc(E.nameA)}"><div class="colours" id="cA" style="margin-top:6px">${PAL.map(c=>`<span data-c="${c}" style="background:${c}" class="${c===E.cA?"on":""}"></span>`).join("")}</div></div>
    <div><div class="muted">${t("nameB")}</div><input type="text" id="nB" value="${esc(E.nameB)}"><div class="colours" id="cB" style="margin-top:6px">${PAL.map(c=>`<span data-c="${c}" style="background:${c}" class="${c===E.cB?"on":""}"></span>`).join("")}</div></div></div>
    <div id="qwarn" style="margin-top:8px"></div>
@@ -292,8 +294,9 @@ function buildTeams(v){
   $("#nA").oninput=e=>E.nameA=e.target.value;$("#nB").oninput=e=>E.nameB=e.target.value;
   for(const k of ["A","B"])$("#c"+k).onclick=e=>{const c=e.target.dataset.c;if(c){E["c"+k]=c;buildTeams(v)}};
   $("#cf").onclick=async()=>{
-    const a=Object.keys(E.map).filter(k=>E.map[k]==="A").map(Number),bb=Object.keys(E.map).filter(k=>E.map[k]==="B").map(Number);
-    const r=await api(`/api/jobs/${encodeURIComponent(v.id)}/teams`,{a,b:bb,name_a:E.nameA,name_b:E.nameB,colour_a:E.cA,colour_b:E.cB});
+    const of=c=>Object.keys(E.map).filter(k=>E.map[k]===c).map(Number);
+    const a=of("A"),bb=of("B");
+    const r=await api(`/api/jobs/${encodeURIComponent(v.id)}/teams`,{a,b:bb,ref:of("R"),gk_a:of("GA"),gk_b:of("GB"),name_a:E.nameA,name_b:E.nameB,colour_a:E.cA,colour_b:E.cB});
     if(r.error&&!r.ok){alert(r.error);return}
     E.confirmed=true;$("#cfm").textContent=t("saved");
     const w=await api("/api/jobs/"+encodeURIComponent(v.id));paintTeams(w)};
