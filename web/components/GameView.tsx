@@ -12,11 +12,14 @@ import ClipRecorder from '@/components/ClipRecorder'
 import AnnotationCanvas, { type Shape, type Tool, type AnnotationCanvasHandle } from '@/components/AnnotationCanvas'
 import RecordExportButton from '@/components/RecordExportButton'
 import TimingStrip from '@/components/TimingStrip'
-import DrawTools from '@/components/DrawTools'
+import TransportBar, { RATES } from '@/components/TransportBar'
+import FloatingDrawTools, { DRAW_TOOLS } from '@/components/FloatingDrawTools'
 import VeoImportModal from '@/components/VeoImportModal'
 import BoardPanel from '@/components/BoardPanel'
 import { useBoard } from '@/lib/board'
 import { exportGame } from '@/lib/exportEvents'
+import StatsPanel, { StatsCard } from '@/components/StatsPanel'
+import { useStats } from '@/lib/stats'
 
 function formatTime(sec: number) {
   const m = Math.floor(sec / 60)
@@ -54,6 +57,10 @@ export default function GameView({ gameId, shareToken }: Props) {
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [isMobile, setIsMobile] = useState(false)
+  const [forceHud, setForceHud] = useState(() => { // fullscreen view chosen by hand (tablets), remembered on this device
+    if (typeof window === 'undefined') return false
+    try { return localStorage.getItem('hud-mode') === '1' } catch { return false }
+  })
   const [showAnnotations, setShowAnnotations] = useState(false)
   const [showBoard, setShowBoard] = useState(false) // mobile HUD: board panel over the video
   const [boardOff, setBoardOff] = useState(() => { // where the viewer dragged the mobile board to (remembered)
@@ -65,8 +72,29 @@ export default function GameView({ gameId, shareToken }: Props) {
     return { x: 0, y: 0 }
   })
   const boardBox = useRef<HTMLDivElement>(null)
+  const [boardScale, setBoardScale] = useState(() => { // size of the mobile board (1 = normal), remembered
+    if (typeof window === 'undefined') return 1
+    try {
+      const v = Number(localStorage.getItem('board-scale'))
+      if (v >= 0.6 && v <= 2.4) return v
+    } catch {}
+    return 1
+  })
+  const sizeBoard = (delta: number) => {
+    const v = Math.round(Math.min(2.4, Math.max(0.6, boardScale + delta)) * 10) / 10
+    setBoardScale(v)
+    try { localStorage.setItem('board-scale', String(v)) } catch {}
+  }
   const boardDrag = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
   const { state: boardState, reload: reloadBoard } = useBoard(id)
+  const { state: statsState } = useStats(id)
+  const [showStats, setShowStats] = useState(false) // phone HUD: statistics sheet
+  // where a half starts in the video, known when the board data has it
+  const halfStart = useCallback((half: string) => {
+    if (boardState.status !== 'ready') return null
+    const p = boardState.board.parts.find(x => String(x.half) === half)
+    return p ? p.video_start : null
+  }, [boardState])
   const [showShare, setShowShare] = useState(false)
   const [markIn, setMarkIn] = useState<number | null>(null)
   const [isRecording, setIsRecording] = useState(false)
@@ -283,6 +311,19 @@ export default function GameView({ gameId, shareToken }: Props) {
     )
   }, [])
 
+  // Desktop transport: jumps keep the play state (unlike seekTo, which always plays), single frames pause first
+  const timeRef = useRef(0)
+  useEffect(() => { timeRef.current = currentTime }, [currentTime])
+  const seekBy = useCallback((delta: number) => {
+    const t = Math.min(Math.max(0, timeRef.current + delta), duration > 0 ? duration : 99999)
+    timeRef.current = t
+    setCurrentTime(t)
+    firedAnnotationIds.current.clear()
+    scrubTo(t)
+  }, [duration, scrubTo])
+  const stepFrame = useCallback((dir: 1 | -1) => { pauseVideo(); seekBy(dir / 30) }, [pauseVideo, seekBy])
+  const changeRate = useCallback((r: number) => { setMobilePlaybackRate(r); setVideoRate(r) }, [setVideoRate])
+
   const jumpSecFor = (ann: Annotation) =>
     ann.label === 'tactical' && ann.context_start_sec != null ? ann.context_start_sec : ann.timestamp_sec
 
@@ -408,6 +449,46 @@ export default function GameView({ gameId, shareToken }: Props) {
     setDrawTool('select')
     setIsDrawing(true)
   }, [pauseVideo])
+
+  const finishDrawing = useCallback(() => {
+    mobileCanvasRef.current?.finalizePending()
+    desktopCanvasRef.current?.finalizePending()
+    setIsDrawing(false); setDrawTool('select'); setEditingAnnotationId(null); setMarkIn(null)
+    setAnnotationEndSec(null); setClipEndSec(null)
+  }, [])
+
+  // Keyboard on the desktop layout: space/K play, arrows and J/L jump, comma/period frames, brackets speed, D draw, 1-8 tools
+  useEffect(() => {
+    if (isMobile || forceHud) return
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return
+      if (e.metaKey || e.ctrlKey) {
+        if (isDrawing && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); setDraftShapes(prev => prev.slice(0, -1)) }
+        return
+      }
+      if (e.altKey) return
+      const k = e.key
+      const idx = RATES.indexOf(mobilePlaybackRate)
+      if (k === ' ' || k === 'k' || k === 'K') { e.preventDefault(); if (isPlaying) pauseVideo(); else resumeVideo() }
+      else if (k === 'ArrowLeft') { e.preventDefault(); seekBy(e.shiftKey ? -1 : -5) }
+      else if (k === 'ArrowRight') { e.preventDefault(); seekBy(e.shiftKey ? 1 : 5) }
+      else if (k === 'j' || k === 'J') seekBy(-10)
+      else if (k === 'l' || k === 'L') seekBy(10)
+      else if (k === ',') stepFrame(-1)
+      else if (k === '.') stepFrame(1)
+      else if (k === '[') changeRate(RATES[Math.max(0, (idx < 0 ? 2 : idx) - 1)])
+      else if (k === ']') changeRate(RATES[Math.min(RATES.length - 1, (idx < 0 ? 2 : idx) + 1)])
+      else if ((k === 'd' || k === 'D') && isCoach && !isDrawing) {
+        if (selectedLabel !== 'tactical') { setSelectedLabel('tactical'); setDraftShapes([]); setEditingAnnotationId(null) }
+        startDrawing()
+      }
+      else if (isDrawing && k >= '1' && k <= String(DRAW_TOOLS.length)) setDrawTool(DRAW_TOOLS[Number(k) - 1].key)
+      else if (isDrawing && k === 'Escape') setDrawTool('select')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isMobile, forceHud, isDrawing, isPlaying, isCoach, selectedLabel, mobilePlaybackRate, pauseVideo, resumeVideo, seekBy, stepFrame, changeRate, startDrawing])
 
   const handleQuickSave = useCallback(async () => {
     if (saving) return
@@ -685,7 +766,7 @@ export default function GameView({ gameId, shareToken }: Props) {
         if (isLabelOpen) return
         const jumpSec = ann.label === 'tactical' && ann.context_start_sec != null ? ann.context_start_sec : ann.timestamp_sec
         seekTo(jumpSec)
-        if (isMobile) setShowAnnotations(false)
+        if (isMobile || forceHud) setShowAnnotations(false)
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -794,7 +875,7 @@ export default function GameView({ gameId, shareToken }: Props) {
               setEditingAnnotationId(ann.id)
               setDrawTool('select')
               setIsDrawing(true)
-              if (isMobile) setShowAnnotations(false)
+              if (isMobile || forceHud) setShowAnnotations(false)
             }}
             style={{
               fontSize: 10, color: '#0f2972', fontWeight: 600,
@@ -879,8 +960,86 @@ export default function GameView({ gameId, shareToken }: Props) {
     height: 44,
   }
 
-  // ── MOBILE LAYOUT — landscape fullscreen HUD ───────────────────
-  if (isMobile) {
+  const chooseHud = (on: boolean) => {
+    setForceHud(on)
+    try { localStorage.setItem('hud-mode', on ? '1' : '0') } catch {}
+  }
+
+  // The draggable see-through board over the video: the HUD and the desktop view both show it,
+  // and it stays when the controls are hidden
+  const boardOverlay = (
+    <>
+        {/* ── Tactical board: small see-through pitch you can drag (stays on screen, also when the HUD hides) ── */}
+        {showBoard && boardState.status === 'ready' && (
+          <div
+            ref={boardBox}
+            style={{
+              position: 'absolute', zIndex: 18, pointerEvents: 'none',
+              right: 'max(8px, env(safe-area-inset-right))',
+              top: 'max(52px, calc(env(safe-area-inset-top) + 42px))',
+              width: `calc(min(22vw, 190px) * ${boardScale})`,
+              transform: `translate(${boardOff.x}px, ${boardOff.y}px)`,
+            }}
+          >
+            <div
+              onPointerDown={e => {
+                e.currentTarget.setPointerCapture(e.pointerId)
+                boardDrag.current = { sx: e.clientX, sy: e.clientY, ox: boardOff.x, oy: boardOff.y }
+              }}
+              onPointerMove={e => {
+                const d = boardDrag.current
+                const el = boardBox.current
+                const parent = el?.offsetParent as HTMLElement | null
+                if (!d || !el || !parent) return
+                const r = el.getBoundingClientRect()
+                const pr = parent.getBoundingClientRect()
+                let nx = d.ox + (e.clientX - d.sx)
+                let ny = d.oy + (e.clientY - d.sy)
+                nx = Math.max(boardOff.x + (pr.left - r.left), Math.min(boardOff.x + (pr.right - r.right), nx))
+                ny = Math.max(boardOff.y + (pr.top - r.top), Math.min(boardOff.y + (pr.bottom - r.bottom), ny))
+                setBoardOff({ x: nx, y: ny })
+              }}
+              onPointerUp={() => {
+                boardDrag.current = null
+                try { localStorage.setItem('board-offset', JSON.stringify(boardOff)) } catch {}
+              }}
+              onPointerCancel={() => { boardDrag.current = null }}
+              style={{ pointerEvents: 'auto', touchAction: 'none', cursor: 'grab' }}
+            >
+              <BoardPanel gameId={id} gameTitle={game.title} state={boardState} reload={reloadBoard} currentTime={currentTime} isCoach={false} compact />
+            </div>
+            <button
+              onClick={() => setShowBoard(false)}
+              aria-label="Close board"
+              style={{
+                position: 'absolute', top: -4, left: -30, width: 26, height: 26, borderRadius: '50%', pointerEvents: 'auto',
+                border: '1px solid rgba(255,255,255,0.3)', background: 'rgba(0,0,0,0.5)',
+                color: '#fff', fontSize: 13, cursor: 'pointer',
+              }}
+            >
+              ✕
+            </button>
+            {([['+', 0.2, 'Bigger board', 26], ['−', -0.2, 'Smaller board', 56]] as const).map(([ch, d, label, top]) => (
+              <button
+                key={ch}
+                onClick={() => sizeBoard(d)}
+                aria-label={label}
+                style={{
+                  position: 'absolute', top, left: -30, width: 26, height: 26, borderRadius: '50%', pointerEvents: 'auto',
+                  border: '1px solid rgba(255,255,255,0.3)', background: 'rgba(0,0,0,0.5)',
+                  color: '#fff', fontSize: 15, lineHeight: 1, cursor: 'pointer',
+                }}
+              >
+                {ch}
+              </button>
+            ))}
+          </div>
+        )}
+    </>
+  )
+
+  // ── MOBILE LAYOUT — landscape fullscreen HUD (phones, or any device where the viewer chose it) ──
+  if (isMobile || forceHud) {
     const activeLabelDef = LABEL_DEFS.find(l => l.key === selectedLabel)
     const activeLabelColor = labelColor(selectedLabel)
     const activeLabelDisplay = labelDisplay(selectedLabel, game.home_team, game.away_team)
@@ -1037,6 +1196,18 @@ export default function GameView({ gameId, shareToken }: Props) {
             >
               ← Zurück
             </button>
+            {!isMobile && (
+              <button
+                onClick={() => chooseHud(false)}
+                style={{
+                  background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: 8, color: 'rgba(255,255,255,0.7)',
+                  fontSize: 12, fontWeight: 600, padding: '5px 10px', cursor: 'pointer',
+                }}
+              >
+                ▭ Normale Ansicht
+              </button>
+            )}
             {/* Unmute button — prominent until user unmutes */}
             {isMuted && (
               <button
@@ -1439,6 +1610,24 @@ export default function GameView({ gameId, shareToken }: Props) {
               </button>
             )}
 
+            {/* Match statistics — only when this game has them */}
+            {statsState.status === 'ready' && (
+              <button
+                onClick={() => { setShowStats(true); setHudVisible(true) }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '0 11px', height: 38,
+                  background: 'rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)',
+                  border: '1px solid rgba(255,255,255,0.25)',
+                  borderRadius: 9, color: '#fff',
+                  fontSize: 12, fontWeight: 600,
+                  fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+                }}
+              >
+                📊 Statistik
+              </button>
+            )}
+
             {/* Tactical draw button — coaches only */}
             {isCoach && (
               <button
@@ -1545,56 +1734,37 @@ export default function GameView({ gameId, shareToken }: Props) {
           )}
         </div>
 
-        {/* ── Tactical board: small see-through pitch you can drag (stays on screen, also when the HUD hides) ── */}
-        {showBoard && boardState.status === 'ready' && (
+        {boardOverlay}
+
+        {/* ── Statistics sheet (slides up from bottom) ── */}
+        {showStats && statsState.status === 'ready' && (
           <div
-            ref={boardBox}
-            style={{
-              position: 'absolute', zIndex: 18, pointerEvents: 'none',
-              right: 'max(8px, env(safe-area-inset-right))',
-              top: 'max(52px, calc(env(safe-area-inset-top) + 42px))',
-              width: 'min(22vw, 190px)',
-              transform: `translate(${boardOff.x}px, ${boardOff.y}px)`,
-            }}
+            onClick={() => setShowStats(false)}
+            style={{ position: 'absolute', inset: 0, zIndex: 22, background: 'rgba(0,0,0,0.35)' }}
           >
             <div
-              onPointerDown={e => {
-                e.currentTarget.setPointerCapture(e.pointerId)
-                boardDrag.current = { sx: e.clientX, sy: e.clientY, ox: boardOff.x, oy: boardOff.y }
-              }}
-              onPointerMove={e => {
-                const d = boardDrag.current
-                const el = boardBox.current
-                const parent = el?.offsetParent as HTMLElement | null
-                if (!d || !el || !parent) return
-                const r = el.getBoundingClientRect()
-                const pr = parent.getBoundingClientRect()
-                let nx = d.ox + (e.clientX - d.sx)
-                let ny = d.oy + (e.clientY - d.sy)
-                nx = Math.max(boardOff.x + (pr.left - r.left), Math.min(boardOff.x + (pr.right - r.right), nx))
-                ny = Math.max(boardOff.y + (pr.top - r.top), Math.min(boardOff.y + (pr.bottom - r.bottom), ny))
-                setBoardOff({ x: nx, y: ny })
-              }}
-              onPointerUp={() => {
-                boardDrag.current = null
-                try { localStorage.setItem('board-offset', JSON.stringify(boardOff)) } catch {}
-              }}
-              onPointerCancel={() => { boardDrag.current = null }}
-              style={{ pointerEvents: 'auto', touchAction: 'none', cursor: 'grab' }}
-            >
-              <BoardPanel gameId={id} gameTitle={game.title} state={boardState} reload={reloadBoard} currentTime={currentTime} isCoach={false} compact />
-            </div>
-            <button
-              onClick={() => setShowBoard(false)}
-              aria-label="Close board"
+              onClick={e => e.stopPropagation()}
               style={{
-                position: 'absolute', top: -4, left: -30, width: 26, height: 26, borderRadius: '50%', pointerEvents: 'auto',
-                border: '1px solid rgba(255,255,255,0.3)', background: 'rgba(0,0,0,0.5)',
-                color: '#fff', fontSize: 13, cursor: 'pointer',
+                position: 'absolute', bottom: 0, left: 0, right: 0, maxHeight: '88%',
+                display: 'flex', flexDirection: 'column',
+                background: 'rgba(8,12,24,0.96)', backdropFilter: 'blur(16px)',
+                borderTop: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px 16px 0 0',
               }}
             >
-              ✕
-            </button>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px 6px' }}>
+                <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, letterSpacing: '0.04em', color: '#fff' }}>Statistik</div>
+                <button
+                  onClick={() => setShowStats(false)} aria-label="Schließen"
+                  style={{ width: 30, height: 30, borderRadius: '50%', border: '1px solid rgba(255,255,255,0.25)', background: 'rgba(255,255,255,0.08)', color: '#fff', fontSize: 14, cursor: 'pointer' }}
+                >✕</button>
+              </div>
+              <div style={{ overflowY: 'auto', padding: '4px 14px max(22px, env(safe-area-inset-bottom))', WebkitOverflowScrolling: 'touch' }}>
+                <StatsPanel
+                  stats={statsState.stats} dark halfStart={halfStart} now={currentTime}
+                  onSeek={sec => { seekTo(sec); setShowStats(false) }}
+                />
+              </div>
+            </div>
           </div>
         )}
 
@@ -1770,6 +1940,14 @@ export default function GameView({ gameId, shareToken }: Props) {
               </span>
               &nbsp;·&nbsp;
               <span style={{ color: '#22c55e', fontWeight: 600 }}>● live</span>
+              &nbsp;·&nbsp;
+              <button
+                onClick={() => chooseHud(true)}
+                title="Fullscreen view with the controls over the video (remembered on this device)"
+                style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: '#0f2972', fontWeight: 600, fontSize: 11 }}
+              >
+                ⤢ Vollbild-Ansicht
+              </button>
             </div>
           </div>
           {isCoach && (
@@ -1956,7 +2134,38 @@ export default function GameView({ gameId, shareToken }: Props) {
                 )}
                 onToggleVideo={() => (isPlaying ? pauseVideo() : resumeVideo())}
               />
+              {boardOverlay}
+              {boardState.status === 'ready' && !showBoard && (
+                <button
+                  onClick={() => setShowBoard(true)}
+                  title="Show the tactics board on the video"
+                  style={{
+                    position: 'absolute', top: 8, right: 8, zIndex: 17,
+                    fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,0.3)', background: 'rgba(0,0,0,0.5)',
+                    color: '#fff', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
+                  }}
+                >
+                  ⚽ Board
+                </button>
+              )}
+              {isDrawing && (
+                <FloatingDrawTools
+                  tool={drawTool}
+                  onChange={setDrawTool}
+                  canUndo={draftShapes.length > 0}
+                  shapeCount={draftShapes.length}
+                  onUndo={() => setDraftShapes(prev => prev.slice(0, -1))}
+                  onClear={() => setDraftShapes([])}
+                  onDone={finishDrawing}
+                />
+              )}
             </div>
+
+            {/* Match statistics: a card that opens under the video */}
+            {!focusMode && statsState.status === 'ready' && (
+              <StatsCard stats={statsState.stats} halfStart={halfStart} now={currentTime} onSeek={seekTo} />
+            )}
 
             {/* Timeline card */}
             {!focusMode && (
@@ -1969,35 +2178,15 @@ export default function GameView({ gameId, shareToken }: Props) {
                 display: 'flex', justifyContent: 'space-between',
                 alignItems: 'center', marginBottom: 8,
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <button
-                    onClick={() => (isPlaying ? pauseVideo() : resumeVideo())}
-                    title={isPlaying ? 'Pause' : 'Play'}
-                    style={{
-                      width: 28, height: 28, borderRadius: 8,
-                      border: '1px solid #E4E6EE', background: '#fff',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      cursor: 'pointer', color: '#0f2972', flexShrink: 0, padding: 0,
-                    }}
-                  >
-                    {isPlaying ? (
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                        <rect x="1" y="0" width="4" height="12" />
-                        <rect x="7" y="0" width="4" height="12" />
-                      </svg>
-                    ) : (
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                        <polygon points="1,0 11,6 1,12" />
-                      </svg>
-                    )}
-                  </button>
-                  <span style={{
-                    fontFamily: 'Bebas Neue, sans-serif',
-                    fontSize: 16, color: '#0f2972', letterSpacing: '0.04em',
-                  }}>
-                    {formatTime(currentTime)} / {formatTime(duration)}
-                  </span>
-                </div>
+                <TransportBar
+                  isPlaying={isPlaying}
+                  timeLabel={`${formatTime(currentTime)} / ${formatTime(duration)}`}
+                  rate={mobilePlaybackRate}
+                  onTogglePlay={() => (isPlaying ? pauseVideo() : resumeVideo())}
+                  onSeekBy={seekBy}
+                  onStep={stepFrame}
+                  onRate={changeRate}
+                />
                 <span style={{ fontSize: 10, color: '#8A8F9E' }}>
                   {isCoach
                     ? markIn !== null ? `Mark in: ${formatTime(markIn)}` : 'Mark in/out for range'
@@ -2043,19 +2232,13 @@ export default function GameView({ gameId, shareToken }: Props) {
                 <div style={{ marginBottom: 8 }}>
                   {isDrawing ? (
                     <>
-                      <DrawTools
-                        tool={drawTool}
-                        onChange={setDrawTool}
-                        canUndo={draftShapes.length > 0}
-                        onUndo={() => setDraftShapes(prev => prev.slice(0, -1))}
-                        onClear={() => setDraftShapes([])}
-                        onDone={() => {
-                          mobileCanvasRef.current?.finalizePending()
-                          desktopCanvasRef.current?.finalizePending()
-                          setIsDrawing(false); setDrawTool('select'); setEditingAnnotationId(null); setMarkIn(null)
-                          setAnnotationEndSec(null); setClipEndSec(null)
-                        }}
-                      />
+                      <div style={{ fontSize: 11, color: '#8A8F9E', padding: '2px 0 6px' }}>
+                        Drawing tools are on the video (keys 1–8, Ctrl/⌘+Z undo, Esc = select).
+                        <button onClick={finishDrawing} style={{
+                          marginLeft: 8, fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 99, border: 'none',
+                          background: '#0f2972', color: '#fff', cursor: 'pointer',
+                        }}>Done</button>
+                      </div>
                       <div style={{
                         display: 'flex', alignItems: 'center', gap: 6,
                         fontSize: 11, color: '#8A8F9E', marginTop: 4,
@@ -2231,17 +2414,8 @@ export default function GameView({ gameId, shareToken }: Props) {
                     <button
                       onClick={() => exportGame(game.title, annotations, boardState.status === 'ready' ? boardState.board : null)}
                       title="Download the events and the board data as CSV files for analysis"
-                      style={{
-                        fontSize: 10, fontWeight: 600,
-                        padding: '3px 8px', borderRadius: 99,
-                        border: '1.5px solid #E4E6EE',
-                        background: '#fff', color: '#4A4F5C',
-                        cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      Export
-                    </button>
+                      style={{ fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 99, border: '1.5px solid #E4E6EE', background: '#fff', color: '#4A4F5C', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif', whiteSpace: 'nowrap' }}
+                    >Export</button>
                   )}
                   {isCoach && (
                     <button
