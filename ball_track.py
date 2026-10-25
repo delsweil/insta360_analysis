@@ -92,14 +92,37 @@ def track_ball(frames: List[dict], conf: float = 0.4, static_frac: float = 0.06,
     return out
 
 
-def hold(x: np.ndarray, n: int) -> np.ndarray:
-    """Keep the last known value for up to `n` frames after the ball is lost."""
+def hold(x: np.ndarray, n: int, drift: int = 0, rate: float = 3.0, vmax: float = 40.0) -> np.ndarray:
+    """Keep the last known value for up to `n` frames after the ball is lost. With `drift` > 0 the ball is
+    assumed to keep moving the way it was going for that many frames (at most `vmax` degrees/second):
+    a ball that disappears at the touchline is usually still travelling towards the goal line."""
     o = x.copy()
-    last, age = np.nan, 10 ** 9
+    last, age, vel, run = np.nan, 10 ** 9, 0.0, []
     for i, v in enumerate(x):
         if not np.isnan(v):
+            run = (run + [v])[-4:]
+            vel = (run[-1] - run[0]) / max(len(run) - 1, 1) if len(run) > 1 else 0.0       # degrees per frame
+            vel = float(np.clip(vel, -vmax / rate, vmax / rate))
             last, age = v, 0
+            o[i] = v
         else:
             age += 1
-        o[i] = last if age <= n else np.nan
-    return o
+            if age <= n:
+                o[i] = last + vel * min(age, drift)
+            else:
+                o[i] = np.nan
+    return np.clip(o, -100.0, 100.0)
+
+
+def ease(x: np.ndarray, width: int = 3) -> np.ndarray:
+    """Moving average over `width` frames that ignores missing values (and leaves gaps as gaps)."""
+    if width <= 1:
+        return x.copy()
+    ok = ~np.isnan(x)
+    v = np.where(ok, x, 0.0)
+    k = np.ones(width)
+    num, den = np.convolve(v, k, "same"), np.convolve(ok.astype(float), k, "same")
+    out = np.full(len(x), np.nan)
+    m = ok & (den > 0)
+    out[m] = num[m] / den[m]
+    return out

@@ -68,6 +68,25 @@ class ViewTests(unittest.TestCase):
         self.assertGreaterEqual(-on["pan"][i] + 45.0 - 8.0, ball - 1.0)   # inside, ~8 degrees from the edge
         self.assertLess(-off["pan"][i] + 45.0 - 8.0, ball - 5.0)          # and it was NOT inside before
 
+    def test_swing_is_limited_and_ball_stays_in(self):
+        fr = []
+        for i in range(300):                                     # the ball switches from far left to far right
+            b = -70.0 + 2.0 * i if i < 70 else 70.0 - 0.1 * (i - 70)
+            fr.append(frame(i / 3, [-10, 0, 10, b - 2, b + 3], [[b, -6.0, 0.8]]))
+        r = AK.build_path({"fps": 3.0}, fr, fov_fixed=90.0, fov_min=70, fov_max=100, ball_view=True, ball_max_speed=30.0)
+        self.assertLessEqual(np.abs(np.diff(r["pan"])).max() * 3.0, 30.0 + 1e-6)
+
+    def test_zoom_in_when_ball_at_the_end(self):
+        fr = []
+        for i in range(400):                                    # the ball sweeps out to 96 degrees
+            b = 20 + 76 * i / 399.0
+            fr.append(frame(i / 3, [-10, 0, 10, b - 2, b + 3], [[b, -6.0, 0.8]]))
+        kw = dict(fov_a=0.0, fov_b=100.0, fov_min=70, fov_max=100, projection="flat", base_tilt=-20.0, ball_view=True)
+        z = AK.build_path({"fps": 3.0, "iv_fov": 112.0}, fr, **kw)
+        n = AK.build_path({"fps": 3.0, "iv_fov": 112.0}, fr, ball_zoom=False, **kw)
+        self.assertLess(z["fov"][385], 95.0)
+        self.assertGreaterEqual(n["fov"][385], 99.9)
+
     def test_no_ball_changes_nothing(self):
         a = self.run_(False)
         b = self.run_(False, ball_view=True)

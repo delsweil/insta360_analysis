@@ -250,17 +250,97 @@ def lead_shift(y: np.ndarray, k: int) -> np.ndarray:
     return np.concatenate([np.full(-k, y[0]), y[:k]])
 
 
+_SCALE_CACHE: dict = {}
+
+
+def lens_scale(tilt: float, iv_fov: float):
+    """-> f(|centre longitude|, fov): how much the renderer narrows a view near the edge of the lens picture
+    (1 = not at all). Without it a wide view at the side looks 100 degrees wide but shows ~92."""
+    key = (round(float(tilt), 1), round(float(iv_fov), 1))
+    if key not in _SCALE_CACHE:
+        import lens as L
+        pans, fovs = np.arange(0.0, 95.1, 5.0), np.arange(50.0, 125.1, 5.0)
+        tab = np.ones((len(pans), len(fovs)))
+        for i, p in enumerate(pans):
+            for j, f in enumerate(fovs):
+                try:
+                    v = K.to_v360_params(float(p), float(tilt), float(f), 1920, 1080, False, "flat")
+                    tab[i, j] = L.convert_view(v["yaw"], v["pitch"], v["h_fov"], 1080 / 1920, float(iv_fov))["scale"]
+                except Exception:
+                    tab[i, j] = 1.0
+
+        def f(pan, fov, _t=tab, _p=pans, _f=fovs):
+            """scalar or array pan with scalar-or-array fov -> scale"""
+            pan, fov = np.broadcast_arrays(np.abs(np.asarray(pan, float)), np.asarray(fov, float))
+            ip = np.clip(np.interp(pan, _p, np.arange(len(_p))), 0, len(_p) - 1.0001)
+            jf = np.clip(np.interp(fov, _f, np.arange(len(_f))), 0, len(_f) - 1.0001)
+            i0, j0 = ip.astype(int), jf.astype(int)
+            di, dj = ip - i0, jf - j0
+            r = (_t[i0, j0] * (1 - di) * (1 - dj) + _t[i0 + 1, j0] * di * (1 - dj)
+                 + _t[i0, j0 + 1] * (1 - di) * dj + _t[i0 + 1, j0 + 1] * di * dj)
+            return r if r.ndim else float(r)
+        _SCALE_CACHE[key] = f
+    return _SCALE_CACHE[key]
+
+
+def zoom_for_ball(ball: np.ndarray, fov: np.ndarray, fov_min: float, margin: float, extra: float, edge: float,
+                  scale, edge_limit: float = 100.0) -> np.ndarray:
+    """Narrower fov where the wide view would lose the ball at the side: the largest fov (down to `fov_min`)
+    that still shows the ball `edge` degrees inside the visible picture."""
+    out = fov.copy()
+    reach = np.clip((np.abs(np.nan_to_num(ball)) - 40.0) / 30.0, 0.0, 1.0)
+    for i in np.flatnonzero(~np.isnan(ball) & (np.abs(np.nan_to_num(ball)) > 45.0)):
+        b = abs(ball[i])
+        for f in np.arange(fov[i], fov_min - 0.1, -2.5):
+            c = min(b - max(f / 2.0 - margin - extra * reach[i], 0.0), max(edge_limit - f / 2.0, 0.0))   # the pan cannot pass the room limit
+            hv = float(scale(c, f)) * f / 2.0
+            out[i] = f
+            if c + hv >= b + edge:
+                break
+    return np.minimum(fov, out)
+
+
+def limit_speed(y: np.ndarray, max_step: float) -> np.ndarray:
+    """Cap how far y may move between samples: a forward pass, then a backward pass, so the camera starts
+    a fast swing early instead of arriving late."""
+    out = y.copy()
+    for i in range(1, len(out)):
+        out[i] = np.clip(out[i], out[i - 1] - max_step, out[i - 1] + max_step)
+    for i in range(len(out) - 2, -1, -1):
+        out[i] = np.clip(out[i], out[i + 1] - max_step, out[i + 1] + max_step)
+    return out
+
+
 def _keep_in_view(centre: np.ndarray, ball: np.ndarray, fov: np.ndarray, margin: float,
-                  edge_extra: float = 0.0) -> np.ndarray:
+                  edge_extra: float = 0.0, scale=None) -> np.ndarray:
     """Move the crop centre only as far as needed to have the ball inside the crop, `margin` degrees from its edge.
     Towards the ends of the pitch (ball beyond 40 degrees, full effect at 70) `edge_extra` more degrees are
     kept: a dribble or cross into the box needs room in front of the ball, not just the ball itself."""
     ok = ~np.isnan(ball)
     reach = np.clip((np.abs(np.nan_to_num(ball)) - 40.0) / 30.0, 0.0, 1.0)
-    half = np.maximum(fov / 2.0 - margin - edge_extra * reach, 0.0)
+    vis = fov / 2.0
+    if scale is not None:                                   # what the renderer really shows near the lens edge
+        est = np.clip(centre, ball - vis + margin, ball + vis - margin)
+        vis = vis * scale(np.nan_to_num(est), fov)
+    half = np.maximum(vis - margin - edge_extra * reach, 0.0)
     out = centre.copy()
     out[ok] = np.clip(centre[ok], ball[ok] - half[ok], ball[ok] + half[ok])
     return out
+
+
+def _view_bounds(centre, ball, fov, margin, edge_extra=0.0, scale=None):
+    """-> (lo, hi): the range the crop centre may be in to keep the ball in view (infinite where there is no ball)."""
+    reach = np.clip((np.abs(np.nan_to_num(ball)) - 40.0) / 30.0, 0.0, 1.0)
+    vis = fov / 2.0
+    if scale is not None:
+        est = np.clip(centre, ball - vis + margin, ball + vis - margin)
+        est = np.where(np.isnan(est), centre, est)
+        vis = vis * scale(np.nan_to_num(est), fov)
+    half = np.maximum(vis - margin - edge_extra * reach, 0.0)
+    ok = ~np.isnan(ball)
+    lo = np.where(ok, ball - half, -np.inf)
+    hi = np.where(ok, ball + half, np.inf)
+    return lo, hi
 
 
 def build_path(header: dict, frames: List[dict], *, use_ball=False, min_conf=0.3, deadband=5.0,
@@ -268,7 +348,7 @@ def build_path(header: dict, frames: List[dict], *, use_ball=False, min_conf=0.3
                fov_min=90.0, fov_max=140.0, edge_limit=100.0, ball_weight=0.4, ball_conf=0.5,
                ball_reach=45.0, max_gap_s=8.0, adaptive_tilt_on=False, base_tilt=-15.0,
                projection="cylindrical", tilt_margin=3.0, max_dip=20.0, tilt_s=3.0, lead_s=0.0,
-               ball_view=False, ball_margin=8.0, ball_hold_s=3.0, track_conf=0.3, ball_edge_extra=6.0) -> dict:
+               ball_view=False, ball_margin=10.0, ball_hold_s=3.0, track_conf=0.3, ball_edge_extra=16.0, ball_lead_s=0.7, ball_max_speed=30.0, ball_zoom=True, iv_fov=None, ball_ease_s=4.0, ball_final_s=5.0) -> dict:
     rate = float(header.get("fps", 3.0))
     t = np.array([r["t"] for r in frames], float)
     cells = static_cells(frames)
@@ -294,13 +374,29 @@ def build_path(header: dict, frames: List[dict], *, use_ball=False, min_conf=0.3
     ball = None
     if ball_view:
         # the players decide where the camera is; the ball only makes sure it stays in the picture
-        ball = BT.hold(BT.track_ball(frames, conf=track_conf), int(round(ball_hold_s * rate)))
-        lon_f = _keep_in_view(lon_f, ball, fov, ball_margin, ball_edge_extra)
+        ball = BT.hold(BT.track_ball(frames, conf=track_conf), int(round(ball_hold_s * rate)),
+                       drift=int(round(1.5 * rate)), rate=rate)
+        ball = BT.ease(ball, 7)                                          # a steadier ball, so the camera is not nudged by every detection
+        ball = lead_shift(ball, int(round(ball_lead_s * rate)))          # offline: the camera may already be there when the ball arrives
+        scale = None
+        if ball_zoom and projection == "flat":
+            scale = lens_scale(base_tilt, iv_fov or header.get("iv_fov") or 112.0)
+            narrower = zoom_for_ball(ball, fov, fov_min, ball_margin, ball_edge_extra, 10.0, scale, edge_limit)
+            fov = np.minimum(fov, smooth_series(narrower, rate, 2.0) if (narrower < fov).any() else fov)
+            fov = np.maximum(fov, min(fov_min, float(np.min(fov))))
+        lon_f = _keep_in_view(lon_f, ball, fov, ball_margin, ball_edge_extra, scale)
     centre = smooth_series(backlash(lon_f, deadband), rate, smooth_s)
     if ball is not None:
-        # smoothing and dead-band must not lose the ball again; the correction itself is eased in and out
-        fix = _keep_in_view(centre, ball, fov, ball_margin, ball_edge_extra) - centre
-        centre = centre + smooth_series(fix, rate, 1.5)
+        # The smoothest path that keeps the ball in view: alternately press the path into the allowed range and
+        # smooth it, so it eases towards the ball instead of being pushed by it (which made it jerky).
+        lo, hi = _view_bounds(centre, ball, fov, ball_margin, ball_edge_extra, scale)
+        for _ in range(6):
+            centre = smooth_series(np.clip(centre, lo, hi), rate, ball_ease_s)
+        centre = np.clip(centre, lo, hi)
+        if ball_max_speed and ball_max_speed > 0:
+            centre = limit_speed(centre, ball_max_speed / rate)
+        if ball_final_s > 0:
+            centre = smooth_series(centre, rate, ball_final_s)        # takes the corners off the speed limit
 
     # keep the crop inside the part of the picture the lens covers
     room = np.maximum(edge_limit - fov / 2.0, 0.0)
@@ -372,7 +468,7 @@ def compare(t, pan, fov, ref_path: str, lon_raw=None) -> dict:
 
 PROFILE_KEYS = ("deadband", "smooth", "zoom_smooth", "fov_a", "fov_b", "fov_min", "fov_max", "edge_limit",
                 "tilt", "tilt_margin", "max_dip", "tilt_smooth", "lead", "adaptive_tilt", "min_conf",
-                "ball_view", "ball_margin", "ball_hold", "track_conf", "ball_edge_extra")
+                "ball_view", "ball_margin", "ball_hold", "track_conf", "ball_edge_extra", "ball_lead", "ball_max_speed", "ball_ease", "ball_final")
 
 
 def load_profile(path: str) -> dict:
@@ -401,10 +497,20 @@ def main(argv=None) -> int:
     p.add_argument("--use-ball", action="store_true", help="blend in plausible ball detections")
     p.add_argument("--ball-view", action="store_true",
                    help="follow the ball (ball_track.py) and keep it inside the crop; the players still steer")
-    p.add_argument("--ball-margin", type=float, default=8.0,
+    p.add_argument("--ball-margin", type=float, default=10.0,
                    help="degrees from the crop edge the ball is kept away from (--ball-view)")
-    p.add_argument("--ball-edge-extra", type=float, default=6.0,
+    p.add_argument("--ball-edge-extra", type=float, default=16.0,
                    help="extra degrees of room kept in front of a ball near the ends of the pitch (--ball-view)")
+    p.add_argument("--ball-lead", type=float, default=0.7,
+                   help="seconds the camera is early at the ball (--ball-view)")
+    p.add_argument("--ball-max-speed", type=float, default=30.0,
+                   help="fastest pan in degrees per second while following the ball (0 = no limit)")
+    p.add_argument("--no-ball-zoom", action="store_true",
+                   help="do not zoom in where the ball is near the ends of the pitch (--ball-view)")
+    p.add_argument("--ball-ease", type=float, default=4.0,
+                   help="seconds over which the camera eases towards the ball (--ball-view; larger = smoother)")
+    p.add_argument("--ball-final", type=float, default=5.0,
+                   help="last smoothing of the pan after the ball rules, seconds (--ball-view; 0 = none)")
     p.add_argument("--ball-hold", type=float, default=3.0, help="seconds a lost ball is assumed to stay where it was")
     p.add_argument("--track-conf", type=float, default=0.3, help="ball detections below this confidence are ignored")
     p.add_argument("--min-conf", type=float, default=0.3, help="ignore players below this confidence")
@@ -451,7 +557,8 @@ def main(argv=None) -> int:
                      adaptive_tilt_on=a.adaptive_tilt, base_tilt=tilt, projection=a.projection,
                      tilt_margin=a.tilt_margin, max_dip=a.max_dip, tilt_s=a.tilt_smooth, lead_s=a.lead,
                      ball_view=a.ball_view, ball_margin=a.ball_margin, ball_hold_s=a.ball_hold,
-                     track_conf=a.track_conf, ball_edge_extra=a.ball_edge_extra)
+                     track_conf=a.track_conf, ball_edge_extra=a.ball_edge_extra, ball_lead_s=a.ball_lead, ball_max_speed=a.ball_max_speed,
+                     ball_zoom=not a.no_ball_zoom, ball_ease_s=a.ball_ease, ball_final_s=a.ball_final, iv_fov=header.get("iv_fov"))
     idx = simplify(res["t"], res["pan"], res["fov"], a.tol_pan, a.tol_fov, a.min_gap,
                    tilt=res["tilt"], tol_tilt=a.tol_tilt, base_tilt=tilt)
     out = a.out or os.path.splitext(a.detections)[0] + ".auto.keyframes.json"
