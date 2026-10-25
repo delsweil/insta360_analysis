@@ -35,17 +35,32 @@ KNOWN_RAW_SIZES = {(2560, 1440), (1440, 2560)}          # Insta360 X2 single-len
 DETECT_TILT = -22.0
 TEAM_GROUPS = 12                             # colour groups to sort: 8 mixes dark shirts with white ones under floodlights
 CROP_TILT = -20.0
-EXTRACT_ARGS = ["--lon-range", "-80", "80", "--no-ball", "--iv-fov", "112", "--tilt", str(DETECT_TILT), "--colours"]
-KEY_ARGS = ["--projection", "flat", "--fov-max", "100", "--fov-min", "70", "--tilt", str(CROP_TILT),
+BALL_MODEL = os.path.join(HERE, "models", "ball_v4.pt")
+
+
+def ball_args() -> List[str]:
+    """The ball detector, if its file is really there (a git-lfs pointer is a few hundred bytes, a model several MB)."""
+    try:
+        if os.path.getsize(BALL_MODEL) > 1_000_000:
+            return ["--ball", BALL_MODEL, "--ball-conf", "0.25"]
+    except OSError:
+        pass
+    return ["--no-ball"]
+
+
+EXTRACT_ARGS = ["--lon-range", "-80", "80", "--iv-fov", "112", "--tilt", str(DETECT_TILT), "--colours"]
+KEY_ARGS = ["--ball-view", "--projection", "flat", "--fov-max", "100", "--fov-min", "70", "--tilt", str(CROP_TILT),
             "--max-dip", "8", "--tilt-margin", "4"]
 # seconds of computing per second of video (Apple silicon), used for the progress bar and the estimate
-COST = {"check": 0.0, "extract": 0.75, "keyframes": 0.0, "render": 0.5, "charts": 0.0, "stats": 0.0, "board": 0.0, "teams": 0.0}
+COST = {"check": 0.0, "extract": 1.1, "keyframes": 0.0, "render": 0.5, "charts": 0.0, "stats": 0.0, "board": 0.0, "teams": 0.0}
 FIXED_SECONDS = {"check": 15, "pitch": 20, "merge": 60, "teams": 120, "keyframes": 10, "charts": 30, "stats": 40, "board": 15, "package": 2}
 
 
-RENDER_SIZE = (1920, 1080)  # output size; (2560, 1440) looks a little better on YouTube but renders ~2x slower (measured: 3 fps vs ~6 fps)
+RENDER_SIZE = (1920, 1080)  # output size; (2560, 1440) is hard to tell apart on a laptop and renders ~4x slower
 RENDER_ENHANCE = "light"    # gentle denoise + sharpen before encoding ("off", "light", "medium")
 RENDER_INTERP = "cubic"     # resampling filter of the view cut-out ("lanczos" costs about the same, "linear" is ~2.4x faster but softer)
+RENDER_BITRATE = "9000k"    # VideoToolbox bitrate; YouTube re-encodes anyway and recommends ~8 Mbit/s for 1080p30 (18000k = ~3.8 GB per half)
+RENDER_CRF = 21             # the same, for x264 (18 = bigger and finer, 23 = smaller)
 RENDER_LENS = "x2_150"      # fitted lens model for raw X2 footage (straight pitch lines, one resampling less); "legacy" = the old unwrapping
 VERIFY_RENDER = True        # look into every finished video before it replaces the old one
 
@@ -508,7 +523,7 @@ class Job:
     def s_extract(self, st: dict) -> None:
         i = st["video"]
         s0, d0 = self.span(i)
-        self.exec(self.py("extract_detections.py", "--video", self.videos()[i]["path"], *EXTRACT_ARGS,
+        self.exec(self.py("extract_detections.py", "--video", self.videos()[i]["path"], *EXTRACT_ARGS, *ball_args(),
                           "--start", f"{s0:.2f}", "--duration", f"{d0:.2f}",
                           "--out", self.p(f"v{i}.detections.jsonl")), st["id"], self._frames_re())
 
@@ -689,8 +704,8 @@ class Job:
         except OSError:
             out = ""
         if sys.platform == "darwin" and "h264_videotoolbox" in out:
-            return ["--encoder", "h264_videotoolbox", "--bitrate", "18000k"]
-        return ["--encoder", "libx264", "--crf", "18"]
+            return ["--encoder", "h264_videotoolbox", "--bitrate", RENDER_BITRATE]
+        return ["--encoder", "libx264", "--crf", str(RENDER_CRF)]
 
     def s_render(self, st: dict) -> None:
         i = st["video"]
@@ -772,7 +787,9 @@ class Job:
             dets = [self.det_file(i) for i in idx]
             kfs = [self.p(f"v{i}.auto.keyframes.json") for i in idx]
             t = f"{title} - {'2. Halbzeit' if h == 2 else '1. Halbzeit'}" if lang == "de" else f"{title} - {'second' if h == 2 else 'first'} half"
+            att = (self.spec.get("attack") or {}).get(str(h), "auto")
             self.exec(self.py("team_stats.py", "--detections", *dets, "--keyframes", *kfs,
+                              "--a-attacks", att if att in ("right", "left") else "auto",
                               "--team-labels", self.p("teams.team_labels.json"), "--title", t,
                               "--lang", "de" if lang == "de" else "en", "--out", self.p(f"{self.tag(h)}_teams"),
                               "--data-json", self.p(f"{self.tag(h)}_chartdata.json")), "stats")

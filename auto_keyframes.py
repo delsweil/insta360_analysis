@@ -42,6 +42,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+import ball_track as BT
 import kf_core as K
 
 
@@ -249,11 +250,25 @@ def lead_shift(y: np.ndarray, k: int) -> np.ndarray:
     return np.concatenate([np.full(-k, y[0]), y[:k]])
 
 
+def _keep_in_view(centre: np.ndarray, ball: np.ndarray, fov: np.ndarray, margin: float,
+                  edge_extra: float = 0.0) -> np.ndarray:
+    """Move the crop centre only as far as needed to have the ball inside the crop, `margin` degrees from its edge.
+    Towards the ends of the pitch (ball beyond 40 degrees, full effect at 70) `edge_extra` more degrees are
+    kept: a dribble or cross into the box needs room in front of the ball, not just the ball itself."""
+    ok = ~np.isnan(ball)
+    reach = np.clip((np.abs(np.nan_to_num(ball)) - 40.0) / 30.0, 0.0, 1.0)
+    half = np.maximum(fov / 2.0 - margin - edge_extra * reach, 0.0)
+    out = centre.copy()
+    out[ok] = np.clip(centre[ok], ball[ok] - half[ok], ball[ok] + half[ok])
+    return out
+
+
 def build_path(header: dict, frames: List[dict], *, use_ball=False, min_conf=0.3, deadband=5.0,
                smooth_s=4.0, zoom_s=12.0, fov_fixed: Optional[float] = None, fov_a=0.36, fov_b=90.0,
                fov_min=90.0, fov_max=140.0, edge_limit=100.0, ball_weight=0.4, ball_conf=0.5,
                ball_reach=45.0, max_gap_s=8.0, adaptive_tilt_on=False, base_tilt=-15.0,
-               projection="cylindrical", tilt_margin=3.0, max_dip=20.0, tilt_s=3.0, lead_s=0.0) -> dict:
+               projection="cylindrical", tilt_margin=3.0, max_dip=20.0, tilt_s=3.0, lead_s=0.0,
+               ball_view=False, ball_margin=8.0, ball_hold_s=3.0, track_conf=0.3, ball_edge_extra=6.0) -> dict:
     rate = float(header.get("fps", 3.0))
     t = np.array([r["t"] for r in frames], float)
     cells = static_cells(frames)
@@ -267,7 +282,6 @@ def build_path(header: dict, frames: List[dict], *, use_ball=False, min_conf=0.3
     max_gap = int(max_gap_s * rate)
 
     lon_f = fill_gaps(lon, max_gap)
-    centre = smooth_series(backlash(lon_f, deadband), rate, smooth_s)
 
     if fov_fixed is not None:
         fov = np.full(len(t), float(fov_fixed))
@@ -276,6 +290,17 @@ def build_path(header: dict, frames: List[dict], *, use_ball=False, min_conf=0.3
         if np.isnan(spread).all():
             sp = np.full(len(t), 80.0)
         fov = np.clip(smooth_series(fov_a * sp + fov_b, rate, zoom_s), fov_min, fov_max)
+
+    ball = None
+    if ball_view:
+        # the players decide where the camera is; the ball only makes sure it stays in the picture
+        ball = BT.hold(BT.track_ball(frames, conf=track_conf), int(round(ball_hold_s * rate)))
+        lon_f = _keep_in_view(lon_f, ball, fov, ball_margin, ball_edge_extra)
+    centre = smooth_series(backlash(lon_f, deadband), rate, smooth_s)
+    if ball is not None:
+        # smoothing and dead-band must not lose the ball again; the correction itself is eased in and out
+        fix = _keep_in_view(centre, ball, fov, ball_margin, ball_edge_extra) - centre
+        centre = centre + smooth_series(fix, rate, 1.5)
 
     # keep the crop inside the part of the picture the lens covers
     room = np.maximum(edge_limit - fov / 2.0, 0.0)
@@ -292,7 +317,8 @@ def build_path(header: dict, frames: List[dict], *, use_ball=False, min_conf=0.3
             tilt = lead_shift(tilt, k)
     pan = K.PAN_SIGN * centre                             # pan_deg = -(longitude of the crop centre)
     return {"t": t, "pan": pan, "fov": fov, "tilt": tilt, "lon_raw": lon, "spread": spread,
-            "n_players": n_pl, "static_ball_cells": len(cells)}
+            "n_players": n_pl, "static_ball_cells": len(cells),
+            "ball": ball}
 
 
 def write_keyframes(path: str, t, pan, fov, idx: List[int], tilt: float, projection: str, video: str = "",
@@ -345,7 +371,8 @@ def compare(t, pan, fov, ref_path: str, lon_raw=None) -> dict:
 
 
 PROFILE_KEYS = ("deadband", "smooth", "zoom_smooth", "fov_a", "fov_b", "fov_min", "fov_max", "edge_limit",
-                "tilt", "tilt_margin", "max_dip", "tilt_smooth", "lead", "adaptive_tilt", "min_conf")
+                "tilt", "tilt_margin", "max_dip", "tilt_smooth", "lead", "adaptive_tilt", "min_conf",
+                "ball_view", "ball_margin", "ball_hold", "track_conf", "ball_edge_extra")
 
 
 def load_profile(path: str) -> dict:
@@ -372,6 +399,14 @@ def main(argv=None) -> int:
     p.add_argument("--tilt", type=float, default=None, help="output tilt (default: the one the detections used)")
     p.add_argument("--projection", default="cylindrical", choices=K.PROJECTIONS)
     p.add_argument("--use-ball", action="store_true", help="blend in plausible ball detections")
+    p.add_argument("--ball-view", action="store_true",
+                   help="follow the ball (ball_track.py) and keep it inside the crop; the players still steer")
+    p.add_argument("--ball-margin", type=float, default=8.0,
+                   help="degrees from the crop edge the ball is kept away from (--ball-view)")
+    p.add_argument("--ball-edge-extra", type=float, default=6.0,
+                   help="extra degrees of room kept in front of a ball near the ends of the pitch (--ball-view)")
+    p.add_argument("--ball-hold", type=float, default=3.0, help="seconds a lost ball is assumed to stay where it was")
+    p.add_argument("--track-conf", type=float, default=0.3, help="ball detections below this confidence are ignored")
     p.add_argument("--min-conf", type=float, default=0.3, help="ignore players below this confidence")
     p.add_argument("--max-lon", type=float, default=98.0,
                    help="ignore players beyond +/- this longitude (outside the lens; 0 = keep all)")
@@ -414,7 +449,9 @@ def main(argv=None) -> int:
                      smooth_s=a.smooth, zoom_s=a.zoom_smooth, fov_fixed=a.fov, fov_a=a.fov_a, fov_b=a.fov_b,
                      fov_min=a.fov_min, fov_max=a.fov_max, edge_limit=a.edge_limit,
                      adaptive_tilt_on=a.adaptive_tilt, base_tilt=tilt, projection=a.projection,
-                     tilt_margin=a.tilt_margin, max_dip=a.max_dip, tilt_s=a.tilt_smooth, lead_s=a.lead)
+                     tilt_margin=a.tilt_margin, max_dip=a.max_dip, tilt_s=a.tilt_smooth, lead_s=a.lead,
+                     ball_view=a.ball_view, ball_margin=a.ball_margin, ball_hold_s=a.ball_hold,
+                     track_conf=a.track_conf, ball_edge_extra=a.ball_edge_extra)
     idx = simplify(res["t"], res["pan"], res["fov"], a.tol_pan, a.tol_fov, a.min_gap,
                    tilt=res["tilt"], tol_tilt=a.tol_tilt, base_tilt=tilt)
     out = a.out or os.path.splitext(a.detections)[0] + ".auto.keyframes.json"

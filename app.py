@@ -147,7 +147,8 @@ def job_view(jid: str) -> dict:
                              "bgr": [round(x) for x in meta["mean_bgr"][j]]} for j in range(len(meta["sizes"]))],
                  "assign": {"A": meta["assign"]["A"], "B": meta["assign"]["B"], "REF": meta["assign"].get("REF", []),
                             "GKA": meta["assign"].get("GKA", []), "GKB": meta["assign"].get("GKB", [])}, "suggest": meta.get("suggest", {"A": [], "B": []}),
-                 "names": meta["names"], "colours": meta["colours"], "quality": TL.quality(meta)}
+                 "names": meta["names"], "colours": meta["colours"], "quality": TL.quality(meta),
+                 "attack": job.spec.get("attack") or {}}
     job.migrate()
     vids = []
     for i, v in enumerate(job.videos()):
@@ -198,7 +199,17 @@ def assign_teams(jid: str, body: dict) -> None:
         colour_b = body.get("colour_b") or None
     if not A.a or not A.b:
         raise ValueError("pick at least one colour group for each team")
+    before = (P.read_json(path) or {})
+    old_attack = dict(job.spec.get("attack") or {})
+    new_attack = {h: v for h, v in (body.get("attack") or {}).items() if h in ("1", "2") and v in ("right", "left")}
+    if "attack" in body:
+        job.spec["attack"] = new_attack
+        P.write_json(job.p("job.json"), job.spec)
     TL.assign(A)
+    after = P.read_json(path) or {}
+    if any(before.get(k) != after.get(k) for k in ("assign", "names", "colours")) or ("attack" in body and old_attack != new_attack):
+        # the statistics and the board were made from the old labels: make them again (the video does not depend on them)
+        job.clear("stats", "board", "package")
 
 
 class Handler(BaseHTTPRequestHandler):

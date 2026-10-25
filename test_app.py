@@ -107,7 +107,7 @@ class TestPipeline(Base):
         self.assertIn("pitch1", ids)
         self.assertEqual(ids[-3:], ["stats", "board", "package"])
         # two hours of video: roughly 3.2 hours of computing
-        self.assertAlmostEqual(P.estimate_seconds([3600, 3600]) / 3600, 2.6, delta=0.2)
+        self.assertAlmostEqual(P.estimate_seconds([3600, 3600]) / 3600, 3.3, delta=0.2)
 
     def test_camera_info(self):
         j = self.job()
@@ -129,6 +129,58 @@ class TestPipeline(Base):
         j2 = P.Job.create(self.root, {"title": "bad2", "videos": [{"path": txt}]})
         self.assertEqual(j2.run(), "failed")
         self.assertIn("not a video file", j2.status["message"])
+
+    def test_changing_the_teams_later_remakes_stats_and_board_only(self):
+        import app as APP
+        j = self.job(2, lang="de")
+        self.assertEqual(j.run(), "needs_input")
+        m = json.load(open(j.p("teams.team_labels.json")))
+        m["assign"] = {"A": [0], "B": [1]}
+        json.dump(m, open(j.p("teams.team_labels.json"), "w"))
+        self.assertEqual(P.Job(j.dir).run(), "done")
+        jd = P.Job(j.dir)
+        self.assertTrue(all(jd.done(s) for s in ("stats", "board", "charts")))
+        # the coach marks group 2 as a goalkeeper afterwards: stats and board are made again, the video is kept
+        old_get = APP.get_job
+        APP.get_job = lambda jid: jd
+        try:
+            APP.assign_teams("x", {"a": [0], "b": [1], "gk_a": [2]})
+        finally:
+            APP.get_job = old_get
+        self.assertFalse(jd.done("stats"))
+        self.assertFalse(jd.done("board"))
+        self.assertTrue(jd.done("charts"))
+        self.assertTrue(jd.done("render0"))
+        # confirming the same labels again changes nothing
+        jd.run()
+        APP.get_job = lambda jid: jd
+        try:
+            APP.assign_teams("x", {"a": [0], "b": [1], "gk_a": [2]})
+        finally:
+            APP.get_job = old_get
+        self.assertTrue(jd.done("stats"))
+
+    def test_attack_direction_is_saved_passed_on_and_remakes_stats(self):
+        import app as APP
+        j = self.job(2, lang="de")
+        j.run()
+        m = json.load(open(j.p("teams.team_labels.json")))
+        m["assign"] = {"A": [0], "B": [1]}
+        json.dump(m, open(j.p("teams.team_labels.json"), "w"))
+        self.assertEqual(P.Job(j.dir).run(), "done")
+        jd = P.Job(j.dir)
+        old_get = APP.get_job
+        APP.get_job = lambda jid: jd
+        try:
+            APP.assign_teams("x", {"a": [0], "b": [1], "attack": {"1": "left", "2": "right", "9": "up"}})
+        finally:
+            APP.get_job = old_get
+        self.assertEqual(P.Job(j.dir).spec["attack"], {"1": "left", "2": "right"})
+        self.assertFalse(jd.done("stats"))
+        j3 = P.Job(j.dir)
+        self.assertEqual(j3.run(), "done")
+        by_half = {c[c.index("--out") + 1].endswith("half1_teams"): c[c.index("--a-attacks") + 1] for c in j3.team_cmds}
+        self.assertEqual(sorted(by_half.values()), ["left", "right"])
 
     def test_run_waits_for_teams_then_finishes(self):
         j = self.job(2, lang="de")

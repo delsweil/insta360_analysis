@@ -152,8 +152,26 @@ def per_minute(game, team, minute_len: float = 60.0, min_players: int = 4):
     return out
 
 
+def keeper_attack(game, clusters, switch_min: float = None, min_n: int = 15, min_gap_m: float = 15.0):
+    """Which way does team A attack, from the goalkeepers? Their colour groups were labelled GK A / GK B, and a keeper
+    stands at his own goal: A's keeper on the left -> A attacks right. None when the groups do not tell them apart
+    (both keepers in one group, or too few sightings)."""
+    fn = getattr(clusters, "role_of", None)
+    if fn is None or not getattr(clusters, "has_roles", False):
+        return None
+    rl = fn(game["bgr"])
+    first = game["t"] < (switch_min * 60.0 if switch_min else 1e12)
+    xa, xb = game["x"][first & (rl == 4)], game["x"][first & (rl == 5)]
+    if len(xa) < min_n or len(xb) < min_n:
+        return None
+    gap = float(np.median(xa) - np.median(xb))
+    if abs(gap) < min_gap_m:
+        return None
+    return gap < 0
+
+
 def territory(game, team, box, switch_min: float = None, min_players: int = 6, bin_s: float = 5.0, sigma_bins: float = 3.0,
-              centre=None):
+              centre=None, attack=None):
     """Momentum proxy per 5 s: where the play is, relative to the middle of the pitch, seen from team A.
 
     Mean sideways position of all players of the two teams -> -1 (play at the left goal line) .. +1 (right).
@@ -183,6 +201,8 @@ def territory(game, team, box, switch_min: float = None, min_players: int = 6, b
     ax_ = xx[first & (tm == 0)]
     bx_ = xx[first & (tm == 1)]
     a_right = bool(ax_.size and bx_.size and ax_.mean() < bx_.mean())      # A on the left side = attacks right
+    if attack is not None:                                                 # told by the coach, or read from the goalkeepers
+        a_right = bool(attack)
     sign = 1.0 if a_right else -1.0
     value = terr * sign
     if switch_min:
@@ -408,6 +428,9 @@ def main(argv=None) -> int:
     p.add_argument("--keyframes", nargs="+", default=None,
                    help="the camera-path file of each detections file (same order): the heat map and the territory "
                         "then follow the play (camera based) instead of counting every detected player")
+    p.add_argument("--a-attacks", choices=["auto", "right", "left"], default="auto",
+                   help="which way team A attacks, as seen from the camera, in the first stretch of the video. auto: from the "
+                        "goalkeepers if their colour groups tell them apart, else a guess from where the teams stand (unreliable)")
     p.add_argument("--tempo-stride", type=int, default=3, help="moments between the two positions a speed is measured over (3 = 1 s)")
     p.add_argument("--team-labels", default=None,
                    help="team_labels.json made with team_labels.py: the teams as you labelled them by eye "
@@ -454,9 +477,16 @@ def main(argv=None) -> int:
         ct, cx, cy = load_play_centres(a.detections, a.keyframes, a.max_lon, 0.3, a.angle_factor)
         centres = (ct, cx, cy)
         print(f"play centre: {len(ct)} moments (camera based)")
-    mom = territory(game, team, box, a.switch_at, centre=None if centres is None else (centres[0], centres[1]))
+    attack, how = None, "guessed from where the teams stand"
+    if a.a_attacks in ("right", "left"):
+        attack, how = a.a_attacks == "right", "set by you"
+    elif a.team_labels:
+        attack = keeper_attack(game, clusters, a.switch_at)
+        if attack is not None:
+            how = "read from the goalkeepers"
+    mom = territory(game, team, box, a.switch_at, centre=None if centres is None else (centres[0], centres[1]), attack=attack)
     print(f"pitch box (x0 x1 y0 y1, m): {', '.join(f'{v:.1f}' for v in box)}   team A attacks "
-          f"{'right' if mom[2] else 'left'}")
+          f"{'right' if mom[2] else 'left'} ({how})")
     keep = np.ones(len(game["x"]), bool)
     if not a.keep_static and centres is None:
         cells, cell = static_spots(game)

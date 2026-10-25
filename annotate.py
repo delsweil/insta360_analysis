@@ -515,10 +515,13 @@ class Annotator:
         if changed or force or not os.path.exists(self.kf_path):
             self.kfs.save(self.kf_path)
             self._saved_version = self.kfs.version
-        K.save_meta(self.kf_path, tilt_deg=round(self.base_tilt, 3), legacy_fov=self.legacy_fov, projection=self.projection,
+        # keep what other tools put in the meta file (iv_fov, lens, ...): the render needs them
+        meta = dict(K.load_meta(self.kf_path))
+        meta.update(tilt_deg=round(self.base_tilt, 3), legacy_fov=self.legacy_fov, projection=self.projection,
                     fov_max=self.fov_max,
                     interp=self.interp, video=os.path.basename(self.video), fps=self.fps,
                     last_t=round(self.t, 3), trim_in=self.trim_in, trim_out=self.trim_out)
+        K.save_meta(self.kf_path, **meta)
         self._meta_dirty = False
         self._last_save = now
         return True
