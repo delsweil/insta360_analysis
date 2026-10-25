@@ -200,6 +200,25 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
     return [f for f in out if f["vt"] >= video_start - 1e-6]
 
 
+def widen_to_keepers(box, xs, min_n: int = 30, pad: float = 1.0):
+    """The pitch drawn on the board reaches the goal lines where the goalkeepers stand. The box is estimated from where players
+    were seen (the far goal ends are visited less, so the box comes out short there); a keeper at his goal then stood outside
+    the drawn pitch. Each end is moved out to where its keeper was (median of his sightings at that end, plus `pad` metres).
+    Only ever wider, never narrower; the statistics keep the original box. -> box"""
+    import numpy as np
+    if not box or len(xs) < 2 * min_n:
+        return box
+    xs = np.asarray(xs, float)
+    mid = 0.5 * (float(box[0]) + float(box[1]))
+    left, right = xs[xs < mid - GK_END_M], xs[xs > mid + GK_END_M]
+    x0, x1 = float(box[0]), float(box[1])
+    if left.size >= min_n:
+        x0 = min(x0, float(np.median(left)) - pad)
+    if right.size >= min_n:
+        x1 = max(x1, float(np.median(right)) + pad)
+    return [x0, x1, box[2], box[3]]
+
+
 def build(parts: List[dict], clusters, title: str = "", lang: str = "en", max_lon: float = 98.0, min_conf: float = MIN_CONF,
           min_height: float = MIN_HEIGHT, k_angle: float = 0.75, rescue: float = RESCUE,
           margin_m: float = MARGIN_M, tidy: bool = True, max_team: int = MAX_TEAM,
@@ -214,9 +233,11 @@ def build(parts: List[dict], clusters, title: str = "", lang: str = "en", max_lo
         if end is not None:
             fr = [f for f in fr if f["vt"] <= end + 1e-6]
         frames.extend(fr)
+        gk_x = [x for f in fr for (x, y, t) in f["players"] if t in (4, 5)]
+        shown = widen_to_keepers(p.get("box"), gk_x)
         meta_parts.append({"half": int(p["half"]), "video_start": round(float(p["video_start"]), 2),
                            "duration": None if end is None else round(float(p["duration"]), 2),
-                           "box": [round(float(v), 2) for v in p["box"]] if p.get("box") else None,
+                           "box": [round(float(v), 2) for v in shown] if shown else None,
                            "a_attacks_right": p.get("a_attacks_right")})
     if not frames:
         raise SystemExit("no moments for the board (no players found)")

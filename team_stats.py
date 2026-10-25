@@ -425,8 +425,10 @@ def main(argv=None) -> int:
     p.add_argument("--lang", choices=["en", "de"], default="en")
     p.add_argument("--box", type=float, nargs=4, default=None, metavar=("X0", "X1", "Y0", "Y1"),
                    help="pitch rectangle in metres (default: estimated from where players were seen)")
-    p.add_argument("--no-centred", action="store_true",
-                   help="do not assume the camera stands on the halfway line (default: the box is symmetrical about the camera)")
+    p.add_argument("--centre-box", action="store_true",
+                   help="make the pitch box symmetrical about the camera (camera on the halfway line). Off by default: the halfway "
+                        "line of the territory statistics is the middle of this box, and where people were seen is not symmetrical "
+                        "(the outline cuts the far end), so centring it changed the statistics a lot")
     p.add_argument("--switch-at", type=float, default=None, metavar="MIN",
                    help="minute of play at which the teams change ends (a game given as both halves)")
     p.add_argument("--keyframes", nargs="+", default=None,
@@ -474,7 +476,7 @@ def main(argv=None) -> int:
     tempo = tempo_per_minute(game, team, a.tempo_stride)
     ok = team >= 0
     box = tuple(a.box) if a.box else FS.estimate_box(game["x"][ok], game["y"][ok])
-    if not a.box and not a.no_centred:
+    if not a.box and a.centre_box:
         box = FS.centre_box(box)
     centres = None
     if a.keyframes:

@@ -278,6 +278,17 @@ class TestBoard(unittest.TestCase):
         self.assertEqual(set(n(BD.build([part], FakeClusters()))), {2})            # present in every moment
         self.assertLess(min(n(BD.build([part], FakeClusters(), tidy=False))), 2)   # without the clean-up he blinks
 
+    def test_the_drawn_pitch_reaches_the_keepers(self):
+        box = [-43.3, 28.2, 5.8, 61.8]
+        left = [-42.5] * 40 + [-20.0] * 5                      # his sightings at the left end (+ one wandering out)
+        right = [42.6] * 40
+        w = BD.widen_to_keepers(box, left + right)
+        self.assertAlmostEqual(w[0], -43.5, places=1)           # left end: the keeper is inside the old box -> wider by his place
+        self.assertAlmostEqual(w[1], 43.6, places=1)            # right end moved out to the keeper
+        self.assertEqual(w[2:], box[2:])
+        self.assertEqual(BD.widen_to_keepers(box, [42.6] * 5), box)        # too few sightings: unchanged
+        self.assertEqual(BD.widen_to_keepers(box, [0.0] * 100), box)       # nobody at an end: unchanged
+
     def test_probe_explains_a_drop(self):
         import io
         import contextlib
