@@ -38,6 +38,13 @@ def estimate_box(x: np.ndarray, y: np.ndarray, pct: float = 1.0, pad: float = 1.
     return float(x0 - pad), float(x1 + pad), float(max(0.0, y0 - pad)), float(y1 + pad)
 
 
+def centre_box(box: Box) -> Box:
+    """Camera on the halfway line: the pitch is symmetrical about the camera (x = 0). Both goal lines are as far out as the
+    farther one was seen, so a goal end that players rarely reached is not cut off."""
+    h = max(abs(box[0]), abs(box[1]))
+    return -h, h, box[2], box[3]
+
+
 def draw_pitch(ax, box: Box, line: str = LINE, lw: float = 1.3, pitch: Tuple[float, float] = (105.0, 68.0)):
     """Outline, halfway line, centre circle, penalty and goal areas, scaled to the box."""
     from matplotlib.patches import Arc, Circle, Rectangle

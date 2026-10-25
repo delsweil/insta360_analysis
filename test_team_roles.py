@@ -59,5 +59,12 @@ class TestRoles(unittest.TestCase):
         self.assertAlmostEqual(q["a"] + q["b"] + q["roles"] + q["other"], 1.0, places=6)
 
 
+class TestCentreBox(unittest.TestCase):
+    def test_symmetrical_about_the_camera(self):
+        import football_style as F
+        self.assertEqual(F.centre_box((-43.3, 28.2, 5.8, 61.8)), (-43.3, 43.3, 5.8, 61.8))
+        self.assertEqual(F.centre_box((-30.0, 35.0, 1.0, 50.0)), (-35.0, 35.0, 1.0, 50.0))
+
+
 if __name__ == "__main__":
     unittest.main()

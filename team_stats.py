@@ -123,7 +123,9 @@ def load_play_centres(paths: List[str], keyframes: List[str], max_lon: float, mi
 
 
 def shape(x: np.ndarray, y: np.ndarray):
-    """centre, spread (rms distance to the centre), width and depth (std) of one team in one moment."""
+    """centre, spread (rms distance to the centre), width and depth (std) of one team in one moment.
+    Careful with the names: x is the camera's sideways axis, i.e. ALONG the pitch, y is away from the camera, i.e. ACROSS it.
+    So `width` (std of x) is what football calls depth (Tiefe) and `depth` (std of y) is what it calls width (Breite)."""
     cx, cy = x.mean(), y.mean()
     return cx, cy, float(np.sqrt(((x - cx) ** 2 + (y - cy) ** 2).mean())), float(x.std()), float(y.std())
 
@@ -423,6 +425,8 @@ def main(argv=None) -> int:
     p.add_argument("--lang", choices=["en", "de"], default="en")
     p.add_argument("--box", type=float, nargs=4, default=None, metavar=("X0", "X1", "Y0", "Y1"),
                    help="pitch rectangle in metres (default: estimated from where players were seen)")
+    p.add_argument("--no-centred", action="store_true",
+                   help="do not assume the camera stands on the halfway line (default: the box is symmetrical about the camera)")
     p.add_argument("--switch-at", type=float, default=None, metavar="MIN",
                    help="minute of play at which the teams change ends (a game given as both halves)")
     p.add_argument("--keyframes", nargs="+", default=None,
@@ -470,6 +474,8 @@ def main(argv=None) -> int:
     tempo = tempo_per_minute(game, team, a.tempo_stride)
     ok = team >= 0
     box = tuple(a.box) if a.box else FS.estimate_box(game["x"][ok], game["y"][ok])
+    if not a.box and not a.no_centred:
+        box = FS.centre_box(box)
     centres = None
     if a.keyframes:
         if len(a.keyframes) != len(a.detections):
