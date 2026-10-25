@@ -263,6 +263,21 @@ class TestBoard(unittest.TestCase):
         err = lambda y: np.median(np.abs(y - truth))
         self.assertLess(err(ys(True)), 0.7 * err(ys(False)))
 
+    def test_a_flickering_keeper_and_missed_moments_do_not_blink(self):
+        a = self.p("k.jsonl")
+        with open(a, "w") as fh:
+            fh.write(json.dumps({"type": "header", "view_lons": [0], "start": 0.0, "fps": 3.0, "square_views": True, "colours": True}) + "\n")
+            for i in range(60):
+                conf = 0.21 + 0.2 * ((i * 7) % 5) / 4.0                          # 0.21 .. 0.41, mostly under the 0.3 cut
+                pl = [[5.0, -10.0, 60.0, 0.9, None, [230, 230, 230]]]            # a sure player
+                if i % 4 != 3 or i == 59:                                      # missed in every 4th moment (not the last: nothing to bridge to)
+                    pl.append([-20.0, -7.0, 22.0, conf, None, [230, 230, 230]])
+                fh.write(json.dumps({"t": i / 3.0, "players": pl, "balls": []}) + "\n")
+        part = {"det": a, "half": 1, "video_start": 0.0, "duration": 30.0}
+        n = lambda d: [(len(f) - 3) // 3 for f in d["frames"]]
+        self.assertEqual(set(n(BD.build([part], FakeClusters()))), {2})            # present in every moment
+        self.assertLess(min(n(BD.build([part], FakeClusters(), tidy=False))), 2)   # without the clean-up he blinks
+
     def test_probe_explains_a_drop(self):
         import io
         import contextlib

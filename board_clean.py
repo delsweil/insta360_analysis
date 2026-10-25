@@ -30,9 +30,11 @@ GK = 4                                                                # either g
 
 
 def link_tracks(frame: np.ndarray, x: np.ndarray, y: np.ndarray, vt: np.ndarray, gate_m: float = 3.0,
-                gate_per_m: float = 0.06, max_gap_s: float = 0.8) -> np.ndarray:
-    """Track id per detection (-1 never left): detections of consecutive moments within a gate (metres, wider far away,
-    where positions are less sure) are matched one-to-one by the shortest total distance."""
+                gate_per_m: float = 0.06, max_gap_s: float = 2.5, speed_ms: float = 3.0) -> np.ndarray:
+    """Track id per detection (-1 never left). A track continues with a detection when that is within a gate (metres,
+    wider far away, where positions are less sure) of the track's last position; the gate also grows with the time the
+    track was not seen (`speed_ms` metres per second beyond one moment), so a player missed in a few moments is picked
+    up again instead of becoming a stranger. Detections and tracks are matched one-to-one by the shortest distance."""
     from scipy.optimize import linear_sum_assignment
     n = len(frame)
     track = np.full(n, -1, int)
@@ -41,27 +43,76 @@ def link_tracks(frame: np.ndarray, x: np.ndarray, y: np.ndarray, vt: np.ndarray,
     nf = len(vt)
     bounds = np.searchsorted(frame, np.arange(nf + 1))
     nxt = 0
-    prev = np.zeros(0, int)
-    prev_f = -1
+    active: dict = {}                                    # track id -> (x, y, time) of its last detection
     for f in range(nf):
         cur = np.arange(bounds[f], bounds[f + 1])
         if len(cur) == 0:
             continue
+        now = float(vt[f])
+        for t in [t for t, (_, _, tt) in active.items() if now - tt > max_gap_s]:
+            del active[t]
         used = np.zeros(len(cur), bool)
-        if len(prev) and prev_f >= 0 and vt[f] - vt[prev_f] <= max_gap_s:
-            d = np.hypot(x[prev][:, None] - x[cur][None], y[prev][:, None] - y[cur][None])
-            gate = gate_m + gate_per_m * 0.5 * (y[prev][:, None] + y[cur][None])
-            cost = np.where(d <= gate, d, 1e6)
-            r, c = linear_sum_assignment(cost)
-            for a, b in zip(r, c):
+        if active:
+            ids = list(active)
+            ax = np.array([active[t][0] for t in ids])
+            ay = np.array([active[t][1] for t in ids])
+            age = np.array([now - active[t][2] for t in ids])
+            d = np.hypot(ax[:, None] - x[cur][None], ay[:, None] - y[cur][None])
+            gate = (gate_m + gate_per_m * 0.5 * (ay[:, None] + y[cur][None])
+                    + speed_ms * np.maximum(age[:, None] - 0.45, 0.0))
+            cost = np.where(d <= gate, d + 0.5 * age[:, None], 1e6)
+            r, cc = linear_sum_assignment(cost)
+            for a, b in zip(r, cc):
                 if cost[a, b] < 1e5:
-                    track[cur[b]] = track[prev[a]]
+                    track[cur[b]] = ids[a]
                     used[b] = True
         for k in np.where(~used)[0]:
             track[cur[k]] = nxt
             nxt += 1
-        prev, prev_f = cur, f
+        for k in range(len(cur)):                        # the tracks move on to where they were last seen
+            active[int(track[cur[k]])] = (float(x[cur[k]]), float(y[cur[k]]), now)
     return track
+
+
+def fill_gaps(frame: np.ndarray, vt: np.ndarray, x: np.ndarray, y: np.ndarray, team: np.ndarray, track: np.ndarray,
+              max_gap_s: float = 1.5):
+    """Players the detector missed for a moment or two are still on the pitch: where a track has a hole of at most
+    `max_gap_s` seconds, with the same label before and after it, the missing moments get a position on the straight line
+    between the two ends. -> (frame, x, y, team) of the added detections (the originals are not touched)."""
+    nf, nx, ny, nt = [], [], [], []
+    for t in np.unique(track[track >= 0]):
+        idx = np.flatnonzero(track == t)
+        idx = idx[np.argsort(frame[idx])]
+        for a, b in zip(idx[:-1], idx[1:]):
+            f0, f1 = int(frame[a]), int(frame[b])
+            if f1 - f0 < 2 or team[a] != team[b] or vt[f1] - vt[f0] > max_gap_s:
+                continue
+            for f in range(f0 + 1, f1):
+                w = (vt[f] - vt[f0]) / max(vt[f1] - vt[f0], 1e-9)
+                nf.append(f)
+                nx.append(float(x[a] + w * (x[b] - x[a])))
+                ny.append(float(y[a] + w * (y[b] - y[a])))
+                nt.append(int(team[a]))
+    return np.array(nf, int), np.array(nx), np.array(ny), np.array(nt, int)
+
+
+def confirm_low(track: np.ndarray, conf: np.ndarray, min_conf: float, min_len: int = 6, sure: float = 0.45,
+                typical: float = 0.26) -> np.ndarray:
+    """Which detections may stay: all with a confidence of `min_conf` or more, and the weaker ones only when they belong to
+    a steady track. A far, small, dark-shirted keeper is found in nearly every moment but with a confidence that flickers
+    between 0.2 and 0.45: cutting at 0.3 makes him blink in and out. A weak detection stays when its track has at least
+    `min_len` detections and either one of them is `sure` or the typical (median) confidence is `typical`;
+    isolated weak detections (the usual false ones) go."""
+    keep = conf >= min_conf
+    if keep.all() or len(track) == 0:
+        return keep
+    ok_track = {}
+    for t in np.unique(track[track >= 0]):
+        c = conf[track == t]
+        ok_track[t] = len(c) >= min_len and (c.max() >= sure or float(np.median(c)) >= typical)
+    for i in np.flatnonzero(~keep):
+        keep[i] = track[i] >= 0 and ok_track.get(track[i], False)
+    return keep
 
 
 def vote_in_tracks(track: np.ndarray, frame: np.ndarray, vt: np.ndarray, team: np.ndarray, weight: np.ndarray,

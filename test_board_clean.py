@@ -132,5 +132,64 @@ class TestElevenASide(unittest.TestCase):
         self.assertEqual(st["to_other"] + st["to_other_team"], 0)
 
 
+class TestGaps(unittest.TestCase):
+    def one_player(self, present):
+        """one player standing still at (10, 30); `present` = the moments in which he is detected."""
+        frame = np.array(present, int)
+        n = int(frame.max()) + 1
+        return frame, np.arange(n) / 3.0, np.full(len(frame), 10.0), np.full(len(frame), 30.0)
+
+    def test_a_missed_moment_keeps_the_track(self):
+        frame, vt, x, y = self.one_player([0, 1, 2, 4, 5, 8, 9])        # holes of 1 and 2 moments
+        self.assertEqual(len(set(BC.link_tracks(frame, x, y, vt))), 1)
+
+    def test_a_long_absence_starts_a_new_track(self):
+        frame, vt, x, y = self.one_player([0, 1, 2, 20, 21])           # 6 s away
+        self.assertEqual(len(set(BC.link_tracks(frame, x, y, vt))), 2)
+
+    def test_the_gate_grows_with_the_absence(self):
+        frame = np.array([0, 1, 5, 6])
+        vt = np.arange(7) / 3.0
+        x = np.array([10.0, 10.0, 14.0, 14.0])                        # 4 m further after 1.3 s: a runner, not a stranger
+        self.assertEqual(len(set(BC.link_tracks(frame, x, np.full(4, 30.0), vt))), 1)
+        x2 = np.array([10.0, 10.0, 18.0, 18.0])
+        frame2 = np.array([0, 1, 3, 4])                                # 8 m in 0.7 s is too fast
+        self.assertEqual(len(set(BC.link_tracks(frame2, x2, np.full(4, 30.0), np.arange(5) / 3.0))), 2)
+
+
+class TestWeakDetections(unittest.TestCase):
+    def test_a_steady_weak_track_is_kept_and_an_isolated_one_dropped(self):
+        track = np.array([0] * 10 + [1])
+        conf = np.array([0.22, 0.41, 0.25, 0.24, 0.33, 0.21, 0.27, 0.46, 0.23, 0.26, 0.25])
+        keep = BC.confirm_low(track, conf, 0.3)
+        self.assertTrue(keep[:10].all())
+        self.assertFalse(keep[10])
+
+    def test_a_short_weak_track_is_dropped(self):
+        track = np.array([0, 0, 0])
+        self.assertFalse(BC.confirm_low(track, np.array([0.25, 0.28, 0.22]), 0.3).any())
+
+    def test_strong_detections_always_stay(self):
+        self.assertTrue(BC.confirm_low(np.array([-1, -1]), np.array([0.9, 0.31]), 0.3).all())
+
+
+class TestFillGaps(unittest.TestCase):
+    def test_a_short_hole_is_bridged_with_the_same_label(self):
+        frame = np.array([0, 1, 4, 5])
+        vt = np.arange(6) / 3.0
+        x = np.array([0.0, 1.0, 4.0, 5.0])
+        f, fx, fy, ft = BC.fill_gaps(frame, vt, x, np.full(4, 30.0), np.array([1, 1, 1, 1]), np.zeros(4, int))
+        self.assertEqual(list(f), [2, 3])
+        self.assertTrue(np.allclose(fx, [2.0, 3.0]))
+        self.assertEqual(list(ft), [1, 1])
+
+    def test_a_long_hole_or_a_changed_label_is_not_bridged(self):
+        vt = np.arange(30) / 3.0
+        f, *_ = BC.fill_gaps(np.array([0, 20]), vt, np.zeros(2), np.zeros(2), np.array([0, 0]), np.zeros(2, int))
+        self.assertEqual(len(f), 0)
+        f, *_ = BC.fill_gaps(np.array([0, 3]), vt, np.zeros(2), np.zeros(2), np.array([0, 1]), np.zeros(2, int))
+        self.assertEqual(len(f), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

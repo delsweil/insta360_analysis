@@ -17,6 +17,7 @@ import FloatingDrawTools, { DRAW_TOOLS } from '@/components/FloatingDrawTools'
 import VeoImportModal from '@/components/VeoImportModal'
 import BoardPanel from '@/components/BoardPanel'
 import { useBoard } from '@/lib/board'
+import { exportGame } from '@/lib/exportEvents'
 import StatsPanel, { StatsCard } from '@/components/StatsPanel'
 import { useStats } from '@/lib/stats'
 
@@ -2333,6 +2334,13 @@ export default function GamePage({ params }: Props) {
               }}>
                 Annotations
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {isCoach && (
+                    <button
+                      onClick={() => exportGame(game.title, annotations, boardState.status === 'ready' ? boardState.board : null)}
+                      title="Download the events and the board data as CSV files for analysis"
+                      style={{ fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 99, border: '1.5px solid #E4E6EE', background: '#fff', color: '#4A4F5C', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif', whiteSpace: 'nowrap' }}
+                    >Export</button>
+                  )}
                   {isCoach && (
                     <button
                       onClick={() => setShowVeoImport(true)}

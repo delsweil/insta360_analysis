@@ -39,6 +39,7 @@ OTHER = 2                                   # referee, goalkeepers, shirt colour
 # The board has its own, looser thresholds than the camera planning: the detections file keeps everything found at
 # confidence >= 0.2, the camera path is made from it by other code and is not affected by what is shown on the board.
 MIN_CONF = 0.3
+LOW_CONF = 0.2                              # weaker detections stay when they belong to a steady track (board_clean.confirm_low)
 MIN_HEIGHT = 14.0                           # smallest box (px) whose shirt colour is trusted
 MARGIN_M = 1.5                              # a foot this close (metres) to the pitch outline still counts as on the pitch
 RESCUE = 1.5                                # a colour closer to a team than 1.5 x to its 'other' group still counts for the team
@@ -52,7 +53,7 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
                 margin_m: float = MARGIN_M, tidy: bool = True, max_team: int = MAX_TEAM,
                 team_margin_m: float = TEAM_MARGIN_M, stats: Optional[dict] = None, feet: bool = True,
                 smooth: bool = True, a_attacks_right: Optional[bool] = None,
-                box: Optional[list] = None) -> List[dict]:
+                box: Optional[list] = None, low_conf: float = LOW_CONF, fill: bool = True) -> List[dict]:
     """One part (one detections file) -> frames {vt, pan, fov, players:[(x, y, team)]}; vt = seconds in the joined video."""
     hdr, frames = AK.load_detections(det_path, max_lon=max_lon)
     fy = S.view_fy(hdr)
@@ -83,7 +84,7 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
     kept, centres = [], []
     for i, r in enumerate(frames):
         for p in r["players"]:
-            if p[3] < min_conf or (tester is not None and not tester(p[0], p[1], p[2])):
+            if p[3] < min(min_conf, low_conf) or (tester is not None and not tester(p[0], p[1], p[2])):
                 continue
             kept.append((i, p))
             centres.append(float(views[np.argmin(np.abs(views - p[0]))]))
@@ -111,6 +112,19 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
         owner.append(i)
         conf.append(float(p[3]))
         outm.append(0.0 if tester is None else tester.outside_m(p[0], p[1], p[2]))
+    if rows and low_conf < min_conf:             # weak detections only where a steady track vouches for them
+        a0 = np.array(rows, float)
+        vt0 = np.array([float(r["t"]) for r in frames])
+        trk0 = BC.link_tracks(np.array(owner), a0[:, 0], a0[:, 1], vt0)
+        keep = BC.confirm_low(trk0, np.array(conf), min_conf)
+        if stats is not None:
+            weak = np.array(conf) < min_conf
+            stats["weak_kept"] = stats.get("weak_kept", 0) + int((keep & weak).sum())
+            stats["weak_dropped"] = stats.get("weak_dropped", 0) + int((~keep & weak).sum())
+        rows = [r for r, k in zip(rows, keep) if k]
+        owner = [o for o, k in zip(owner, keep) if k]
+        conf = [c for c, k in zip(conf, keep) if k]
+        outm = [o for o, k in zip(outm, keep) if k]
     team = np.full(len(rows), OTHER, int)
     weight = np.zeros(len(rows))                 # how much the detection's own label counts as a vote
     margin = np.ones(len(rows))                  # 0 = the colour is as near one team as the other, 1 = sure
@@ -168,11 +182,21 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
             stats["keepers"] = stats.get("keepers", 0) + int(((team == 4) | (team == 5)).sum())
     if stats is not None and rows:
         stats["referees"] = stats.get("referees", 0) + int((team == BC.REFEREE).sum())
+    extra = None
+    if fill and tidy and rows:                     # short holes in a track are bridged (board_clean.fill_gaps)
+        a3 = np.array(rows, float)
+        trk3 = BC.link_tracks(np.array(owner), a3[:, 0], a3[:, 1], np.array([float(r["t"]) for r in frames]))
+        extra = BC.fill_gaps(np.array(owner), np.array([float(r["t"]) for r in frames]), a3[:, 0], a3[:, 1], team, trk3)
+        if stats is not None:
+            stats["filled"] = stats.get("filled", 0) + len(extra[0])
     out = [{"vt": float(r["t"]) - t_in + video_start,
             "pan": None if pan is None else float(pan[i]), "fov": None if fov is None else float(fov[i]), "players": []}
            for i, r in enumerate(frames)]
     for k, i in enumerate(owner):
         out[i]["players"].append((float(rows[k][0]), float(rows[k][1]), int(team[k])))
+    if extra is not None:
+        for f, x, y, t in zip(*extra):
+            out[int(f)]["players"].append((float(x), float(y), int(t)))
     return [f for f in out if f["vt"] >= video_start - 1e-6]
 
 
