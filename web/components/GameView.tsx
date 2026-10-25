@@ -62,7 +62,17 @@ export default function GameView({ gameId, shareToken }: Props) {
     try { return localStorage.getItem('hud-mode') === '1' } catch { return false }
   })
   const [showAnnotations, setShowAnnotations] = useState(false)
-  const [showBoard, setShowBoard] = useState(false) // mobile HUD: board panel over the video
+  const [showBoard, setShowBoard] = useState(false) // board panel over the video
+  // In the HUD the board is on from the start; closing it is remembered on this device (the ✕ or the Board button)
+  const rememberBoard = (on: boolean) => {
+    if (isMobile || forceHud) { try { localStorage.setItem('hud-board', on ? '1' : '0') } catch {} }
+  }
+  useEffect(() => {
+    if (!(isMobile || forceHud)) return
+    let on = true
+    try { on = localStorage.getItem('hud-board') !== '0' } catch {}
+    setShowBoard(on)
+  }, [isMobile, forceHud])
   const [boardOff, setBoardOff] = useState(() => { // where the viewer dragged the mobile board to (remembered)
     if (typeof window === 'undefined') return { x: 0, y: 0 }
     try {
@@ -1009,7 +1019,7 @@ export default function GameView({ gameId, shareToken }: Props) {
               <BoardPanel gameId={id} gameTitle={game.title} state={boardState} reload={reloadBoard} currentTime={currentTime} isCoach={false} compact />
             </div>
             <button
-              onClick={() => setShowBoard(false)}
+              onClick={() => { setShowBoard(false); rememberBoard(false) }}
               aria-label="Close board"
               style={{
                 position: 'absolute', top: -4, left: -30, width: 26, height: 26, borderRadius: '50%', pointerEvents: 'auto',
@@ -1594,7 +1604,7 @@ export default function GameView({ gameId, shareToken }: Props) {
             {/* Tactical board — only when this game has board data */}
             {boardState.status === 'ready' && (
               <button
-                onClick={() => setShowBoard(v => !v)}
+                onClick={() => { rememberBoard(!showBoard); setShowBoard(v => !v) }}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 5,
                   padding: '0 11px', height: 38,
