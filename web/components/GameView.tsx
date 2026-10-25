@@ -1734,8 +1734,6 @@ export default function GameView({ gameId, shareToken }: Props) {
           )}
         </div>
 
-        {boardOverlay}
-
         {/* ── Statistics sheet (slides up from bottom) ── */}
         {showStats && statsState.status === 'ready' && (
           <div
@@ -1892,6 +1890,9 @@ export default function GameView({ gameId, shareToken }: Props) {
         )}
 
         </div>{/* end HUD wrapper */}
+
+        {/* the board sits outside the HUD wrapper: it stays when the controls fade out */}
+        {boardOverlay}
 
         {/* Pulse animation for recording button */}
         <style>{`
