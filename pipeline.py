@@ -59,8 +59,8 @@ FIXED_SECONDS = {"check": 15, "pitch": 20, "merge": 60, "teams": 120, "keyframes
 RENDER_SIZE = (1920, 1080)  # output size; (2560, 1440) is hard to tell apart on a laptop and renders ~4x slower
 RENDER_ENHANCE = "light"    # gentle denoise + sharpen before encoding ("off", "light", "medium")
 RENDER_INTERP = "cubic"     # resampling filter of the view cut-out ("lanczos" costs about the same, "linear" is ~2.4x faster but softer)
-RENDER_BITRATE = "9000k"    # VideoToolbox bitrate; YouTube re-encodes anyway and recommends ~8 Mbit/s for 1080p30 (18000k = ~3.8 GB per half)
-RENDER_CRF = 21             # the same, for x264 (18 = bigger and finer, 23 = smaller)
+RENDER_BITRATE = "18000k"    # VideoToolbox bitrate; YouTube re-encodes anyway and recommends ~8 Mbit/s for 1080p30 (18000k = ~3.8 GB per half)
+RENDER_CRF = 18             # the same, for x264 (18 = bigger and finer, 23 = smaller)
 RENDER_LENS = "x2_150"      # fitted lens model for raw X2 footage (straight pitch lines, one resampling less); "legacy" = the old unwrapping
 VERIFY_RENDER = True        # look into every finished video before it replaces the old one
 
