@@ -92,10 +92,13 @@ def track_ball(frames: List[dict], conf: float = 0.4, static_frac: float = 0.06,
     return out
 
 
-def hold(x: np.ndarray, n: int, drift: int = 0, rate: float = 3.0, vmax: float = 40.0) -> np.ndarray:
+def hold(x: np.ndarray, n: int, drift: int = 0, rate: float = 3.0, vmax: float = 40.0,
+         drift_from: float = 70.0) -> np.ndarray:
     """Keep the last known value for up to `n` frames after the ball is lost. With `drift` > 0 the ball is
     assumed to keep moving the way it was going for that many frames (at most `vmax` degrees/second):
-    a ball that disappears at the touchline is usually still travelling towards the goal line."""
+    a ball that disappears at the touchline is usually still travelling towards the goal line. That only
+    applies to a ball lost beyond `drift_from` degrees and still moving outwards; anywhere else it is held
+    where it was (extrapolating mid-pitch made the camera swing at every lost ball)."""
     o = x.copy()
     last, age, vel, run = np.nan, 10 ** 9, 0.0, []
     for i, v in enumerate(x):
@@ -108,7 +111,8 @@ def hold(x: np.ndarray, n: int, drift: int = 0, rate: float = 3.0, vmax: float =
         else:
             age += 1
             if age <= n:
-                o[i] = last + vel * min(age, drift)
+                out_ward = abs(last) >= drift_from and vel * last > 0
+                o[i] = last + (vel * min(age, drift) if out_ward else 0.0)
             else:
                 o[i] = np.nan
     return np.clip(o, -100.0, 100.0)

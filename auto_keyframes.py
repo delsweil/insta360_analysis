@@ -348,7 +348,7 @@ def build_path(header: dict, frames: List[dict], *, use_ball=False, min_conf=0.3
                fov_min=90.0, fov_max=140.0, edge_limit=100.0, ball_weight=0.4, ball_conf=0.5,
                ball_reach=45.0, max_gap_s=8.0, adaptive_tilt_on=False, base_tilt=-15.0,
                projection="cylindrical", tilt_margin=3.0, max_dip=20.0, tilt_s=3.0, lead_s=0.0,
-               ball_view=False, ball_margin=10.0, ball_hold_s=3.0, track_conf=0.3, ball_edge_extra=16.0, ball_lead_s=0.7, ball_max_speed=30.0, ball_zoom=True, iv_fov=None, ball_ease_s=4.0, ball_final_s=5.0) -> dict:
+               ball_view=False, ball_margin=10.0, ball_hold_s=3.0, track_conf=0.3, ball_edge_extra=10.0, ball_lead_s=0.7, ball_max_speed=30.0, ball_zoom=True, iv_fov=None, ball_ease_s=5.0, ball_final_s=8.0) -> dict:
     rate = float(header.get("fps", 3.0))
     t = np.array([r["t"] for r in frames], float)
     cells = static_cells(frames)
@@ -499,7 +499,7 @@ def main(argv=None) -> int:
                    help="follow the ball (ball_track.py) and keep it inside the crop; the players still steer")
     p.add_argument("--ball-margin", type=float, default=10.0,
                    help="degrees from the crop edge the ball is kept away from (--ball-view)")
-    p.add_argument("--ball-edge-extra", type=float, default=16.0,
+    p.add_argument("--ball-edge-extra", type=float, default=10.0,
                    help="extra degrees of room kept in front of a ball near the ends of the pitch (--ball-view)")
     p.add_argument("--ball-lead", type=float, default=0.7,
                    help="seconds the camera is early at the ball (--ball-view)")
@@ -507,9 +507,9 @@ def main(argv=None) -> int:
                    help="fastest pan in degrees per second while following the ball (0 = no limit)")
     p.add_argument("--no-ball-zoom", action="store_true",
                    help="do not zoom in where the ball is near the ends of the pitch (--ball-view)")
-    p.add_argument("--ball-ease", type=float, default=4.0,
+    p.add_argument("--ball-ease", type=float, default=5.0,
                    help="seconds over which the camera eases towards the ball (--ball-view; larger = smoother)")
-    p.add_argument("--ball-final", type=float, default=5.0,
+    p.add_argument("--ball-final", type=float, default=8.0,
                    help="last smoothing of the pan after the ball rules, seconds (--ball-view; 0 = none)")
     p.add_argument("--ball-hold", type=float, default=3.0, help="seconds a lost ball is assumed to stay where it was")
     p.add_argument("--track-conf", type=float, default=0.3, help="ball detections below this confidence are ignored")
