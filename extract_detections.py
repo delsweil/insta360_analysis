@@ -321,6 +321,8 @@ def main(argv=None, player_model=None, ball_model=None) -> int:
                    help="class names/ids that count as the ball (default: all classes of a one-class model, "
                         "else classes with 'ball' in the name)")
     p.add_argument("--device", default=None)
+    p.add_argument("--allow-short", action="store_true",
+                   help="do not fail when the video ends (or stops decoding) well before the requested stretch")
     a = p.parse_args(argv)
 
     info = K.probe_video(a.video)
@@ -414,6 +416,14 @@ def main(argv=None, player_model=None, ball_model=None) -> int:
         proc.stdout.close()
         proc.terminate()
     print(f"\nwrote {out}: {n} frames, ball seen in {n_ball} ({100 * n_ball / max(n, 1):.0f}%)")
+    if n < 0.97 * n_total and not a.allow_short:
+        # ffmpeg stopped early: a damaged stretch, a card or drive error. The camera would hold its last position
+        # from here to the end, so do not let the job treat this as finished.
+        print(f"ERROR: only {n} of {n_total} frames: the video stopped decoding at about "
+              f"{K.fmt_time(start + n / a.fps)} (asked for {K.fmt_time(start + duration)}). "
+              f"Check the file (ffmpeg -v error -ss {max(0, start + n / a.fps - 10):.0f} -i FILE -t 40 -f null -), "
+              f"copy it again from the card, or use --allow-short to accept it.", file=sys.stderr)
+        return 1
     return 0
 
 

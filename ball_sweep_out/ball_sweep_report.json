@@ -1,0 +1,39 @@
+{
+  "frames": 12,
+  "device": "mps",
+  "settings": {
+    "1280": {
+      "app": {
+        "frames_with_ball_pct": 75.0,
+        "candidates_per_frame": 1.0
+      },
+      "low": {
+        "frames_with_ball_pct": 91.7,
+        "candidates_per_frame": 1.42
+      },
+      "sec_per_frame": 0.22
+    },
+    "1600": {
+      "app": {
+        "frames_with_ball_pct": 83.3,
+        "candidates_per_frame": 1.5
+      },
+      "low": {
+        "frames_with_ball_pct": 91.7,
+        "candidates_per_frame": 2.08
+      },
+      "sec_per_frame": 0.2
+    },
+    "1920": {
+      "app": {
+        "frames_with_ball_pct": 83.3,
+        "candidates_per_frame": 1.42
+      },
+      "low": {
+        "frames_with_ball_pct": 91.7,
+        "candidates_per_frame": 1.92
+      },
+      "sec_per_frame": 0.27
+    }
+  }
+}
