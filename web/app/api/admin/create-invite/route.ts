@@ -1,10 +1,14 @@
 // app/api/admin/create-invite/route.ts
 //
-// Generates a single-use invite token that admins can share as a URL.
-// The token is stored in the invite_tokens table with an expiry and a role.
-// When a player visits /join/[token] and signs up, the token is consumed.
+// Generates an invite token that admins can share as a URL.
+// The token is stored in the invite_tokens table with an expiry, a role and a
+// maximum number of sign-ups (max_uses; 1 = classic single-use link).
+// Each sign-up at /join/[token] consumes one use.
+// Multi-use links (max_uses > 1) are only allowed for the 'player' role, so a
+// leaked link can never hand out coach/admin access.
 //
-// Requires: the invite_tokens table (see SQL migration below).
+// Requires: the invite_tokens table (see SQL migration below) and
+// supabase/invite_multi_use.sql (max_uses / uses columns, claim_invite()).
 //
 // SQL to run in Supabase SQL editor:
 //
@@ -44,9 +48,15 @@ export async function POST(req: NextRequest) {
       .from('user_roles').select('role').eq('user_id', caller.id).single()
     if (callerRole?.role !== 'admin') return NextResponse.json({ error: 'Admins only' }, { status: 403 })
 
-    const { role = 'player', expiryDays = 7 } = await req.json()
+    const { role = 'player', expiryDays = 7, maxUses = 1 } = await req.json()
     if (!['admin', 'coach', 'player'].includes(role))
       return NextResponse.json({ error: 'Invalid role' }, { status: 400 })
+    if (!Number.isInteger(expiryDays) || expiryDays < 1 || expiryDays > 90)
+      return NextResponse.json({ error: 'expiryDays must be a whole number between 1 and 90' }, { status: 400 })
+    if (!Number.isInteger(maxUses) || maxUses < 1 || maxUses > 500)
+      return NextResponse.json({ error: 'maxUses must be a whole number between 1 and 500' }, { status: 400 })
+    if (maxUses > 1 && role !== 'player')
+      return NextResponse.json({ error: 'Multi-use links are only allowed for the player role' }, { status: 400 })
 
     const adminClient = createClient(supabaseUrl, serviceKey)
 
@@ -55,7 +65,7 @@ export async function POST(req: NextRequest) {
 
     const { data, error } = await adminClient
       .from('invite_tokens')
-      .insert({ role, created_by: caller.id, expires_at: expiresAt.toISOString() })
+      .insert({ role, created_by: caller.id, expires_at: expiresAt.toISOString(), max_uses: maxUses })
       .select('token')
       .single()
 

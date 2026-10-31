@@ -32,7 +32,10 @@ export default function AdminUsersPage() {
   // Invite link state
   const [inviteRole, setInviteRole] = useState<'admin' | 'coach' | 'player'>('player')
   const [generatingLink, setGeneratingLink] = useState(false)
+  const [inviteMaxUses, setInviteMaxUses] = useState(1)       // 1 = single-use
+  const [inviteExpiryDays, setInviteExpiryDays] = useState(7)
   const [inviteLink, setInviteLink] = useState('')
+  const [inviteInfo, setInviteInfo] = useState<{ role: string; maxUses: number; expiryDays: number } | null>(null)
   const [inviteCopied, setInviteCopied] = useState(false)
 
   // Set-password state: which user's form is open, the typed password, status
@@ -117,6 +120,7 @@ export default function AdminUsersPage() {
   const handleGenerateInvite = async () => {
     setGeneratingLink(true)
     setInviteLink('')
+    setInviteInfo(null)
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) { setGeneratingLink(false); return }
 
@@ -127,11 +131,12 @@ export default function AdminUsersPage() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ role: inviteRole }),
+        body: JSON.stringify({ role: inviteRole, maxUses: inviteMaxUses, expiryDays: inviteExpiryDays }),
       })
       const data = await res.json()
       if (res.ok && data.token) {
         setInviteLink(`${window.location.origin}/join/${data.token}`)
+        setInviteInfo({ role: inviteRole, maxUses: inviteMaxUses, expiryDays: inviteExpiryDays })
       } else {
         alert(`Could not create the link: ${data.error ?? 'unknown error'}`)
       }
@@ -475,7 +480,12 @@ export default function AdminUsersPage() {
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <select
               value={inviteRole}
-              onChange={e => { setInviteRole(e.target.value as typeof inviteRole); setInviteLink('') }}
+              onChange={e => {
+                const r = e.target.value as typeof inviteRole
+                setInviteRole(r)
+                if (r !== 'player') setInviteMaxUses(1) // multi-use links are player-only
+                setInviteLink(''); setInviteInfo(null)
+              }}
               style={{
                 fontSize: 13, padding: '8px 10px',
                 border: '1px solid #E4E6EE', borderRadius: 8, outline: 'none',
@@ -486,6 +496,41 @@ export default function AdminUsersPage() {
               <option value="coach">Coach</option>
               <option value="admin">Admin</option>
             </select>
+            <label style={{ fontSize: 12, color: '#8A8F9E', display: 'flex', alignItems: 'center', gap: 6 }}>
+              Sign-ups
+              <input
+                type="number" min={1} max={500}
+                value={inviteMaxUses}
+                disabled={inviteRole !== 'player'}
+                onChange={e => {
+                  const n = Math.max(1, Math.min(500, Math.floor(Number(e.target.value)) || 1))
+                  setInviteMaxUses(n); setInviteLink(''); setInviteInfo(null)
+                }}
+                title={inviteRole !== 'player' ? 'Coach and admin links are always single-use' : '1 = single-use link; more = one link many players can use'}
+                style={{
+                  width: 64, fontSize: 13, padding: '8px 10px',
+                  border: '1px solid #E4E6EE', borderRadius: 8, outline: 'none',
+                  fontFamily: 'DM Sans, sans-serif', background: inviteRole !== 'player' ? '#F8F8F6' : '#fff',
+                }}
+              />
+            </label>
+            <label style={{ fontSize: 12, color: '#8A8F9E', display: 'flex', alignItems: 'center', gap: 6 }}>
+              Expires
+              <select
+                value={inviteExpiryDays}
+                onChange={e => { setInviteExpiryDays(Number(e.target.value)); setInviteLink(''); setInviteInfo(null) }}
+                style={{
+                  fontSize: 13, padding: '8px 10px',
+                  border: '1px solid #E4E6EE', borderRadius: 8, outline: 'none',
+                  fontFamily: 'DM Sans, sans-serif', background: '#fff',
+                }}
+              >
+                <option value={1}>1 day</option>
+                <option value={7}>7 days</option>
+                <option value={30}>30 days</option>
+                <option value={90}>90 days</option>
+              </select>
+            </label>
             <button
               onClick={handleGenerateInvite}
               disabled={generatingLink}
@@ -531,7 +576,9 @@ export default function AdminUsersPage() {
                 </button>
               </div>
               <div style={{ fontSize: 11, color: '#8A8F9E', marginTop: 6 }}>
-                Single-use · expires in 7 days · grants <strong>{inviteRole}</strong> access.
+                {inviteInfo && (inviteInfo.maxUses === 1 ? 'Single-use' : `Up to ${inviteInfo.maxUses} sign-ups`)}
+                {' · '}expires in {inviteInfo?.expiryDays} day{inviteInfo?.expiryDays === 1 ? '' : 's'}
+                {' · '}grants <strong>{inviteInfo?.role}</strong> access.
               </div>
             </div>
           )}
