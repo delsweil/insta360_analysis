@@ -1,0 +1,32 @@
+{
+  "frames": 30,
+  "small_px": 40.0,
+  "device": "mps",
+  "settings": {
+    "960": {
+      "players_per_frame": 19.87,
+      "small_per_frame": 15.43,
+      "small_missed_vs_union_pct": 12.2,
+      "sec_per_frame": 0.2
+    },
+    "1280": {
+      "players_per_frame": 20.73,
+      "small_per_frame": 16.7,
+      "small_missed_vs_union_pct": 6.3,
+      "sec_per_frame": 0.19
+    },
+    "1600": {
+      "players_per_frame": 20.93,
+      "small_per_frame": 16.67,
+      "small_missed_vs_union_pct": 5.1,
+      "sec_per_frame": 0.26
+    },
+    "1920": {
+      "players_per_frame": 20.57,
+      "small_per_frame": 16.33,
+      "small_missed_vs_union_pct": 7.1,
+      "sec_per_frame": 0.32
+    }
+  },
+  "union_small_per_frame": 17.0
+}

@@ -49,7 +49,7 @@ OUT_W, OUT_H = 1280, 720
 OUT_FPS      = 29.97
 
 # ── Detection ─────────────────────────────────────────────────────
-IMGSZ_PLAYERS  = 960
+IMGSZ_PLAYERS  = 1280   # native size of the 1280x720 views; 960 shrank far-side players (detect_sweep: misses 12% -> 6%)
 IMGSZ_BALL     = 1280
 CONF_PLAYERS   = 0.20
 CONF_BALL      = 0.40
