@@ -53,7 +53,7 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
                 margin_m: float = MARGIN_M, tidy: bool = True, max_team: int = MAX_TEAM,
                 team_margin_m: float = TEAM_MARGIN_M, stats: Optional[dict] = None, feet: bool = True,
                 smooth: bool = True, a_attacks_right: Optional[bool] = None,
-                box: Optional[list] = None, low_conf: float = LOW_CONF, fill: bool = True) -> List[dict]:
+                box: Optional[list] = None, low_conf: float = LOW_CONF, fill: bool = True, ball: bool = True) -> List[dict]:
     """One part (one detections file) -> frames {vt, pan, fov, players:[(x, y, team)]}; vt = seconds in the joined video."""
     hdr, frames = AK.load_detections(det_path, max_lon=max_lon)
     fy = S.view_fy(hdr)
@@ -189,8 +189,13 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
         extra = BC.fill_gaps(np.array(owner), np.array([float(r["t"]) for r in frames]), a3[:, 0], a3[:, 1], team, trk3)
         if stats is not None:
             stats["filled"] = stats.get("filled", 0) + len(extra[0])
+    balls = [None] * len(frames)
+    if ball:                                       # the ball: one believable candidate per moment, or none (board_ball.py)
+        import board_ball as BB
+        balls = BB.track(frames, views, gm, fy, k_angle, tester, stats=stats)
     out = [{"vt": float(r["t"]) - t_in + video_start,
-            "pan": None if pan is None else float(pan[i]), "fov": None if fov is None else float(fov[i]), "players": []}
+            "pan": None if pan is None else float(pan[i]), "fov": None if fov is None else float(fov[i]), "players": [],
+            "ball": balls[i]}
            for i, r in enumerate(frames)]
     for k, i in enumerate(owner):
         out[i]["players"].append((float(rows[k][0]), float(rows[k][1]), int(team[k])))
@@ -222,13 +227,13 @@ def widen_to_keepers(box, xs, min_n: int = 30, pad: float = 1.0):
 def build(parts: List[dict], clusters, title: str = "", lang: str = "en", max_lon: float = 98.0, min_conf: float = MIN_CONF,
           min_height: float = MIN_HEIGHT, k_angle: float = 0.75, rescue: float = RESCUE,
           margin_m: float = MARGIN_M, tidy: bool = True, max_team: int = MAX_TEAM,
-          team_margin_m: float = TEAM_MARGIN_M, feet: bool = True, smooth: bool = True) -> dict:
+          team_margin_m: float = TEAM_MARGIN_M, feet: bool = True, smooth: bool = True, ball: bool = True) -> dict:
     """parts: [{det, kf, half, video_start, duration, box:[x0,x1,y0,y1], a_attacks_right}] in playing order."""
     frames, meta_parts = [], []
     stats: dict = {}
     for p in parts:
         fr = part_frames(p["det"], p.get("kf"), clusters, float(p["video_start"]), max_lon, min_conf, min_height, k_angle, rescue, p.get("calib"), margin_m,
-                         tidy, max_team, team_margin_m, stats, feet, smooth, p.get("a_attacks_right"), p.get("box"))
+                         tidy, max_team, team_margin_m, stats, feet, smooth, p.get("a_attacks_right"), p.get("box"), ball=ball)
         end = float(p["video_start"]) + float(p["duration"]) if p.get("duration") else None
         if end is not None:
             fr = [f for f in fr if f["vt"] <= end + 1e-6]
@@ -242,13 +247,18 @@ def build(parts: List[dict], clusters, title: str = "", lang: str = "en", max_lo
     if not frames:
         raise SystemExit("no moments for the board (no players found)")
     frames.sort(key=lambda f: f["vt"])
+    has_ball = ball and any(f.get("ball") for f in frames)
     return {"format": FORMAT, "version": VERSION, "title": title, "lang": lang, "k_angle": k_angle, "roles": bool(getattr(clusters, "has_roles", False)), "tidy": stats or None,
             "teams": {"A": {"name": clusters.names[0], "colour": clusters.colours[0]},
                       "B": {"name": clusters.names[1], "colour": clusters.colours[1]}},
             "parts": meta_parts,
+            "ball": ([None if f.get("ball") is None else [int(round(f["ball"][0] * 10)), int(round(f["ball"][1] * 10)),
+                                                          int(round(f["ball"][2] * 100))] for f in frames] if has_ball else None),
             "note": "frames[i] = [t, pan, fov, x1, y1, team1, x2, y2, team2, ...]: t = seconds in the joined video; pan/fov = "
                     "camera direction and zoom (degrees); x (sideways) and y (away from the camera) in decimetres; team 0 = A, "
-                    "1 = B, 2 = other / unknown (not counted), 3 = referee, 4 = goalkeeper of A, 5 = goalkeeper of B",
+                    "1 = B, 2 = other / unknown (not counted), 3 = referee, 4 = goalkeeper of A, 5 = goalkeeper of B. "
+                    "ball[i] belongs to frames[i]: [x, y, confidence %] (x, y in decimetres like the players) or null when "
+                    "there is no believable ball candidate (board_ball.py); only valid for a ball on the ground",
             "frames": [[round(f["vt"], 2), None if f["pan"] is None else round(f["pan"], 1),
                         None if f["fov"] is None else round(f["fov"], 1)]
                        + [v for (x, y, t) in f["players"] for v in (int(round(x * 10)), int(round(y * 10)), t)]
@@ -280,6 +290,7 @@ def main(argv=None) -> int:
     p.add_argument("--min-height", type=float, default=MIN_HEIGHT, help="smallest box (px) whose shirt colour is trusted")
     p.add_argument("--no-tidy", action="store_true", help="skip the clean-up of the team labels (tracks, pitch outline, 11 a side)")
     p.add_argument("--no-feet", action="store_true", help="place players by box height only (not combined with the foot position)")
+    p.add_argument("--no-ball", action="store_true", help="leave the ball out of the board data")
     p.add_argument("--no-smooth", action="store_true", help="show the raw position of every detection (no Kalman smoothing)")
     p.add_argument("--max-team", type=int, default=MAX_TEAM, help="most players of one team at one moment")
     p.add_argument("--team-margin-m", type=float, default=TEAM_MARGIN_M,
@@ -309,12 +320,16 @@ def main(argv=None) -> int:
                       "a_attacks_right": d.get("team_a_attacks_right")})
         t += a.durations[i]
     data = build(parts, clusters, a.title, a.lang, a.max_lon, a.min_conf, a.min_height, a.angle_factor, a.rescue_ratio, a.margin_m,
-                 not a.no_tidy, a.max_team, a.team_margin_m, not a.no_feet, not a.no_smooth)
+                 not a.no_tidy, a.max_team, a.team_margin_m, not a.no_feet, not a.no_smooth, not a.no_ball)
     write(a.out, data)
     print(f"wrote {a.out}: {len(data['frames'])} moments, {sum((len(f) - 3) // 3 for f in data['frames'])} player positions")
     st = data.get("tidy")
     if st and "feet_used" in st:
         print(f"positions: {st['feet_used']} combined with the foot position, {st.get('feet_gated', 0)} kept at box height only")
+    if st and st.get("ball_total"):
+        print(f"ball: {st.get('ball_moments', 0)} of {st['ball_total']} moments have a believable ball "
+              f"({100 * st.get('ball_moments', 0) / st['ball_total']:.0f} %); {st.get('ball_candidates', 0)} candidates, "
+              f"{st.get('ball_usable', 0)} usable after fixed spots / outline / horizon")
     if st and st.get("smoothed"):
         print(f"smoothed: {st['smoothed']} positions along tracks, {st.get('gated', 0)} wild measurements down-weighted")
     if st:

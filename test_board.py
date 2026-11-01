@@ -316,5 +316,77 @@ class TestBoard(unittest.TestCase):
             BD.build([{"det": a, "half": 1, "video_start": 0.0, "duration": 5.0}], FakeClusters())
 
 
+class TestBallOnTheBoard(unittest.TestCase):
+    def test_the_track_follows_the_moving_ball_not_the_stronger_distractors(self):
+        import board_ball as BB
+        cands = []
+        for i in range(60):
+            real = (-30.0 + 1.0 * i, 20.0, 0.45)                      # rolls 1 m a moment, mediocre confidence
+            cs = [real]
+            if i % 3 == 0:
+                cs.append((40.0 - 2.0 * (i % 7), 35.0, 0.8))          # a stronger candidate that jumps around the far side
+            if i in (10, 30):
+                cs.append((0.0, 5.0, 0.3))                            # isolated weak hit
+            cands.append(cs)
+        pick = BB.choose_track(cands)
+        self.assertGreaterEqual(sum(1 for i, j in enumerate(pick) if j == 0), 55)        # the real ball nearly everywhere
+        self.assertEqual(sum(1 for i, j in enumerate(pick) if j is not None and j > 0), 0)  # never a distractor
+
+    def test_an_isolated_weak_candidate_is_not_a_ball(self):
+        import board_ball as BB
+        pick = BB.choose_track([[], [(0.0, 10.0, 0.3)], [], [], []])
+        self.assertEqual(pick, [None] * 5)
+
+    def test_a_strong_isolated_hit_is_kept(self):
+        import board_ball as BB
+        self.assertEqual(BB.choose_track([[], [(0.0, 10.0, 0.9)], []]), [None, 0, None])
+
+    def test_a_ball_on_the_ground_lands_where_a_standing_player_with_the_same_feet_would(self):
+        import board_ball as BB
+        import ground_model as GM
+        import scene_check as S
+        lon, lat, centre = 12.0, -9.0, 0.0
+        h = float(GM.model_h(lon, lat, centre, 3.0, 0.0))
+        want = S.ground_position(lon, h, centre, 420.0, 0.75)
+        got = BB.project(lon, lat, centre, 3.0, 0.0, 420.0, 0.75)
+        self.assertAlmostEqual(got[0], want[0], places=6)
+        self.assertAlmostEqual(got[1], want[1], places=6)
+        self.assertIsNone(BB.project(lon, -1.0, centre, 3.0, 0.0, 420.0, 0.75))      # too near the horizon to tell
+
+    def test_old_detections_without_balls_give_a_board_without_one(self):
+        with tempfile.TemporaryDirectory() as d:
+            det = os.path.join(d, "d.jsonl")
+            write_dets(det, 0.0, [i / 3 for i in range(6)])
+            data = BD.build([{"det": det, "half": 1, "video_start": 0.0, "duration": 2.0}], FakeClusters())
+            self.assertIsNone(data["ball"])
+            self.assertEqual(len(data["frames"]), 6)
+
+
+    def test_a_rolling_ball_ends_up_in_the_board_and_a_fixed_spot_does_not(self):
+        import ground_model as GM
+        with tempfile.TemporaryDirectory() as d:
+            det = os.path.join(d, "d.jsonl")
+            with open(det, "w") as fh:
+                fh.write(json.dumps({"type": "header", "view_lons": [-40, 0, 40], "start": 0.0, "fps": 3.0,
+                                     "square_views": True, "colours": True}) + "\n")
+                for i in range(150):
+                    pl = []
+                    for lat in (-5.0, -8.0, -12.0, -16.0):
+                        h = float(GM.model_h(0.0, lat, 0.0, 300.0))
+                        pl.append([2.0 * lat / 10, lat, h, 0.9, None, [230, 230, 230]])
+                    balls = [[-30.0, -6.0, 0.8],                              # a mark: the same place in every moment
+                             [i * 0.08, -9.0, 0.6]]                           # the ball rolls along
+                    fh.write(json.dumps({"t": i / 3, "players": pl, "balls": balls}) + "\n")
+            data = BD.build([{"det": det, "half": 1, "video_start": 0.0, "duration": 50.0}], FakeClusters())
+            ball = data["ball"]
+            self.assertIsNotNone(ball)
+            self.assertEqual(len(ball), len(data["frames"]))
+            seen = [b for b in ball if b is not None]
+            self.assertGreater(len(seen), 120)
+            xs = [b[0] / 10 for b in seen]
+            self.assertGreater(max(xs) - min(xs), 3.0)                        # it moved: it is the rolling ball, not the mark
+            self.assertGreater(data["tidy"]["ball_moments"], 120)
+
+
 if __name__ == "__main__":
     unittest.main()

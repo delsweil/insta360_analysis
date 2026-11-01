@@ -22,6 +22,8 @@ const sd = (v: number[]) => {
 
 /** Events that are worth predicting come with a window: how long before it a signal may show. */
 export const EVENT_LEAD_S = 20
+/** Players this close (metres) to the ball count as 'near the ball'. */
+export const BALL_NEAR_M = 8
 
 export function eventsCsv(anns: Annotation[]): string {
   const rows = [...anns].sort((a, b) => a.timestamp_sec - b.timestamp_sec).map(a => {
@@ -37,8 +39,13 @@ export function framesCsv(board: Board, anns: Annotation[]): string {
   let k = 0
   const head = ['video_t', 'board_t', 'half', 'pan', 'fov', 'n_A', 'n_B', 'n_other', 'n_ref', 'n_GK_A', 'n_GK_B',
     'A_mean_x', 'A_mean_y', 'A_sd_x', 'A_sd_y', 'B_mean_x', 'B_mean_y', 'B_sd_x', 'B_sd_y',
-    'A_x_min', 'A_x_max', 'B_x_min', 'B_x_max', 'A_attacks_right', 'next_event_kind', 'next_event_team', 'next_event_in_s']
-  const rows = board.frames.map(f => {
+    'A_x_min', 'A_x_max', 'B_x_min', 'B_x_max', 'A_attacks_right', 'next_event_kind', 'next_event_team', 'next_event_in_s',
+    'ball_seen', 'ball_x', 'ball_y', 'ball_conf', 'ball_speed_ms', 'ball_n_A_near', 'ball_n_B_near', 'ball_dist_A', 'ball_dist_B']
+  // ball_x / ball_y are relative to the pitch centre like the player columns; ball_speed_ms is the speed since the last
+  // moment with a ball within 1 s; the *_near columns count players within BALL_NEAR_M of the ball, ball_dist_* is the
+  // distance (m) of the nearest player of that team (goalkeepers included).
+  let lastBall: { t: number; x: number; y: number } | null = null
+  const rows = board.frames.map((f, i) => {
     const t = f[0] as number
     const vt = t - board.shift
     const part = partAt(board, t)
@@ -53,12 +60,26 @@ export function framesCsv(board: Board, anns: Annotation[]): string {
     while (k < ev.length && ev[k].timestamp_sec < vt) k++
     const nx = k < ev.length && ev[k].timestamp_sec - vt <= EVENT_LEAD_S ? ev[k] : null
     const m = nx ? nx.label.match(/^(.*)_(home|away)$/) : null
+    const bl = board.ball?.[i] ?? null
+    const lx = bl ? bl[0] / 10 - cx : NaN
+    const ly = bl ? bl[1] / 10 - cy : NaN
+    let speed = NaN
+    if (bl) {
+      if (lastBall && t - lastBall.t > 0 && t - lastBall.t <= 1) speed = Math.hypot(lx - lastBall.x, ly - lastBall.y) / (t - lastBall.t)
+      lastBall = { t, x: lx, y: ly }
+    }
+    const distTo = (ps2: { x: number; y: number }[]) =>
+      bl && ps2.length ? Math.min(...ps2.map(p => Math.hypot(p.x - cx - lx, p.y - cy - ly))) : NaN
+    const dA = distTo(A), dB = distTo(B)
     return [vt, t, part?.half ?? '', f[1], f[2], A.length, B.length, of(2).length, of(3).length, of(4).length, of(5).length,
       mean(ax), mean(ay), sd(ax), sd(ay), mean(bx), mean(by), sd(bx), sd(by),
       ax.length ? Math.min(...ax) : NaN, ax.length ? Math.max(...ax) : NaN,
       bx.length ? Math.min(...bx) : NaN, bx.length ? Math.max(...bx) : NaN,
       part?.a_attacks_right === null || part?.a_attacks_right === undefined ? '' : part.a_attacks_right ? 1 : 0,
-      nx ? (m ? m[1] : nx.label) : '', nx ? (m ? m[2] : '') : '', nx ? nx.timestamp_sec - vt : '']
+      nx ? (m ? m[1] : nx.label) : '', nx ? (m ? m[2] : '') : '', nx ? nx.timestamp_sec - vt : '',
+      bl ? 1 : 0, lx, ly, bl ? bl[2] : NaN, speed,
+      bl ? A.filter(p => Math.hypot(p.x - cx - lx, p.y - cy - ly) <= BALL_NEAR_M).length : NaN,
+      bl ? B.filter(p => Math.hypot(p.x - cx - lx, p.y - cy - ly) <= BALL_NEAR_M).length : NaN, dA, dB]
   })
   return csv(head, rows)
 }
