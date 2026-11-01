@@ -17,6 +17,31 @@ import json
 from collections import defaultdict
 
 
+def hotspot_cells(recs, cell: float = 1.0, need: int = None, bin_s: float = 30.0, spread: float = 0.4):
+    """-> (set of (ix, iy) cells, need). A cell is a hotspot when a ball candidate sits in it in at least `need` frames
+    (default 4 % of the frames, at least 12) AND it keeps doing so through the half: in at least `spread` (40 %) of the
+    `bin_s`-second windows. A mark, a spare ball or a bag is there all game; a real ball resting on the centre spot or a
+    corner is there for a few kick-offs and set pieces, in a handful of windows, and must stay."""
+    need = need or max(12, int(0.04 * len(recs)))
+    ts = [r.get("t", k / 3.0) for k, r in enumerate(recs)]
+    t0 = min(ts) if ts else 0.0
+    n_bins = max(1, int((max(ts) - t0) // bin_s) + 1) if ts else 1
+    min_bins = max(2, int(spread * n_bins))
+    key = lambda lon, lat: (int(lon // cell), int(lat // cell))
+    near, own = defaultdict(set), defaultdict(set)
+    for k, r in enumerate(recs):
+        for b in r.get("balls", []):
+            cx, cy = key(b[0], b[1])
+            own[(cx, cy)].add(k)
+            for dx in (-1, 0, 1):                              # a ball on a cell edge counts for the neighbours too
+                for dy in (-1, 0, 1):
+                    near[(cx + dx, cy + dy)].add(k)
+    bins = lambda frames: {int((ts[k] - t0) // bin_s) for k in frames}
+    hot = {c for c, f in near.items()
+           if len(f) >= need and len(own.get(c, ())) >= need // 2 and len(bins(own.get(c, ()))) >= min_bins}
+    return hot, need
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("detections")
@@ -28,32 +53,22 @@ def main(argv=None):
     lines = [json.loads(l) for l in open(a.detections)]
     head, recs = lines[0], [r for r in lines[1:] if "t" in r]
     n_frames = len(recs)
-    need = a.min_frames or max(12, int(0.04 * n_frames))
+    hot, need = hotspot_cells(recs, a.cell, a.min_frames)
 
     def cell(lon, lat):
         return int(lon // a.cell), int(lat // a.cell)
 
-    frames_in = defaultdict(set)                               # cell -> frame indices with a candidate
-    for k, r in enumerate(recs):
-        for b in r.get("balls", []):
-            cx, cy = cell(b[0], b[1])
-            for dx in (-1, 0, 1):                              # count a candidate in the neighbours too
-                for dy in (-1, 0, 1):
-                    frames_in[(cx + dx, cy + dy)].add(k)
-    hot = {c for c, f in frames_in.items() if len(f) >= need}
-    # the cell itself (not its neighbours) is what gets removed: keep only cells that are hotspots on their own
     own = defaultdict(set)
     for k, r in enumerate(recs):
-        for b in r.get("balls", []):
-            own[cell(b[0], b[1])].add(k)
-    hot = {c for c in hot if len(own.get(c, ())) >= need // 2}
+        for bb in r.get("balls", []):
+            own[cell(bb[0], bb[1])].add(k)
 
     total = sum(len(r.get("balls", [])) for r in recs)
     gone = sum(1 for r in recs for b in r.get("balls", []) if cell(b[0], b[1]) in hot)
     frames_before = sum(1 for r in recs if r.get("balls"))
     frames_after = sum(1 for r in recs if any(cell(b[0], b[1]) not in hot for b in r.get("balls", [])))
     print(f"{n_frames} frames, {total} candidates, {frames_before} frames with one ({100 * frames_before / max(1, n_frames):.0f} %)")
-    print(f"hotspot rule: a 1-degree cell with a candidate in >= {need} frames")
+    print(f"hotspot rule: a 1-degree cell with a candidate in >= {need} frames, spread over the half (not just a few kick-offs)")
     for c in sorted(hot, key=lambda c: -len(own[c]))[:15]:
         print(f"  lon {c[0] * a.cell:7.1f}  lat {c[1] * a.cell:6.1f}   {len(own[c]):5d} frames")
     print(f"{len(hot)} hotspot cells hold {gone} of {total} candidates ({100 * gone / max(1, total):.0f} %)")

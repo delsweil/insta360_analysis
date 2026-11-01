@@ -83,17 +83,35 @@ def foot_on_mask(mask: np.ndarray, lon: float, lat: float) -> bool:
     return bool(mask[yi, xi])
 
 
-def apply(src: str, dst: str, calib: str, margin: float = 25.0) -> tuple:
+BALL_MARGIN_PX = 100.0        # a ball may be this far outside the outline (about 8 degrees): in the air above the far side
+
+
+def apply(src: str, dst: str, calib: str, margin: float = 25.0, ball_margin: float = BALL_MARGIN_PX) -> tuple:
+    """Flag players off the pitch and drop ball candidates that cannot be the ball: outside the outline (plus
+    `ball_margin`), or in a spot that fires in many frames (a line mark, a spare ball, a bag). -> (players, players off)."""
+    import ball_hotspots as BH
     mask = pitch_mask(calib, margin)
+    bmask = pitch_mask(calib, ball_margin) if ball_margin else None
     n_all = n_off = 0
-    with open(src) as fi, open(dst, "w") as fo:
+    with open(src) as fi:
         header = json.loads(fi.readline())
-        header["pitch_filter"] = {"calib": calib, "margin_px": margin}
+        rows = [json.loads(line) for line in fi if line.strip()]
+    hot, _ = BH.hotspot_cells([r for r in rows if "t" in r])
+    n_balls = n_balls_gone = 0
+    with open(dst, "w") as fo:
+        header["pitch_filter"] = {"calib": calib, "margin_px": margin, "ball_margin_px": ball_margin}
         fo.write(json.dumps(header) + "\n")
-        for line in fi:
-            if not line.strip():
-                continue
-            r = json.loads(line)
+        for r in rows:
+            keep = []
+            for b in r.get("balls", []):
+                n_balls += 1
+                bad = (bmask is not None and not foot_on_mask(bmask, b[0], b[1])) or \
+                      (int(b[0] // 1.0), int(b[1] // 1.0)) in hot
+                n_balls_gone += bad
+                if not bad:
+                    keep.append(b)
+            if "balls" in r:
+                r["balls"] = keep
             for p in r["players"]:
                 on = foot_on_mask(mask, p[0], p[1])
                 while len(p) < 5:
@@ -102,6 +120,7 @@ def apply(src: str, dst: str, calib: str, margin: float = 25.0) -> tuple:
                 n_all += 1
                 n_off += 0 if on else 1
             fo.write(json.dumps(r) + "\n")
+    print(f"balls: {n_balls_gone} of {n_balls} candidates dropped (off the pitch or in {len(hot)} fixed spots)")
     return n_all, n_off
 
 
