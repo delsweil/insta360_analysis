@@ -22,6 +22,8 @@ export type Board = {
   parts: BoardPart[]
   /** frames[i] = [t, pan, fov, x1, y1, team1, x2, y2, team2, ...] (x, y in decimetres; team 0 = A, 1 = B, 2 = other, 3 = referee, 4 = goalkeeper of A, 5 = goalkeeper of B) */
   frames: (number | null)[][]
+  /** ball[i] belongs to frames[i]: [x, y, confidence %] (x, y in decimetres) or null; null when the file has no ball */
+  ball: (number[] | null)[] | null
   times: Float64Array
   box: Box              // whole-game fallback when a part carries none
   kAngle: number
@@ -44,6 +46,7 @@ export function parseBoard(raw: Raw): Board {
     teams: raw.teams as Board['teams'],
     parts,
     frames,
+    ball: Array.isArray(raw.ball) && raw.ball.length === frames.length ? (raw.ball as (number[] | null)[]) : null,
     times,
     box: wholeBox(frames),
     kAngle: typeof raw.k_angle === 'number' ? raw.k_angle : 0.75,
