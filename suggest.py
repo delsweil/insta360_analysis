@@ -26,12 +26,14 @@ from typing import List, Optional
 
 import numpy as np
 
-MODEL = "ball-end-v1"
-END_FRAC = 0.67          # the ball must be this far (fraction of the half-length from the middle) towards a goal
+MODEL = "ball-end-v2"
+END_FRAC = 0.5           # the ball must be this far (fraction of the half-length from the middle) towards a goal
 MIN_S = 2.0              # for at least this long (smoothed)
 MERGE_S = 15.0           # episodes closer than this are one
 LEAD_S = 12.0            # the clip starts this long before the ball arrives (the coach's own lead-in)
 TAIL_S = 8.0
+PLAYERS_THR = 2.0        # players-only candidates: play centre + opponent's last defender pushed this many sd above the game's mean
+PLAYERS_SEP = 40.0       # at least this many seconds between two of them
 SMOOTH = 9               # moments (3 s) of running median: the track jumps now and then
 
 
@@ -116,7 +118,32 @@ def _episodes(t: np.ndarray, sig: np.ndarray, thr: np.ndarray, min_s: float, mer
     return out
 
 
-def suggest(tab: dict, end_frac: float = END_FRAC, teams: str = "home") -> List[dict]:
+def _players_peaks(tab: dict, thr: float, sep: float) -> List[int]:
+    """Moments where the play is pushed towards team A's goal and the opponent's last defender is deep: indices into the table."""
+    def smooth(x):
+        s = np.asarray(x, float).copy()
+        k = 30
+        idx = np.arange(len(s))
+        ok = ~np.isnan(s)
+        if ok.sum() < 10:
+            return np.full(len(s), np.nan)
+        s = np.interp(idx, idx[ok], s[ok])
+        return np.convolve(s, np.ones(k) / k, mode="same")
+    c, b = smooth(tab["cog"]), smooth(tab["b_deep"])
+    if np.isnan(c).all() or np.isnan(b).all() or np.nanstd(c) < 1e-6 or np.nanstd(b) < 1e-6:
+        return []
+    sc = (c - np.nanmean(c)) / np.nanstd(c) + (b - np.nanmean(b)) / np.nanstd(b)
+    t, keep = tab["t"], []
+    for i in np.argsort(-np.nan_to_num(sc, nan=-9)):
+        if sc[i] < thr:
+            break
+        if all(abs(t[i] - t[j]) >= sep for j in keep):
+            keep.append(int(i))
+    return sorted(keep)
+
+
+def suggest(tab: dict, end_frac: float = END_FRAC, teams: str = "home", players: bool = True,
+            players_thr: float = PLAYERS_THR) -> List[dict]:
     """-> suggestions, in time order: {id, label, t_peak, t_start, t_end, score, ...}; times in the table's own seconds."""
     t, att, hl = tab["t"], tab["att"], tab["half_len"]
     out: List[dict] = []
@@ -138,7 +165,14 @@ def suggest(tab: dict, end_frac: float = END_FRAC, teams: str = "home") -> List[
             score = round(0.4 * depth + 0.3 * dwell + 0.3 * push, 2)
             out.append({"label": label, "t_peak": round(float(t[k]), 1), "t_start": round(float(t[k]) - LEAD_S, 1),
                         "t_end": round(float(t[k]) + TAIL_S, 1), "score": score, "reach_m": round(reach, 1),
-                        "dwell_s": round(float(t[b] - t[a]), 1)})
+                        "dwell_s": round(float(t[b] - t[a]), 1), "source": "ball"})
+    if players and teams in ("both", "home"):             # the ball is lost on some attacks: the players still show the push forward
+        have = [s["t_peak"] for s in out if s["label"] == "shot_home"]
+        for k in _players_peaks(tab, players_thr, PLAYERS_SEP):
+            if all(abs(float(t[k]) - p) > 15.0 for p in have):
+                out.append({"label": "shot_home", "t_peak": round(float(t[k]), 1), "t_start": round(float(t[k]) - LEAD_S, 1),
+                            "t_end": round(float(t[k]) + TAIL_S, 1), "score": 0.2, "reach_m": None, "dwell_s": None,
+                            "source": "players"})
     out.sort(key=lambda s: s["t_peak"])
     for i, s in enumerate(out):
         s["id"] = f"s{i + 1:03d}"
@@ -186,14 +220,19 @@ def review(suggestions_json: str, events_csv: str, tol: float = 12.0) -> dict:
             status = "moved"
         else:
             status = "kept"
-        rows.append({"id": s["id"], "suggested_label": s["label"], "final_label": None if r is None else r["label"],
+        rows.append({"id": s["id"], "source": s.get("source", "ball"), "suggested_label": s["label"], "final_label": None if r is None else r["label"],
                      "t_peak": s["t_peak"], "score": s["score"], "status": status})
     manual = e[~e.note.fillna("").str.contains("Suggested \\(")]
     manual = manual[manual.kind.isin(["shot", "goal"])]
     peaks = np.array([s["t_peak"] for s in sg]) if sg else np.array([])
     missed = [float(t) for t in manual.video_t if not len(peaks) or np.min(np.abs(peaks - (float(t) + LEAD_S))) > 8.0]
     counts = {k: sum(1 for r in rows if r["status"] == k) for k in ("kept", "moved", "relabelled", "deleted")}
-    return {"counts": counts, "rows": rows, "missed_by_suggestions": missed, "manual_shots_goals": int(len(manual))}
+    by_source = {}
+    for src in sorted({r["source"] for r in rows}):
+        rs = [r for r in rows if r["source"] == src]
+        by_source[src] = {"suggestions": len(rs), "deleted": sum(r["status"] == "deleted" for r in rs),
+                          "kept_or_changed": sum(r["status"] != "deleted" for r in rs)}
+    return {"counts": counts, "by_source": by_source, "rows": rows, "missed_by_suggestions": missed, "manual_shots_goals": int(len(manual))}
 
 
 def main(argv=None) -> int:
@@ -209,6 +248,8 @@ def main(argv=None) -> int:
         c = r["counts"]
         n = sum(c.values())
         print(f"{n} suggestions: {c['kept']} kept, {c['moved']} moved, {c['relabelled']} relabelled, {c['deleted']} deleted")
+        for src, v in r["by_source"].items():
+            print(f"  from the {src}: {v['suggestions']} suggestions, {v['kept_or_changed']} kept (moved or relabelled included), {v['deleted']} deleted")
         print(f"{len(r['missed_by_suggestions'])} of {r['manual_shots_goals']} shots and goals you added yourself had no suggestion near them")
         if b.out:
             import pandas as pd
@@ -227,6 +268,8 @@ def _main(argv=None) -> int:
     p.add_argument("--out", help="suggestions file (JSON)")
     p.add_argument("--teams", choices=["both", "home", "away"], default="home",
                    help="home = team A only (default: the away suggestions are unchecked, no annotated away shots with a ball yet)")
+    p.add_argument("--no-players", action="store_true", help="only suggestions from the ball (fewer, more often right)")
+    p.add_argument("--players-thr", type=float, default=PLAYERS_THR, help="higher = fewer players-only suggestions")
     p.add_argument("--end-frac", type=float, default=END_FRAC, help="how far towards the goal end the ball must be (fraction of half-length)")
     a = p.parse_args(argv)
     if a.board:
@@ -234,11 +277,12 @@ def _main(argv=None) -> int:
             tab = table_from_board(json.load(fh))
     else:
         tab = table_from_csv(a.csv)
-    sg = suggest(tab, a.end_frac, a.teams)
+    sg = suggest(tab, a.end_frac, a.teams, not a.no_players, a.players_thr)
     time_base = tab.get("time_base", "board")
     dur = float(np.nanmax(tab["t"]) - np.nanmin(tab["t"]))
     print(f"{len(sg)} suggestions in {dur / 60:.0f} min ({len(sg) / max(dur / 600, 1e-9):.1f} per 10 min): "
-          f"{sum(s['label'] == 'shot_home' for s in sg)} for home, {sum(s['label'] == 'shot_away' for s in sg)} for away")
+          f"{sum(s['label'] == 'shot_home' for s in sg)} for home, {sum(s['label'] == 'shot_away' for s in sg)} for away; "
+          f"{sum(s.get('source') == 'ball' for s in sg)} from the ball, {sum(s.get('source') == 'players' for s in sg)} from the players alone")
     if a.events:
         r = evaluate(sg, a.events)
         print(f"against your annotations (home shots and goals): found {r['found']} of {r['events']}; "
