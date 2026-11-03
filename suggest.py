@@ -26,12 +26,13 @@ from typing import List, Optional
 
 import numpy as np
 
-MODEL = "ball-end-v2"
+MODEL = "ball-end-v3"
 END_FRAC = 0.5           # the ball must be this far (fraction of the half-length from the middle) towards a goal
 MIN_S = 2.0              # for at least this long (smoothed)
 MERGE_S = 15.0           # episodes closer than this are one
 LEAD_S = 12.0            # the clip starts this long before the ball arrives (the coach's own lead-in)
 TAIL_S = 8.0
+MAX_PER_10MIN = 6.0      # at most this many suggestions per 10 minutes of the game (the best-scored ones stay); 0 = no limit
 PLAYERS_THR = 2.0        # players-only candidates: play centre + opponent's last defender pushed this many sd above the game's mean
 PLAYERS_SEP = 40.0       # at least this many seconds between two of them
 SMOOTH = 9               # moments (3 s) of running median: the track jumps now and then
@@ -81,7 +82,7 @@ def table_from_csv(path: str):
     cog = s * (f.A_mean_x.fillna(0) * na + f.B_mean_x.fillna(0) * nb) / (na + nb).replace(0, np.nan)
     bdeep = np.where(s > 0, f.B_x_max, -f.B_x_min)
     half_len = np.full(len(f), 52.0)           # the export has no pitch box: a normal 105 m pitch
-    return {"t": f.video_t.values.astype(float), "att": (s * f.ball_x).values.astype(float), "half_len": half_len,
+    return {"t": f.video_t.values.astype(float), "att": (s * f.ball_x).values.astype(float) if "ball_x" in f else np.full(len(f), np.nan), "half_len": half_len,
             "cog": cog.values.astype(float), "b_deep": bdeep.astype(float), "time_base": "video"}
 
 
@@ -142,8 +143,8 @@ def _players_peaks(tab: dict, thr: float, sep: float) -> List[int]:
     return sorted(keep)
 
 
-def suggest(tab: dict, end_frac: float = END_FRAC, teams: str = "home", players: bool = True,
-            players_thr: float = PLAYERS_THR) -> List[dict]:
+def suggest(tab: dict, end_frac: float = END_FRAC, teams: str = "both", players: bool = True,
+            players_thr: float = PLAYERS_THR, max_per_10min: float = MAX_PER_10MIN) -> List[dict]:
     """-> suggestions, in time order: {id, label, t_peak, t_start, t_end, score, ...}; times in the table's own seconds."""
     t, att, hl = tab["t"], tab["att"], tab["half_len"]
     out: List[dict] = []
@@ -173,21 +174,26 @@ def suggest(tab: dict, end_frac: float = END_FRAC, teams: str = "home", players:
                 out.append({"label": "shot_home", "t_peak": round(float(t[k]), 1), "t_start": round(float(t[k]) - LEAD_S, 1),
                             "t_end": round(float(t[k]) + TAIL_S, 1), "score": 0.2, "reach_m": None, "dwell_s": None,
                             "source": "players"})
+    if max_per_10min and len(t) > 1:                      # too many to review is as bad as too few: keep the best-scored
+        keep = int(round(max_per_10min * float(np.nanmax(t) - np.nanmin(t)) / 600.0))
+        if len(out) > keep:
+            out = sorted(out, key=lambda s: -s["score"])[:keep]
     out.sort(key=lambda s: s["t_peak"])
     for i, s in enumerate(out):
         s["id"] = f"s{i + 1:03d}"
     return out
 
 
-def evaluate(sugg: List[dict], events_csv: str, lead: float = 12.0, tol: float = 8.0, labels=("shot_home", "goal_home")) -> dict:
-    """Compare with the coach's annotations: an annotation is found when a suggestion's moment is within `tol` s of annotation + lead."""
+def evaluate(sugg: List[dict], events_csv: str, lead: float = 12.0, tol: float = 8.0, team: str = "home") -> dict:
+    """Compare with the coach's annotations for one team. Shots and goals are one class (the suggestion cannot tell them apart):
+    an annotation is found when a suggestion's moment is within `tol` s of annotation + lead."""
     import pandas as pd
     e = pd.read_csv(events_csv)
-    ev = e[e.label.isin(labels)].video_t.values
-    P = [s["t_peak"] for s in sugg if s["label"] in ("shot_home",)] if "shot_home" in labels else [s["t_peak"] for s in sugg]
+    ev = e[e.label.isin((f"shot_{team}", f"goal_{team}"))].video_t.values
+    P = [s["t_peak"] for s in sugg if s["label"] == f"shot_{team}"]
     found = sum(any(abs(p - (x + lead)) <= tol for p in P) for x in ev)
     right = sum(any(abs(p - (x + lead)) <= tol for x in ev) for p in P)
-    return {"events": int(len(ev)), "found": int(found), "suggestions": len(P), "right": int(right)}
+    return {"team": team, "events": int(len(ev)), "found": int(found), "suggestions": len(P), "right": int(right)}
 
 
 def review(suggestions_json: str, events_csv: str, tol: float = 12.0) -> dict:
@@ -266,10 +272,12 @@ def _main(argv=None) -> int:
     src.add_argument("--csv", help="<game>_frames.csv from the web export")
     p.add_argument("--events", help="<game>_events.csv: report how many of the coach's shots and goals were found")
     p.add_argument("--out", help="suggestions file (JSON)")
-    p.add_argument("--teams", choices=["both", "home", "away"], default="home",
-                   help="home = team A only (default: the away suggestions are unchecked, no annotated away shots with a ball yet)")
+    p.add_argument("--teams", choices=["both", "home", "away"], default="both",
+                   help="both = chances for team A (home) and team B (away; from the ball only: untested, no annotated away chance with a ball yet)")
     p.add_argument("--no-players", action="store_true", help="only suggestions from the ball (fewer, more often right)")
     p.add_argument("--players-thr", type=float, default=PLAYERS_THR, help="higher = fewer players-only suggestions")
+    p.add_argument("--max-per-10min", type=float, default=MAX_PER_10MIN,
+                   help="at most this many suggestions per 10 minutes, best score first (0 = no limit)")
     p.add_argument("--end-frac", type=float, default=END_FRAC, help="how far towards the goal end the ball must be (fraction of half-length)")
     a = p.parse_args(argv)
     if a.board:
@@ -277,16 +285,18 @@ def _main(argv=None) -> int:
             tab = table_from_board(json.load(fh))
     else:
         tab = table_from_csv(a.csv)
-    sg = suggest(tab, a.end_frac, a.teams, not a.no_players, a.players_thr)
+    sg = suggest(tab, a.end_frac, a.teams, not a.no_players, a.players_thr, a.max_per_10min)
     time_base = tab.get("time_base", "board")
     dur = float(np.nanmax(tab["t"]) - np.nanmin(tab["t"]))
     print(f"{len(sg)} suggestions in {dur / 60:.0f} min ({len(sg) / max(dur / 600, 1e-9):.1f} per 10 min): "
           f"{sum(s['label'] == 'shot_home' for s in sg)} for home, {sum(s['label'] == 'shot_away' for s in sg)} for away; "
           f"{sum(s.get('source') == 'ball' for s in sg)} from the ball, {sum(s.get('source') == 'players' for s in sg)} from the players alone")
     if a.events:
-        r = evaluate(sg, a.events)
-        print(f"against your annotations (home shots and goals): found {r['found']} of {r['events']}; "
-              f"{r['right']} of {sum(s['label'] == 'shot_home' for s in sg)} home suggestions match one")
+        for tm in ("home", "away"):
+            r = evaluate(sg, a.events, team=tm)
+            if r["events"] or r["suggestions"]:
+                print(f"against your annotations ({tm} shots and goals as one class): found {r['found']} of {r['events']}; "
+                      f"{r['right']} of {r['suggestions']} {tm} suggestions match one")
     if a.out:
         with open(a.out, "w") as fh:
             json.dump({"format": "football-autopan-suggestions", "version": 1, "model": MODEL,
