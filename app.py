@@ -209,7 +209,7 @@ def assign_teams(jid: str, body: dict) -> None:
     after = P.read_json(path) or {}
     if any(before.get(k) != after.get(k) for k in ("assign", "names", "colours")) or ("attack" in body and old_attack != new_attack):
         # the statistics and the board were made from the old labels: make them again (the video does not depend on them)
-        job.clear("stats", "board", "package")
+        job.clear("stats", "board", "suggest", "package")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -255,14 +255,14 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/jobs":
                 return self._json({"jobs": list_jobs(), "root": STATE["root"]})
             if u.path.startswith("/api/jobs/") and u.path.endswith("/outline"):
-                job = get_job(u.path.split("/")[3])
+                job = get_job(unquote(u.path.split("/")[3]))
                 i = int(q.get("video", 0))
                 job.ensure_frame(i)
                 pts, src = job.outline_points(i)
                 return self._json({"points": pts, "source": src, "frame": f"pitch{i}_frame.png", "size": [2880, 1440],
                                    "feet": job.feet(i) if os.path.isfile(job.p(f"v{i}.detections.jsonl")) else []})
             if u.path.startswith("/api/jobs/"):
-                return self._json(job_view(u.path.split("/")[3]))
+                return self._json(job_view(unquote(u.path.split("/")[3])))
             if u.path.startswith("/files/"):
                 return self._file(u.path)
             return self._send(404, b"not found", "text/plain")
@@ -336,7 +336,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"id": os.path.basename(job.dir), "error": err})
             parts = u.path.split("/")
             if len(parts) == 5 and parts[1] == "api" and parts[2] == "jobs":
-                jid, action = parts[3], parts[4]
+                jid, action = unquote(parts[3]), parts[4]
                 job_dir(jid)
                 if action == "teams":
                     assign_teams(jid, body)
