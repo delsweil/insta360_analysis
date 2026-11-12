@@ -8,6 +8,7 @@ import Topbar from '@/components/Topbar'
 import AnnotationShape from '@/components/AnnotationShape'
 import ShareModal from '@/components/ShareModal'
 import ClipModal from '@/components/ClipModal'
+import { createClipLink, shareOrCopy, windowAround, highlightStart, highlightEnd } from '@/lib/clipLinks'
 import AnnotationFilter, { type FilterState, ALL_FILTERS, passesFilter } from '@/components/AnnotationFilter'
 import ClipRecorder from '@/components/ClipRecorder'
 import AnnotationCanvas, { type Shape, type Tool, type AnnotationCanvasHandle } from '@/components/AnnotationCanvas'
@@ -113,6 +114,8 @@ export default function GameView({ gameId, shareToken }: Props) {
   const clipRef = useRef<{ start: number; end: number } | null>(null)
   useEffect(() => { clipRef.current = clip }, [clip])
   const [clipDone, setClipDone] = useState(false)
+  const [sharingId, setSharingId] = useState<string | null>(null)
+  const [shareNote, setShareNote] = useState<string | null>(null)
   const [previewWindow, setPreviewWindow] = useState<{ start: number; end: number } | null>(null) // coach previewing a clip before sharing
   const [markIn, setMarkIn] = useState<number | null>(null)
   const [isRecording, setIsRecording] = useState(false)
@@ -352,6 +355,26 @@ export default function GameView({ gameId, shareToken }: Props) {
     setPreviewWindow({ start, end })
     seekTo(start)
   }, [seekTo])
+
+  // Where a viewer may cut their own clip: inside the clip they were sent, or around the highlights that were shared.
+  const clipLimit: [number, number] | null = clip ? [clip.start, clip.end] : readOnly ? windowAround(annotations, currentTime) : null
+
+  // One tap on a highlight in the list: make a link to just that highlight and share it.
+  const shareAnnotation = useCallback(async (ann: Annotation) => {
+    if (!game) return
+    setSharingId(ann.id)
+    const made = await createClipLink({
+      gameId: id, parentToken: shareToken, annotations,
+      start: Math.max(0, highlightStart(ann) - 2), end: highlightEnd(ann), includeDrawings: true,
+    })
+    let note = made.error ? `Could not create the link: ${made.error}` : ''
+    if (made.url) {
+      const r = await shareOrCopy(made.url, game.title)
+      note = r === 'copied' ? 'Link copied' : r === 'failed' ? 'Could not share the link' : ''
+    }
+    setSharingId(null)
+    if (note) { setShareNote(note); setTimeout(() => setShareNote(null), 2500) }
+  }, [game, id, shareToken, annotations])
 
   // The player is given the same window, so it starts and stops there by itself.
   const clipParams = clip ? `&start=${Math.floor(clip.start)}&end=${Math.ceil(clip.end)}` : ''
@@ -1713,6 +1736,24 @@ export default function GameView({ gameId, shareToken }: Props) {
               </button>
             )}
 
+            {/* Clip link: coaches, and viewers of a shared link (cut from what was shared) */}
+            {(isCoach || readOnly) && (
+              <button
+                onClick={() => { setShowClip(true); setHudVisible(true) }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '0 11px', height: 38,
+                  background: 'rgba(232,120,10,0.15)',
+                  border: '1px solid rgba(232,120,10,0.4)',
+                  borderRadius: 9, color: '#E8780A',
+                  fontSize: 12, fontWeight: 600,
+                  fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
+                }}
+              >
+                ✂ Clip
+              </button>
+            )}
+
             {/* Playback speed */}
             <button
               onClick={cycleSpeed}
@@ -1796,6 +1837,33 @@ export default function GameView({ gameId, shareToken }: Props) {
           </div>
           )}
         </div>
+
+        {showClip && (
+          <ClipModal
+            gameId={id}
+            annotations={annotations}
+            currentTime={currentTime}
+            duration={duration}
+            parentToken={shareToken}
+            limit={clipLimit}
+            onPreview={previewClip}
+            hidden={!!previewWindow}
+            onClose={() => { setShowClip(false); setPreviewWindow(null) }}
+          />
+        )}
+        {shareNote && (
+          <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 102, padding: '10px 18px', borderRadius: 10, background: '#0f2972', color: '#fff', fontSize: 13, fontWeight: 600 }}>
+            {shareNote}
+          </div>
+        )}
+        {previewWindow && (
+          <button
+            onClick={() => { pauseVideo(); setPreviewWindow(null) }}
+            style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', zIndex: 101, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 10, border: 'none', background: '#0f2972', color: '#fff', cursor: 'pointer' }}
+          >
+            ← Back to the clip
+          </button>
+        )}
 
         {/* ── Statistics sheet (slides up from bottom) ── */}
         {showStats && statsState.status === 'ready' && (
@@ -1942,9 +2010,25 @@ export default function GameView({ gameId, shareToken }: Props) {
                       fontSize: 10, fontWeight: 600,
                       color: isActive ? '#93bbff' : 'rgba(255,255,255,0.5)',
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      flex: 1, minWidth: 0,
                     }}>
                       {labelDisplay(ann.label, game.home_team, game.away_team)}
                     </div>
+                    {!clip && (
+                      <button
+                        onClick={e => { e.stopPropagation(); shareAnnotation(ann) }}
+                        disabled={sharingId === ann.id}
+                        aria-label="Share this clip"
+                        title="Share this clip"
+                        style={{
+                          flexShrink: 0, width: 28, height: 28, borderRadius: 7,
+                          background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.18)',
+                          color: 'rgba(255,255,255,0.8)', fontSize: 13, cursor: 'pointer',
+                        }}
+                      >
+                        {sharingId === ann.id ? '…' : '↗'}
+                      </button>
+                    )}
                   </div>
                 )
               })}
@@ -2121,6 +2205,20 @@ export default function GameView({ gameId, shareToken }: Props) {
               </button>
             </div>
           )}
+          {readOnly && (
+            <button
+              onClick={() => setShowClip(true)}
+              title="Make a link to a short clip from what was shared"
+              style={{
+                fontSize: 12, fontWeight: 600, padding: '7px 14px',
+                borderRadius: 8, border: '1px solid #E8780A',
+                background: '#fff', color: '#E8780A',
+                cursor: 'pointer', flexShrink: 0,
+              }}
+            >
+              ✂ Clip link
+            </button>
+          )}
           {readOnly && !clip && filteredAnnotations.length > 0 && (
             <button
               onClick={startReelForRecording}
@@ -2145,9 +2243,25 @@ export default function GameView({ gameId, shareToken }: Props) {
             annotations={annotations}
             currentTime={currentTime}
             duration={duration}
+            parentToken={shareToken}
+            limit={clipLimit}
             onPreview={previewClip}
+            hidden={!!previewWindow}
             onClose={() => { setShowClip(false); setPreviewWindow(null) }}
           />
+        )}
+        {shareNote && (
+          <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 102, padding: '10px 18px', borderRadius: 10, background: '#0f2972', color: '#fff', fontSize: 13, fontWeight: 600 }}>
+            {shareNote}
+          </div>
+        )}
+        {previewWindow && (
+          <button
+            onClick={() => { pauseVideo(); setPreviewWindow(null) }}
+            style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', zIndex: 101, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 10, border: 'none', background: '#0f2972', color: '#fff', cursor: 'pointer' }}
+          >
+            ← Back to the clip
+          </button>
         )}
 
         {showShare && (

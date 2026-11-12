@@ -1,8 +1,8 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { supabase } from '@/lib/supabase'
 import type { Annotation } from '@/lib/supabase'
+import { createClipLink, drawingsIn } from '@/lib/clipLinks'
 
 function formatTime(sec: number) {
   const s = Math.max(0, sec)
@@ -11,18 +11,16 @@ function formatTime(sec: number) {
   return `${m}:${r.toFixed(1).padStart(4, '0')}`
 }
 
-// A drawing shows between timestamp_sec and annotation_end_sec; the clip needs it when those overlap the clip window.
-function shapeWindow(a: Annotation): [number, number] {
-  return [a.timestamp_sec, a.annotation_end_sec ?? a.timestamp_sec + 1.5]
-}
-
 interface Props {
   gameId: string
   annotations: Annotation[]
   currentTime: number
   duration: number
+  parentToken?: string            // set when a viewer cuts a clip from a shared link
+  limit?: [number, number] | null // the stretch a viewer may cut from
   onPreview: (start: number, end: number) => void
   onClose: () => void
+  hidden?: boolean   // while the clip is previewing, the dialog steps aside so the video is visible
 }
 
 const LEAD_IN = 12   // same window the suggestions use: build-up before the moment ...
@@ -30,8 +28,10 @@ const LEAD_OUT = 8   // ... and the finish after it
 
 const NUDGES = [-5, -1, -0.2, 0.2, 1, 5]
 
-export default function ClipModal({ gameId, annotations, currentTime, duration, onPreview, onClose }: Props) {
-  const clamp = (v: number) => Math.min(Math.max(0, v), duration > 0 ? duration : v)
+export default function ClipModal({ gameId, annotations, currentTime, duration, parentToken, limit, onPreview, onClose, hidden }: Props) {
+  const lo = limit ? limit[0] : 0
+  const hi = limit ? limit[1] : (duration > 0 ? duration : Infinity)
+  const clamp = (v: number) => Math.min(Math.max(lo, v), hi)
   const [start, setStart] = useState(() => clamp(currentTime - LEAD_IN))
   const [end, setEnd] = useState(() => clamp(currentTime + LEAD_OUT))
   const [includeDrawings, setIncludeDrawings] = useState(true)
@@ -43,11 +43,7 @@ export default function ClipModal({ gameId, annotations, currentTime, duration, 
   const valid = end - start >= 1
 
   // Coach drawings (tactical annotations with shapes) that are on screen at some point inside the clip.
-  const drawings = useMemo(() => annotations.filter(a => {
-    if (a.label !== 'tactical' || !a.shapes?.length) return false
-    const [from, to] = shapeWindow(a)
-    return to >= start && from <= end
-  }), [annotations, start, end])
+  const drawings = useMemo(() => drawingsIn(annotations, start, end), [annotations, start, end])
 
   const move = (which: 'start' | 'end', delta: number) => {
     setUrl(null)
@@ -58,20 +54,9 @@ export default function ClipModal({ gameId, annotations, currentTime, duration, 
   const generate = async () => {
     if (!valid) return
     setGenerating(true); setError('')
-    const ids = includeDrawings ? drawings.map(a => a.id) : []
-    const { data, error: err } = await supabase
-      .from('share_links')
-      .insert({
-        game_id: gameId,
-        annotation_ids: ids,
-        clip_start_sec: Math.round(start * 10) / 10,
-        clip_end_sec: Math.round(end * 10) / 10,
-        clip_only: true,
-      })
-      .select('token')
-      .single()
-    if (data?.token) setUrl(`${window.location.origin}/share/${data.token}`)
-    else setError(err?.message ?? 'Could not create the link.')
+    const made = await createClipLink({ gameId, parentToken, annotations, start, end, includeDrawings })
+    if (made.url) setUrl(made.url)
+    else setError(made.error ?? 'Could not create the link.')
     setGenerating(false)
   }
 
@@ -114,14 +99,14 @@ export default function ClipModal({ gameId, annotations, currentTime, duration, 
 
   return (
     <div
-      style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(15,41,114,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+      style={{ display: hidden ? 'none' : 'flex', position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(15,41,114,0.5)', alignItems: 'center', justifyContent: 'center', padding: 20 }}
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 560, maxHeight: '85vh', overflowY: 'auto' }}>
         <div style={{ padding: '16px 20px', borderBottom: '1px solid #E4E6EE', display: 'flex', justifyContent: 'space-between' }}>
           <div>
             <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 20, color: '#0f2972', letterSpacing: '0.04em' }}>Clip link</div>
-            <div style={{ fontSize: 11, color: '#8A8F9E', marginTop: 2 }}>One clip, nothing else: the viewer cannot go past it.</div>
+            <div style={{ fontSize: 11, color: '#8A8F9E', marginTop: 2 }}>One clip, nothing else: the viewer cannot go past it.{limit ? ' You can cut from the highlights that were shared.' : ''}</div>
           </div>
           <button onClick={onClose} style={{ fontSize: 18, color: '#8A8F9E', background: 'none', border: 'none', cursor: 'pointer' }}>✕</button>
         </div>
@@ -148,9 +133,9 @@ export default function ClipModal({ gameId, annotations, currentTime, duration, 
           <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, color: '#111318', cursor: 'pointer' }}>
             <input type="checkbox" checked={includeDrawings} onChange={e => { setIncludeDrawings(e.target.checked); setUrl(null) }} style={{ marginTop: 2 }} />
             <span>
-              Include my drawings ({drawings.length} in this clip)
+              {parentToken ? 'Include the drawings' : 'Include my drawings'} ({drawings.length} in this clip)
               <span style={{ display: 'block', fontSize: 11, color: '#8A8F9E' }}>
-                Drawn on the video with the pen tools; they appear for the time you set on the timing strip.
+                {parentToken ? 'Drawn on the video by the coach.' : 'Drawn on the video with the pen tools; they appear for the time you set on the timing strip.'}
               </span>
             </span>
           </label>
