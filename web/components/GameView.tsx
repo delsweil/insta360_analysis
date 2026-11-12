@@ -7,6 +7,7 @@ import { supabase, type Game, type Annotation, LABEL_DEFS, labelColor, labelDisp
 import Topbar from '@/components/Topbar'
 import AnnotationShape from '@/components/AnnotationShape'
 import ShareModal from '@/components/ShareModal'
+import ClipModal from '@/components/ClipModal'
 import AnnotationFilter, { type FilterState, ALL_FILTERS, passesFilter } from '@/components/AnnotationFilter'
 import ClipRecorder from '@/components/ClipRecorder'
 import AnnotationCanvas, { type Shape, type Tool, type AnnotationCanvasHandle } from '@/components/AnnotationCanvas'
@@ -106,6 +107,13 @@ export default function GameView({ gameId, shareToken }: Props) {
     return p ? p.video_start : null
   }, [boardState])
   const [showShare, setShowShare] = useState(false)
+  const [showClip, setShowClip] = useState(false)
+  // A clip link plays this window and nothing else. The player is told the same window; the checks below keep it there.
+  const [clip, setClip] = useState<{ start: number; end: number } | null>(null)
+  const clipRef = useRef<{ start: number; end: number } | null>(null)
+  useEffect(() => { clipRef.current = clip }, [clip])
+  const [clipDone, setClipDone] = useState(false)
+  const [previewWindow, setPreviewWindow] = useState<{ start: number; end: number } | null>(null) // coach previewing a clip before sharing
   const [markIn, setMarkIn] = useState<number | null>(null)
   const [isRecording, setIsRecording] = useState(false)
   const [filter, setFilter] = useState<FilterState>(ALL_FILTERS)
@@ -184,7 +192,12 @@ export default function GameView({ gameId, shareToken }: Props) {
         }
         gid = link.game_id
         setId(gid)
-        only = link.annotation_ids && link.annotation_ids.length > 0 ? link.annotation_ids : null
+        if (link.clip_only && link.clip_start_sec != null && link.clip_end_sec != null) {
+          setClip({ start: link.clip_start_sec, end: link.clip_end_sec })
+          only = link.annotation_ids ?? []   // a clip with no drawings has no annotations, not "all of them"
+        } else {
+          only = link.annotation_ids && link.annotation_ids.length > 0 ? link.annotation_ids : null
+        }
       } else {
         const { data: { user } } = await supabase.auth.getUser()
         if (user) {
@@ -217,7 +230,7 @@ export default function GameView({ gameId, shareToken }: Props) {
         .eq('game_id', gid)
         .order('timestamp_sec')
       if (only) q = q.in('id', only)
-      const { data: annData } = await q
+      const { data: annData } = only && only.length === 0 ? { data: [] } : await q
 
       if (annData) setAnnotations(annData as unknown as Annotation[])
       setLoading(false)
@@ -285,6 +298,8 @@ export default function GameView({ gameId, shareToken }: Props) {
   }, [])
 
   const seekTo = useCallback((sec: number) => {
+    const c = clipRef.current
+    if (c) sec = Math.min(Math.max(sec, c.start), c.end - 0.2) // a clip link never leaves its window
     firedAnnotationIds.current.clear() // allow re-triggering annotations when a viewer jumps around
     playerRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: 'seekTo', args: [sec, true] }), '*'
@@ -314,6 +329,42 @@ export default function GameView({ gameId, shareToken }: Props) {
       JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*'
     )
   }, [])
+
+  // Clip link: stop at the end, and pull the viewer back if anything (scrub bar, keyboard, tapping a row) takes the video out of the window.
+  // The same effect stops a coach's preview from the clip dialog at its end.
+  useEffect(() => {
+    if (previewWindow) {
+      if (currentTime >= previewWindow.end) { pauseVideo(); setPreviewWindow(null) }
+      return
+    }
+    if (!clip) return
+    if (currentTime >= clip.end) { pauseVideo(); setClipDone(true) }
+    else if (currentTime < clip.start - 1) scrubTo(clip.start)
+  }, [currentTime, clip, previewWindow, pauseVideo, scrubTo])
+
+  const replayClip = useCallback(() => {
+    if (!clip) return
+    setClipDone(false)
+    seekTo(clip.start)
+  }, [clip, seekTo])
+
+  const previewClip = useCallback((start: number, end: number) => {
+    setPreviewWindow({ start, end })
+    seekTo(start)
+  }, [seekTo])
+
+  // The player is given the same window, so it starts and stops there by itself.
+  const clipParams = clip ? `&start=${Math.floor(clip.start)}&end=${Math.ceil(clip.end)}` : ''
+  const clipOverlay = clip && clipDone ? (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 8, background: 'rgba(15,41,114,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <button
+        onClick={replayClip}
+        style={{ fontSize: 16, fontWeight: 600, padding: '12px 22px', borderRadius: 10, border: 'none', background: '#E8780A', color: '#fff', cursor: 'pointer' }}
+      >
+        ↻ Play again
+      </button>
+    </div>
+  ) : null
 
   const setVideoRate = useCallback((rate: number) => {
     playerRef.current?.contentWindow?.postMessage(
@@ -1116,11 +1167,13 @@ export default function GameView({ gameId, shareToken }: Props) {
         {/* ── VIDEO fills the entire screen ── */}
         <iframe
           ref={playerRef}
-          src={`${game.video_url}?enablejsapi=1&controls=0&rel=0&modestbranding=1&autoplay=1&mute=1&playsinline=1`}
+          src={`${game.video_url}?enablejsapi=1&controls=0&rel=0&modestbranding=1&autoplay=1&mute=1&playsinline=1${clipParams}`}
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
           allowFullScreen
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
         />
+
+        {clipOverlay}
 
         {/* Invisible tap-catcher — sits above the iframe (zIndex 7).
             Receives taps on the video area and toggles HUD visibility.
@@ -2042,6 +2095,19 @@ export default function GameView({ gameId, shareToken }: Props) {
                 captureRegionRef={videoWrapperRef}
               />
               <button
+                onClick={() => setShowClip(true)}
+                title="A link that plays one clip and nothing else"
+                style={{
+                  fontSize: 12, fontWeight: 600,
+                  padding: '7px 16px', borderRadius: 8,
+                  border: '1px solid #E8780A', background: '#fff',
+                  color: '#E8780A', cursor: 'pointer',
+                  fontFamily: 'DM Sans, sans-serif', flexShrink: 0,
+                }}
+              >
+                Clip link
+              </button>
+              <button
                 onClick={() => setShowShare(true)}
                 style={{
                   fontSize: 12, fontWeight: 600,
@@ -2055,7 +2121,7 @@ export default function GameView({ gameId, shareToken }: Props) {
               </button>
             </div>
           )}
-          {readOnly && filteredAnnotations.length > 0 && (
+          {readOnly && !clip && filteredAnnotations.length > 0 && (
             <button
               onClick={startReelForRecording}
               title="Play the highlights one after the other"
@@ -2071,6 +2137,17 @@ export default function GameView({ gameId, shareToken }: Props) {
             </button>
           )}
         </div>
+        )}
+
+        {showClip && (
+          <ClipModal
+            gameId={id}
+            annotations={annotations}
+            currentTime={currentTime}
+            duration={duration}
+            onPreview={previewClip}
+            onClose={() => { setShowClip(false); setPreviewWindow(null) }}
+          />
         )}
 
         {showShare && (
@@ -2118,11 +2195,12 @@ export default function GameView({ gameId, shareToken }: Props) {
             >
               <iframe
                 ref={playerRef}
-                src={`${game.video_url}?enablejsapi=1&controls=0&rel=0&modestbranding=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
+                src={`${game.video_url}?enablejsapi=1&controls=0&rel=0&modestbranding=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}${clipParams}`}
                 style={{ width: '100%', height: '100%', border: 'none' }}
                 allowFullScreen
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               />
+              {clipOverlay}
               {activeTacticalShapes.length > 0 && (
                 <div style={{
                   position: 'absolute', inset: 0,
@@ -2189,7 +2267,17 @@ export default function GameView({ gameId, shareToken }: Props) {
                 display: 'flex', justifyContent: 'space-between',
                 alignItems: 'center', marginBottom: 8,
               }}>
-                <TransportBar
+                {clip ? (
+                  <button
+                    onClick={() => (clipDone ? replayClip() : isPlaying ? pauseVideo() : resumeVideo())}
+                    style={{ fontSize: 13, fontWeight: 600, padding: '8px 14px', borderRadius: 8, border: '1px solid #E4E6EE', background: '#fff', color: '#0f2972', cursor: 'pointer' }}
+                  >
+                    {clipDone ? '↻ Play again' : isPlaying ? '❚❚ Pause' : '▶ Play'}
+                    <span style={{ marginLeft: 10, fontWeight: 400, color: '#8A8F9E' }}>
+                      {formatTime(Math.min(Math.max(currentTime - clip.start, 0), clip.end - clip.start))} / {formatTime(clip.end - clip.start)}
+                    </span>
+                  </button>
+                ) : <TransportBar
                   isPlaying={isPlaying}
                   timeLabel={`${formatTime(currentTime)} / ${formatTime(duration)}`}
                   rate={mobilePlaybackRate}
@@ -2197,15 +2285,16 @@ export default function GameView({ gameId, shareToken }: Props) {
                   onSeekBy={seekBy}
                   onStep={stepFrame}
                   onRate={changeRate}
-                />
+                />}
                 <span style={{ fontSize: 10, color: '#8A8F9E' }}>
                   {isCoach
                     ? markIn !== null ? `Mark in: ${formatTime(markIn)}` : 'Mark in/out for range'
-                    : readOnly ? 'Shared highlights' : 'Pick a label then mark'}
+                    : clip ? 'Shared clip' : readOnly ? 'Shared highlights' : 'Pick a label then mark'}
                 </span>
               </div>
 
-              {/* Timeline */}
+              {/* Timeline (a clip link shows no timeline: it is one clip, not the game) */}
+              {!clip && <>
               <div style={{ marginBottom: 5 }}>
                 <Timeline height={26} />
               </div>
@@ -2221,15 +2310,16 @@ export default function GameView({ gameId, shareToken }: Props) {
                 <span>{formatTime(duration * 0.75)}</span>
                 <span>{formatTime(duration)}</span>
               </div>
+              </>}
 
               {/* Filter bar */}
-              <div style={{ marginBottom: 8 }}>
+              {!clip && <div style={{ marginBottom: 8 }}>
                 <AnnotationFilter
                   filter={filter}
                   onChange={setFilter}
                   counts={filterCounts}
                 />
-              </div>
+              </div>}
 
               {/* Label picker */}
               {!readOnly && (

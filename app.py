@@ -260,7 +260,7 @@ class Handler(BaseHTTPRequestHandler):
                 job.ensure_frame(i)
                 pts, src = job.outline_points(i)
                 return self._json({"points": pts, "source": src, "frame": f"pitch{i}_frame.png", "size": [2880, 1440],
-                                   "feet": job.feet(i) if os.path.isfile(job.p(f"v{i}.detections.jsonl")) else []})
+                                   "feet": job.feet(i) if os.path.isfile(job.p(f"v{i}.detections.jsonl")) else job.preview_feet(i)})
             if u.path.startswith("/api/jobs/"):
                 return self._json(job_view(unquote(u.path.split("/")[3])))
             if u.path.startswith("/files/"):

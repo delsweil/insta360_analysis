@@ -53,7 +53,8 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
                 margin_m: float = MARGIN_M, tidy: bool = True, max_team: int = MAX_TEAM,
                 team_margin_m: float = TEAM_MARGIN_M, stats: Optional[dict] = None, feet: bool = True,
                 smooth: bool = True, a_attacks_right: Optional[bool] = None,
-                box: Optional[list] = None, low_conf: float = LOW_CONF, fill: bool = True, ball: bool = True) -> List[dict]:
+                box: Optional[list] = None, low_conf: float = LOW_CONF, fill: bool = True, ball: bool = True,
+                vote_window: float = 2.5) -> List[dict]:
     """One part (one detections file) -> frames {vt, pan, fov, players:[(x, y, team)]}; vt = seconds in the joined video."""
     hdr, frames = AK.load_detections(det_path, max_lon=max_lon)
     fy = S.view_fy(hdr)
@@ -154,7 +155,7 @@ def part_frames(det_path: str, kf_path: Optional[str], clusters, video_start: fl
         if tidy:
             vt = np.array([float(r["t"]) for r in frames])
             team, st = BC.clean(np.array(owner), vt, a[:, 0], a[:, 1], team, weight, margin, np.array(outm),
-                                max_team, team_margin_m)
+                                max_team, team_margin_m, vote_window)
             if stats is not None:
                 for k, v in st.items():
                     stats[k] = stats.get(k, 0) + v
@@ -227,13 +228,14 @@ def widen_to_keepers(box, xs, min_n: int = 30, pad: float = 1.0):
 def build(parts: List[dict], clusters, title: str = "", lang: str = "en", max_lon: float = 98.0, min_conf: float = MIN_CONF,
           min_height: float = MIN_HEIGHT, k_angle: float = 0.75, rescue: float = RESCUE,
           margin_m: float = MARGIN_M, tidy: bool = True, max_team: int = MAX_TEAM,
-          team_margin_m: float = TEAM_MARGIN_M, feet: bool = True, smooth: bool = True, ball: bool = True) -> dict:
+          team_margin_m: float = TEAM_MARGIN_M, feet: bool = True, smooth: bool = True, ball: bool = True, vote_window: float = 2.5) -> dict:
     """parts: [{det, kf, half, video_start, duration, box:[x0,x1,y0,y1], a_attacks_right}] in playing order."""
     frames, meta_parts = [], []
     stats: dict = {}
     for p in parts:
         fr = part_frames(p["det"], p.get("kf"), clusters, float(p["video_start"]), max_lon, min_conf, min_height, k_angle, rescue, p.get("calib"), margin_m,
-                         tidy, max_team, team_margin_m, stats, feet, smooth, p.get("a_attacks_right"), p.get("box"), ball=ball)
+                         tidy, max_team, team_margin_m, stats, feet, smooth, p.get("a_attacks_right"), p.get("box"), ball=ball,
+                         vote_window=vote_window)
         end = float(p["video_start"]) + float(p["duration"]) if p.get("duration") else None
         if end is not None:
             fr = [f for f in fr if f["vt"] <= end + 1e-6]
@@ -292,6 +294,8 @@ def main(argv=None) -> int:
     p.add_argument("--no-feet", action="store_true", help="place players by box height only (not combined with the foot position)")
     p.add_argument("--no-ball", action="store_true", help="leave the ball out of the board data")
     p.add_argument("--no-smooth", action="store_true", help="show the raw position of every detection (no Kalman smoothing)")
+    p.add_argument("--vote-window", type=float, default=2.5,
+                   help="seconds either side of a detection that vote on its team (default 2.5; 1e9 = the whole track votes)")
     p.add_argument("--max-team", type=int, default=MAX_TEAM, help="most players of one team at one moment")
     p.add_argument("--team-margin-m", type=float, default=TEAM_MARGIN_M,
                    help="a team player more than this many metres outside the outline is shown as 'other'")
@@ -320,7 +324,8 @@ def main(argv=None) -> int:
                       "a_attacks_right": d.get("team_a_attacks_right")})
         t += a.durations[i]
     data = build(parts, clusters, a.title, a.lang, a.max_lon, a.min_conf, a.min_height, a.angle_factor, a.rescue_ratio, a.margin_m,
-                 not a.no_tidy, a.max_team, a.team_margin_m, not a.no_feet, not a.no_smooth, not a.no_ball)
+                 not a.no_tidy, a.max_team, a.team_margin_m, not a.no_feet, not a.no_smooth, not a.no_ball,
+                 vote_window=a.vote_window)
     write(a.out, data)
     print(f"wrote {a.out}: {len(data['frames'])} moments, {sum((len(f) - 3) // 3 for f in data['frames'])} player positions")
     st = data.get("tidy")
@@ -336,6 +341,11 @@ def main(argv=None) -> int:
         print(f"tidied: {st.get('relabelled', 0)} team labels changed by their track, {st.get('recovered', 0)} unreadable players "
               f"given a team, {st.get('outside', 0)} outside the pitch shown as other, {st.get('to_other_team', 0) + st.get('to_other', 0)} "
               f"over {a.max_team} a side moved (of {st.get('players', 0)} detections)")
+    if st and st.get("tracked"):
+        n = st["tracked"]
+        print(f"label steadiness: of {n} detections in tracks of 10 or more, {100 * st['disagree_start'] / n:.1f} % had a label "
+              f"other than their track's majority before the vote, {100 * st['disagree_vote'] / n:.1f} % after the vote, "
+              f"{100 * st['disagree_final'] / n:.1f} % after the 11-a-side cap")
     return 0
 
 

@@ -50,6 +50,8 @@ def fake_exec(self, cmd, sid, parse=None):
                    "mean_bgr": [[250, 250, 250], [200, 80, 20], [40, 40, 40]], "suggest": {"A": [0], "B": [1]},
                    "assign": {"A": [], "B": []}, "names": {"A": "team A", "B": "team B"},
                    "colours": {"A": "#ececec", "B": "#d9392b"}}, open(out + ".team_labels.json", "w"))
+    elif script == "preview_people.py":
+        json.dump({"times": [10.0], "feet": [[500, 700], [100, 300]]}, open(arg(cmd, "--out"), "w"))
     elif script == "calibrate_auto.py":
         json.dump({"pixel_polygon": [[400, 600], [1800, 600], [1800, 1100], [400, 1100]]}, open(arg(cmd, "--output"), "w"))
         open(arg(cmd, "--vis"), "wb").write(b"jpg")
@@ -102,7 +104,7 @@ class TestPipeline(Base):
     def test_stage_plan_and_estimate(self):
         j = self.job(2)
         ids = [s["id"] for s in j.stages()]
-        self.assertEqual(ids[:2], ["check", "teams"])
+        self.assertEqual(ids[:4], ["check", "preview0", "preview1", "teams"])     # a quick look for people comes first
         self.assertIn("render1", ids)
         self.assertIn("pitch1", ids)
         self.assertEqual(ids[-3:], ["stats", "board", "package"])
@@ -268,6 +270,23 @@ class TestHalvesAndOutline(Base):
         self.assertEqual(len(h1[h1.index("--detections") + 1:h1.index("--keyframes")]), 2)
         h2 = [c for c in j.team_cmds if arg(c, "--out").endswith("half2_teams")][0]
         self.assertEqual(len(h2[h2.index("--detections") + 1:h2.index("--keyframes")]), 1)
+
+    def test_quick_look_for_people_before_the_detection_run(self):
+        j = self.job(1)
+        self.assertEqual(j.run(), "needs_input")                       # waits for the teams, as in the other tests
+        self.assertEqual(j.preview_feet(0), [[500, 700], [100, 300]])
+        ids = [s["id"] for s in j.stages()]
+        self.assertLess(ids.index("preview0"), ids.index("extract0"))
+
+    def test_quick_look_failing_does_not_stop_the_game(self):
+        def broken(self, cmd, sid, parse=None):
+            if "preview_people.py" in cmd[2]:
+                raise RuntimeError("no model")
+            return fake_exec(self, cmd, sid, parse)
+        P.Job.exec = broken
+        j = self.job(1)
+        self.assertEqual(j.run(), "needs_input")
+        self.assertEqual(j.preview_feet(0), [])
 
     def test_only_second_half(self):
         j = self.job(1, {0: {"half": 2}})

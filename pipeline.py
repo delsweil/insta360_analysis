@@ -53,7 +53,7 @@ KEY_ARGS = ["--ball-view", "--projection", "flat", "--fov-max", "100", "--fov-mi
             "--max-dip", "8", "--tilt-margin", "4"]
 # seconds of computing per second of video (Apple silicon), used for the progress bar and the estimate
 COST = {"check": 0.0, "extract": 1.1, "keyframes": 0.0, "render": 0.5, "charts": 0.0, "stats": 0.0, "board": 0.0, "teams": 0.0}
-FIXED_SECONDS = {"check": 15, "pitch": 20, "merge": 60, "teams": 120, "keyframes": 10, "charts": 30, "stats": 40, "board": 15, "package": 2}
+FIXED_SECONDS = {"check": 15, "preview": 40, "pitch": 20, "merge": 60, "teams": 120, "keyframes": 10, "charts": 30, "stats": 40, "board": 15, "package": 2}
 
 
 RENDER_SIZE = (1920, 1080)  # output size; (2560, 1440) is hard to tell apart on a laptop and renders ~4x slower
@@ -243,7 +243,10 @@ class Job:
 
     def stages(self) -> List[dict]:
         n = len(self.spec["videos"])
-        st = [{"id": "check", "label": "Look at the videos"}, {"id": "teams", "label": "Find the shirt colours"}]
+        st = [{"id": "check", "label": "Look at the videos"}]
+        for i in range(n):
+            st.append({"id": f"preview{i}", "label": f"Look for people near the pitch{self._of(i, n)}", "video": i})
+        st.append({"id": "teams", "label": "Find the shirt colours"})
         for i in range(n):
             st.append({"id": f"extract{i}", "label": f"Find the players{self._of(i, n)}", "video": i})
         for i in range(n):
@@ -351,7 +354,7 @@ class Job:
                 self.save_status()
                 t0 = time.time()
                 try:
-                    res = fn(s) if kind in ("extract", "pitch", "keyframes", "render") else fn()
+                    res = fn(s) if kind in ("extract", "preview", "pitch", "keyframes", "render") else fn()
                 except Cancelled:
                     raise
                 except Exception as e:                                              # the stage failed
@@ -515,6 +518,32 @@ class Job:
             return int(m.group(1)) / int(m.group(2)) if m else None
         self.exec(self.py("team_labels.py", "make", "--video", info["path"], "--detections", samp,
                           "--out", self.p("teams"), "--frames", "40", "--iv-fov", "112", "--k", str(TEAM_GROUPS)), "teams", parse)
+
+    def s_preview(self, st: dict) -> None:
+        """A quick look at about a dozen moments before the long detection run: where do people stand? The outline editor
+        shows them (green = kept, red = outside) so the line can be drawn before the players are found."""
+        i = st["video"]
+        cam = self.info()[i]
+        s0, d0 = self.span(i)
+        try:
+            self.ensure_frame(i)                                 # the picture the outline is drawn on
+        except Exception as e:
+            self.log(f"picture for the outline not made: {e}")
+        pat = re.compile(r"frame (\d+)/(\d+)")
+        parse = lambda line: (int(pat.search(line).group(1)) / max(1, int(pat.search(line).group(2)))) if pat.search(line) else None  # noqa: E731
+        try:
+            self.exec(self.py("preview_people.py", "--video", self.videos()[i]["path"], "--start", f"{s0:.2f}",
+                              "--duration", f"{d0:.2f}", "--raw", "1" if cam["layout"] == "raw" else "0",
+                              "--out", self.p(f"pitch{i}.preview.json")), st["id"], parse)
+        except Cancelled:
+            raise
+        except Exception as e:                                   # only a help for drawing: never stop the game for it
+            self.log(f"preview of the people not made: {e}")
+
+    def preview_feet(self, i: int) -> List[List[int]]:
+        """The feet seen by the quick look (see s_preview), [] if it has not run or found nothing."""
+        d = read_json(self.p(f"pitch{i}.preview.json"))
+        return [[int(x), int(y)] for x, y in (d or {}).get("feet", [])]
 
     def _frames_re(self):
         pat = re.compile(r"(\d+)/(\d+) frames")

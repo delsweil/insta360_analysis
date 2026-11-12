@@ -172,19 +172,35 @@ def cap_teams(frame: np.ndarray, team: np.ndarray, weight: np.ndarray, margin: n
     return new, moved_team, moved_other
 
 
+def track_disagreement(track: np.ndarray, team: np.ndarray, min_len: int = 10) -> Tuple[int, int]:
+    """(detections whose label differs from the majority label of their track, detections in tracks of >= min_len).
+    A measure of how steady the labels are along a track: 0 = every track has one label."""
+    bad = tot = 0
+    for t in np.unique(track[track >= 0]):
+        lab = team[track == t]
+        if len(lab) < min_len:
+            continue
+        bad += int(len(lab) - np.bincount(lab).max())
+        tot += len(lab)
+    return bad, tot
+
+
 def clean(frame: np.ndarray, vt: np.ndarray, x: np.ndarray, y: np.ndarray, team: np.ndarray, weight: np.ndarray,
           margin: np.ndarray, out_m: np.ndarray, max_team: int = 11, team_margin_m: float = 0.5,
           window_s: float = 2.5) -> Tuple[np.ndarray, Dict[str, int]]:
     """frame (sorted) / vt: moment of each detection and time of each moment; x, y: metres; team 0/1/2; weight: how much the
     detection's own label counts as a vote (0 = no readable colour); margin: 0 = colour equally near both teams, 1 = sure;
     out_m: metres outside the pitch outline (0 inside)."""
-    stats = {"relabelled": 0, "recovered": 0, "outside": 0, "to_other_team": 0, "to_other": 0}
+    stats = {"relabelled": 0, "recovered": 0, "outside": 0, "to_other_team": 0, "to_other": 0,
+             "tracked": 0, "disagree_start": 0, "disagree_vote": 0, "disagree_final": 0}
     if len(frame) == 0:
         return team, stats
     outside = out_m > team_margin_m
     w = np.where(outside, 0.0, weight)                                # someone outside the pitch is no witness
     track = link_tracks(frame, x, y, vt)
     voted = vote_in_tracks(track, frame, vt, team, w, window_s)
+    stats["disagree_start"], stats["tracked"] = track_disagreement(track, team)      # label vs track majority, before / after the vote / after the cap
+    stats["disagree_vote"] = track_disagreement(track, voted)[0]
     stats["relabelled"] = int(((voted != team) & (weight > 0)).sum())
     stats["recovered"] = int(((voted != team) & (weight <= 0) & (voted < 2)).sum())
     new = voted
@@ -193,4 +209,5 @@ def clean(frame: np.ndarray, vt: np.ndarray, x: np.ndarray, y: np.ndarray, team:
     new[gone] = OTHER
     stats["outside"] = int(gone.sum())
     new, stats["to_other_team"], stats["to_other"] = cap_teams(frame, new, weight, margin, out_m, max_team)
+    stats["disagree_final"] = track_disagreement(track, new)[0]
     return new, stats

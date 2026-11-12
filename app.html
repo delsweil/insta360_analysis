@@ -93,7 +93,7 @@ de:{sub:"Schwenk-Video und Mannschaftsstatistik aus Ihrer 360°-Aufnahme",new:"N
  untested:"Dieses Kameraformat wurde noch nicht getestet.",results:"Ergebnisse",folder:"Ordner",
  video:"Video",charts:"Grafiken",data:"Datendateien",err:"Fehler",playing:"Vorschau",download:"herunterladen",
  teams_wait:"Die Mannschaftsstatistik wartet darauf, dass Sie oben die Teams bestätigen."}};
-const SL={check:["Look at the videos","Videos ansehen"],pitch:["Find the pitch lines","Spielfeldlinien finden"],teams:["Find the shirt colours","Trikotfarben finden"],charts:["Where the play was","Wo gespielt wurde"],stats:["Team statistics","Mannschaftsstatistik"],package:["Collect the results","Ergebnisse sammeln"],extract:["Find the players","Spieler finden"],keyframes:["Plan the camera","Kamera planen"],render:["Make the video","Video erzeugen"],merge:["Join the videos for YouTube","Videos für YouTube zusammenfügen"]};
+const SL={check:["Look at the videos","Videos ansehen"],preview:["Look for people near the pitch","Personen am Spielfeldrand suchen"],pitch:["Find the pitch lines","Spielfeldlinien finden"],teams:["Find the shirt colours","Trikotfarben finden"],charts:["Where the play was","Wo gespielt wurde"],stats:["Team statistics","Mannschaftsstatistik"],package:["Collect the results","Ergebnisse sammeln"],extract:["Find the players","Spieler finden"],keyframes:["Plan the camera","Kamera planen"],render:["Make the video","Video erzeugen"],merge:["Join the videos for YouTube","Videos für YouTube zusammenfügen"]};
 let lang=(navigator.language||"en").slice(0,2)==="de"?"de":"en";
 try{lang=localStorage.getItem("lang")||lang}catch(e){}
 const t=k=>(TX[lang]||TX.en)[k]??k;
