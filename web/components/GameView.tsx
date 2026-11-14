@@ -17,6 +17,7 @@ import TimingStrip from '@/components/TimingStrip'
 import TransportBar, { RATES } from '@/components/TransportBar'
 import FloatingDrawTools, { DRAW_TOOLS } from '@/components/FloatingDrawTools'
 import VeoImportModal from '@/components/VeoImportModal'
+import SuggestionImport from '@/components/SuggestionImport'
 import BoardPanel from '@/components/BoardPanel'
 import { useBoard } from '@/lib/board'
 import { exportGame } from '@/lib/exportEvents'
@@ -2647,6 +2648,24 @@ export default function GameView({ gameId, shareToken }: Props) {
                     >
                       + Veo import
                     </button>
+                  )}
+                  {isCoach && userId && (
+                    <SuggestionImport
+                      gameId={id}
+                      userId={userId}
+                      shift={boardState.status === 'ready' ? boardState.board.shift : 0}
+                      existing={annotations}
+                      homeTeam={game.home_team}
+                      awayTeam={game.away_team}
+                      onImported={() =>
+                        supabase
+                          .from('annotations')
+                          .select('*, profiles(display_name)')
+                          .eq('game_id', id)
+                          .order('timestamp_sec')
+                          .then(({ data }) => { if (data) setAnnotations(data) })
+                      }
+                    />
                   )}
                   <span style={{
                     fontFamily: 'DM Sans, sans-serif',
