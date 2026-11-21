@@ -2,7 +2,7 @@
 
 export const dynamic = 'force-dynamic'
 
-import React, { useEffect, useRef, useState, useCallback } from 'react'
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { supabase, type Game, type Annotation, LABEL_DEFS, labelColor, labelDisplay } from '@/lib/supabase'
 import Topbar from '@/components/Topbar'
 import AnnotationShape from '@/components/AnnotationShape'
@@ -23,6 +23,8 @@ import { useBoard } from '@/lib/board'
 import { exportGame } from '@/lib/exportEvents'
 import StatsPanel, { StatsCard } from '@/components/StatsPanel'
 import { useStats } from '@/lib/stats'
+import MatchStrip from '@/components/MatchStrip'
+import { buildStrip, eventColour, eventSize } from '@/lib/matchStrip'
 
 function formatTime(sec: number) {
   const m = Math.floor(sec / 60)
@@ -108,6 +110,11 @@ export default function GameView({ gameId, shareToken }: Props) {
     const p = boardState.board.parts.find(x => String(x.half) === half)
     return p ? p.video_start : null
   }, [boardState])
+  // momentum silhouette + team colours of the event dots on the timeline (plain navy / orange without statistics)
+  const strip = useMemo(
+    () => buildStrip(statsState.status === 'ready' ? statsState.stats : null, game, halfStart, duration),
+    [statsState, game, halfStart, duration],
+  )
   const [showShare, setShowShare] = useState(false)
   const [showClip, setShowClip] = useState(false)
   // A clip link plays this window and nothing else. The player is told the same window; the checks below keep it there.
@@ -772,6 +779,10 @@ export default function GameView({ gameId, shareToken }: Props) {
         width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%',
         background: '#e8edf8', borderRadius: '3px 0 0 3px',
       }} />
+      {/* Who had the play: home above the centre line, away below (needs the statistics) */}
+      <div style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, overflow: 'hidden', borderRadius: 3, pointerEvents: 'none' }}>
+        <MatchStrip strip={strip} duration={duration} height={Math.max(8, height - 2)} opacity={0.4} style={{ marginTop: 1 }} />
+      </div>
       {/* Playhead */}
       <div style={{
         position: 'absolute', top: -4, bottom: -4, width: 2.5,
@@ -809,7 +820,9 @@ export default function GameView({ gameId, shareToken }: Props) {
           >
             <AnnotationShape
               labelKey={ann.label}
-              size={mobileSize ? 10 : 7}
+              size={eventSize(ann.label, mobileSize ? 10 : 8)}
+              color={eventColour(ann.label, strip.colours, false)}
+              outline
             />
           </div>
         )
@@ -1409,7 +1422,7 @@ export default function GameView({ gameId, shareToken }: Props) {
             {/* Scrub bar */}
             <div
               style={{
-                flex: 1, height: 32, position: 'relative',
+                flex: 1, height: 46, position: 'relative',
                 cursor: 'pointer', touchAction: 'none',
               }}
               onPointerDown={e => {
@@ -1423,10 +1436,23 @@ export default function GameView({ gameId, shareToken }: Props) {
                 scrubTo(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * (duration || 1))
               }}
             >
+              {/* Momentum: home above the centre line, away below (needs the statistics) */}
+              {strip.runs.length > 0 && (
+                <div style={{
+                  position: 'absolute', left: 0, right: 0, top: 0, height: 20, borderRadius: 4, overflow: 'hidden',
+                  background: 'rgba(255,255,255,0.08)', pointerEvents: 'none',
+                }}>
+                  <MatchStrip strip={strip} duration={duration} height={20} dark opacity={0.8} />
+                  <div style={{
+                    position: 'absolute', top: 0, bottom: 0, width: 1.5, background: '#fff', opacity: 0.9,
+                    left: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%',
+                  }} />
+                </div>
+              )}
               {/* Track */}
               <div style={{
                 position: 'absolute', left: 0, right: 0,
-                top: '50%', height: 5, transform: 'translateY(-50%)',
+                top: 34, height: 5, transform: 'translateY(-50%)',
                 background: 'rgba(255,255,255,0.2)', borderRadius: 3,
               }}>
                 {/* Progress fill */}
@@ -1447,7 +1473,7 @@ export default function GameView({ gameId, shareToken }: Props) {
               </div>
               {/* Playhead */}
               <div style={{
-                position: 'absolute', top: '50%',
+                position: 'absolute', top: 34,
                 transform: 'translate(-50%, -50%)',
                 left: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%',
                 width: 14, height: 14, borderRadius: '50%',
@@ -1457,7 +1483,7 @@ export default function GameView({ gameId, shareToken }: Props) {
               {/* markIn pin */}
               {markIn !== null && duration > 0 && (
                 <div style={{
-                  position: 'absolute', top: '50%', transform: 'translate(-50%, -50%)',
+                  position: 'absolute', top: 34, transform: 'translate(-50%, -50%)',
                   left: `${(markIn / duration) * 100}%`,
                   width: 3, height: 22, background: '#E8780A', borderRadius: 2,
                 }} />
@@ -1468,12 +1494,14 @@ export default function GameView({ gameId, shareToken }: Props) {
                   key={ann.id}
                   onClick={e => { e.stopPropagation(); seekTo(ann.timestamp_sec) }}
                   style={{
-                    position: 'absolute', top: '50%',
+                    position: 'absolute', top: 34,
                     transform: 'translate(-50%, -50%)',
                     left: duration > 0 ? `${(ann.timestamp_sec / duration) * 100}%` : '0%',
-                    width: 10, height: 10, borderRadius: '50%',
-                    background: labelColor(ann.label),
-                    border: '2px solid rgba(0,0,0,0.4)',
+                    width: eventSize(ann.label, 10), height: eventSize(ann.label, 10), borderRadius: '50%',
+                    background: eventColour(ann.label, strip.colours, true),
+                    border: '2px solid #0a1020',
+                    boxShadow: '0 0 0 1px rgba(255,255,255,0.45)',
+                    boxSizing: 'border-box',
                     cursor: 'pointer', zIndex: 2,
                   }}
                 />

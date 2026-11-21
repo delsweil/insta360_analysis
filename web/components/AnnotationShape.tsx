@@ -7,11 +7,16 @@ interface Props {
   labelKey: string
   size?: number        // diameter in px
   style?: React.CSSProperties
+  /** overrides the label's own colour, e.g. the team's real shirt colour */
+  color?: string
+  /** dark outline so a light team colour stays visible on any bar */
+  outline?: boolean
 }
 
-export default function AnnotationShape({ labelKey, size = 10, style }: Props) {
+export default function AnnotationShape({ labelKey, size = 10, style, color: colorOverride, outline = false }: Props) {
   const def = labelDef(labelKey)
-  const color = labelColor(labelKey)
+  const color = colorOverride ?? labelColor(labelKey)
+  const ol = outline ? { stroke: '#0a1020', strokeWidth: 1.3, strokeLinejoin: 'round' as const } : {}
   const shape = def?.shape ?? 'circle'
   const s = size
 
@@ -23,13 +28,13 @@ export default function AnnotationShape({ labelKey, size = 10, style }: Props) {
       style={{ flexShrink: 0, display: 'inline-block', ...style }}
     >
       {shape === 'circle' && (
-        <circle cx="5" cy="5" r="4.5" fill={color} />
+        <circle cx="5" cy="5" r="4.2" fill={color} {...ol} />
       )}
       {shape === 'square' && (
-        <rect x="0.5" y="0.5" width="9" height="9" fill={color} rx="1" />
+        <rect x="0.7" y="0.7" width="8.6" height="8.6" fill={color} rx="1" {...ol} />
       )}
       {shape === 'triangle' && (
-        <polygon points="5,0.5 9.5,9.5 0.5,9.5" fill={color} />
+        <polygon points="5,0.7 9.3,9.3 0.7,9.3" fill={color} {...ol} />
       )}
       {shape === 'cross' && (
         <>
