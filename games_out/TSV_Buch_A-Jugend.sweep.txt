@@ -1,0 +1,15 @@
+parts: v0.onpitch.detections.jsonl (camera path: v0.auto.keyframes.json), v1.onpitch.detections.jsonl (camera path: v1.auto.keyframes.json), v2.onpitch.detections.jsonl (camera path: v2.auto.keyframes.json), v3.onpitch.detections.jsonl (camera path: v3.auto.keyframes.json)
+reading v0.onpitch.detections.jsonl ...
+reading v1.onpitch.detections.jsonl ...
+reading v2.onpitch.detections.jsonl ...
+reading v3.onpitch.detections.jsonl ...
+
+setting                                         pieces  /player/10min  median s  >=30 s  contrad/10min  risky joins  A far (last)  B far (last)
+today (baseline)                                 12965           57.8       4.3     55%          116.5          69%           1.9           5.0
+new, gate x1                                      7943           35.4      12.1     78%           84.1          69%           2.0           4.9
+new, gate x1, colour block                        8303           37.0      11.9     76%           76.3          62%           2.0           4.9
+new, gate x1.5, colour block                      4720           21.0      23.8     89%           84.1          85%           2.0           4.9
+new, gate x2, colour block                        2796           12.5      38.6     95%           73.8          94%           2.0           4.9
+new, gate x1.5, colour block, pieces >= 3 s       3875           17.3      35.4     89%           84.0          85%           2.0           4.9
+
+Read it: fewer pieces per player is better only if the joins stay trustworthy. 'contradictions' only sees a join between players of DIFFERENT teams; it cannot see two team-mates swapped. 'risky joins' = share of joins where another piece of at least 3 s could just as well have been the continuation: those are the ones that may carry the wrong player. Rising risk means rising doubt.

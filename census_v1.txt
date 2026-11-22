@@ -1,0 +1,62 @@
+using:
+  detections     /Users/davidelsweiler/FootballAutopan/TSV_Buch_A-Jugend/v1.onpitch.detections.jsonl
+  team labels    /Users/davidelsweiler/FootballAutopan/TSV_Buch_A-Jugend/teams.team_labels.json
+  keyframes      /Users/davidelsweiler/FootballAutopan/TSV_Buch_A-Jugend/v1.auto.keyframes.json
+  pitch outline  -
+  board          /Users/davidelsweiler/FootballAutopan/TSV_Buch_A-Jugend/TSV_Buch_A-Jugend_board.json
+
+what the board export itself reported (tidy):
+  players        382977
+  relabelled     29472
+  recovered      62
+  outside        682
+  to_other_team  7786
+  to_other       1731
+  weak_kept      29648
+  weak_dropped   6457
+  filled         44469
+  keepers        25021
+  referees       0
+  gated          1
+  smoothed       377596
+
+3790 moments in the detections file
+  people detected per moment at confidence >= 0.2: 20.2
+  people detected per moment at confidence >= 0.3: 18.4
+  people detected per moment at confidence >= 0.5: 14.6
+  of those at >= 0.3, with a readable shirt colour (box >= 14 px high): 18.4
+
+PLAYERS PER MOMENT AFTER EACH STEP (mean; '10+' = share of moments with 10 or 11 of that team)
+step                                           A     B  other  ref   gk  A 10+  B 10+
+A  all detected (>= 0.2)                     9.1   7.8    3.3  0.0  1.6    45%    23%
+B  confidence >= 0.3                         8.3   7.2    2.9  0.0  1.4    26%    14%
+D  + team vote, 11 a side                    8.2   7.4    2.8  0.0  1.4    26%    18%
+E  = the board (smoothed, holes filled)     10.2   8.9    3.3  0.0  1.6    63%    49%
+
+NEAR vs FAR THIRD OF THE PITCH (players per moment: team A / team B / other)
+A  all detected (>= 0.2)                   near  2.6 /  2.8 /  1.3   far  2.8 /  2.5 /  1.6
+B  confidence >= 0.3                       near  2.3 /  2.7 /  1.2   far  2.4 /  2.2 /  1.3
+D  + team vote, 11 a side                  near  2.4 /  2.7 /  1.2   far  2.3 /  2.3 /  1.3
+E  = the board (smoothed, holes filled)    near  2.8 /  3.1 /  1.3   far  3.2 /  2.9 /  1.7
+
+COLOUR GROUPS: who ends up in which group (detections >= 0.3 with a readable colour)
+group  assigned to            per moment  share  median box px
+    1  team A                       3.31    18%             29
+    0  team A                       3.09    17%             34
+    6  OTHER (not counted)          2.15    12%             26
+    4  team B                       1.81    10%             28
+    3  team B                       1.66     9%             34
+    7  team B                       1.44     8%             35
+   10  keeper A                     1.40     8%             25
+    8  team B                       1.18     6%             36
+    2  OTHER (not counted)          0.91     5%             43
+    5  OTHER (not counted)          0.78     4%             31
+    9  team B                       0.48     3%             48
+   11  OTHER (not counted)          0.16     1%             74
+  A group marked OTHER that holds several players per moment is probably a shirt of one team (in shade, far away, or in a different light): give it to that team with team_labels.py assign, or compare it on the contact sheet.
+
+How to read it:
+  Step A is the ceiling: it shows what colour labelling alone gives of the people the detector found.
+  If 'other' is large in step A, shirts are read as no team (colour groups / lighting), not lost by the detector.
+  A drop between B and C is the pitch outline, between C and D the track vote or the 11-a-side cap.
+

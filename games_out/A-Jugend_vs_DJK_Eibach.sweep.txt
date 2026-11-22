@@ -1,0 +1,16 @@
+parts: v0.onpitch.detections.jsonl (camera path: v0.auto.keyframes.json), v1.onpitch.detections.jsonl (camera path: v1.auto.keyframes.json), v2.onpitch.detections.jsonl (camera path: v2.auto.keyframes.json), v3.onpitch.detections.jsonl (camera path: v3.auto.keyframes.json)
+reading v0.onpitch.detections.jsonl ...
+Traceback (most recent call last):
+  File "/Users/davidelsweiler/Library/CloudStorage/Dropbox/development/insta360_analysis/track_stitch.py", line 437, in <module>
+    main()
+  File "/Users/davidelsweiler/Library/CloudStorage/Dropbox/development/insta360_analysis/track_stitch.py", line 418, in main
+    pts.append(part_points(d, k, clusters, cal))
+  File "/Users/davidelsweiler/Library/CloudStorage/Dropbox/development/insta360_analysis/track_stitch.py", line 342, in part_points
+    fr_ = BD.part_frames(det, kf, clusters, 0.0, 98.0, BD.MIN_CONF, BD.MIN_HEIGHT, 0.75, BD.RESCUE, calib, BD.MARGIN_M, False,
+  File "/Users/davidelsweiler/Library/CloudStorage/Dropbox/development/insta360_analysis/board_data.py", line 64, in part_frames
+    tester = PF.FootTester(calib, margin_m=margin_m, fy=fy, k=k_angle)
+  File "/Users/davidelsweiler/Library/CloudStorage/Dropbox/development/insta360_analysis/pitch_filter.py", line 50, in __init__
+    m = X.polygon_mask(X.load_polygon(calib))
+  File "/Users/davidelsweiler/Library/CloudStorage/Dropbox/development/insta360_analysis/extract_detections.py", line 113, in load_polygon
+    if isinstance(raw[0], dict):
+TypeError: 'NoneType' object is not subscriptable

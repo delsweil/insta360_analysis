@@ -1,0 +1,23 @@
+parts: v0.onpitch.detections.jsonl (camera path: v0.auto.keyframes.json), v1.onpitch.detections.jsonl (camera path: v1.auto.keyframes.json), v2.onpitch.detections.jsonl (camera path: v2.auto.keyframes.json), v3.onpitch.detections.jsonl (camera path: v3.auto.keyframes.json)
+reading v0.onpitch.detections.jsonl ...
+reading v1.onpitch.detections.jsonl ...
+reading v2.onpitch.detections.jsonl ...
+reading v3.onpitch.detections.jsonl ...
+
+── TODAY  (board_clean.link_tracks, team vote within ±2.5 s)
+ part  tracks  per player/10min  median s  p90 s  ≥30 s share  contradictions  mixed     A     B  A far  B far  relabelled
+    0    2406              37.7       3.7     38          61%             277    770   7.8   6.3    2.5    2.2        4.9%
+    1     900              45.0       4.3     34          56%              88    261  10.0   6.1    3.2    2.3        4.1%
+    2    2391              37.5       5.0     41          62%             297    766   8.7   6.2    2.6    2.6        4.5%
+    3     610              48.6       7.3     33          46%              56    257  11.2   5.6    3.4    2.4        5.9%
+      total: 6307 pieces, 718 near-side contradictions, 2054 mixed-label pieces, 98.6 contradictions per 10 min
+
+── NEW    (motion model + stitching over gaps up to 8 s, gate x1 + team vote within ±15 s)
+ part  tracks  per player/10min  median s  p90 s  ≥30 s share  contradictions  mixed     A     B  A far  B far  relabelled
+    0    1667              26.1      10.3     66          76%             231    508   7.9   6.3    2.6    2.2        8.4%
+    1     575              28.7      10.3     68          77%              68    160  10.1   6.1    3.2    2.3        7.7%
+    2    1555              24.4      10.7     78          80%             224    467   8.9   6.2    2.6    2.6        8.1%
+    3     458              36.5      12.5     55          68%              44    179  11.3   5.6    3.4    2.4       10.4%
+      total: 4255 pieces, 567 near-side contradictions, 1314 mixed-label pieces, 77.9 contradictions per 10 min
+
+How to read it: 'per player/10min' = pieces a player is split into (fewer is better; today ≈ 49). 'contradictions' = pieces whose reliable near-side shirts say both A and B (a probable swap). 'A / B far' = team counts on the far third; A should not sink and B should not swell from part to part.

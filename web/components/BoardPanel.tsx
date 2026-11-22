@@ -5,6 +5,9 @@ import {
   type Board, type BoardState, type Box, type Raw,
   boxOf, frameAt, parseBoard, partAt, playersIn, uploadBoard,
 } from '@/lib/board'
+import { useTracks, useFollowed, pointAt, type Followed } from '@/lib/tracks'
+import { useClaim } from '@/lib/claims'
+import ClaimPanel from '@/components/ClaimPanel'
 
 const NAVY = '#0f2972'
 export const PAD = 3 // metres of grass around the pitch
@@ -71,9 +74,12 @@ interface ViewProps {
   svgRef?: React.Ref<SVGSVGElement>
   maxHeight?: string
   translucent?: boolean   // small see-through version for over the video: pitch lines and dots only
+  followed?: Followed | null          // "This is me": pieces that are the player (gold ring)
+  pieceIds?: number[]                 // piece of each player of the moment shown (from the tracks file)
+  onPick?: (moment: number, k: number) => void   // set while the player is tapping themselves
 }
 
-function BoardView({ board, t, trails, svgRef, maxHeight, translucent }: ViewProps) {
+export function BoardView({ board, t, trails, svgRef, maxHeight, translucent, followed, pieceIds, onPick }: ViewProps) {
   const part = partAt(board, t)
   const [x0, x1, y0, y1] = boxOf(board, part)
   const idx = frameAt(board, t)
@@ -130,6 +136,14 @@ function BoardView({ board, t, trails, svgRef, maxHeight, translucent }: ViewPro
             )
           }),
         )}
+        {followed && pieceIds && players.map((p, k) => {
+          const st = followed.status.get(pieceIds[k])
+          if (!st || p.team > 1 && p.team < 4) return null
+          return <circle key={`me${k}`} cx={p.x} cy={p.y} r={2.3} fill="none" stroke="#ffd400" strokeWidth={0.55} strokeDasharray={st === 'auto' ? '1.1 0.7' : undefined} />
+        })}
+        {onPick && idx >= 0 && players.map((p, k) => (p.team === 3 ? null : (
+          <circle key={`pk${k}`} cx={p.x} cy={p.y} r={2.6} fill="rgba(255,255,255,0.001)" style={{ cursor: 'pointer' }} onClick={e => { e.stopPropagation(); onPick(idx, k) }} />
+        )))}
       </g>
       {!frame && (
         <text x={vx0 + vbW / 2} y={-vy1 + vbH / 2} textAnchor="middle" fontSize={vbW / 22} fill="#fff" opacity={0.85}>
@@ -201,6 +215,11 @@ export default function BoardPanel({ gameId, gameTitle, state, reload, currentTi
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
+  const [picking, setPicking] = useState(false)
+  const { state: tracksState, reload: reloadTracks } = useTracks(gameId, board)
+  const tracks = tracksState.status === 'ready' ? tracksState.tracks : null
+  const claim = useClaim(gameId, tracks?.tracker ?? null)
+  const followed = useFollowed(board, tracks, claim.claim)
   const bigRef = useRef<SVGSVGElement>(null)
 
   useEffect(() => { if (board) setShift(board.shift) }, [board])
@@ -268,6 +287,14 @@ export default function BoardPanel({ gameId, gameTitle, state, reload, currentTi
   }
 
   const t = currentTime + shift
+  const idxNow = frameAt(board, t)
+  const pieceIds = tracks && idxNow >= 0 ? tracks.fp[idxNow] : undefined
+  const pick = picking && tracks && claim.signedIn === true ? (m: number, k: number) => {
+    const pid = tracks.fp[m][k]
+    const pt = pointAt(board, m, k)
+    if (followed?.status.has(pid)) claim.addReject(pt); else claim.addSeed(pt)
+    setPicking(false)
+  } : undefined
   if (compact) return <BoardView board={board} t={t} trails={false} translucent />
   const part = partAt(board, t)
   const idx = frameAt(board, t)
@@ -319,8 +346,10 @@ export default function BoardPanel({ gameId, gameTitle, state, reload, currentTi
           <button style={btn} onClick={() => setBig(true)} title="Enlarge">⤢</button>
         </span>
       </div>
-      <BoardView board={board} t={t} trails={trails} svgRef={svgRef} />
+      <BoardView board={board} t={t} trails={trails} svgRef={svgRef} followed={followed} pieceIds={pieceIds} onPick={pick} />
       {legend(false)}
+      <ClaimPanel gameId={gameId} board={board} tracksState={tracksState} reloadTracks={reloadTracks} claim={claim}
+        followed={followed} picking={picking} setPicking={setPicking} isCoach={isCoach} />
       <div style={{ fontSize: 10, color: '#8A8F9E', marginTop: 8 }}>
         Positions are estimated from the video (a few metres off, more on the far side): read the shape, not the exact distances.
       </div>
@@ -354,7 +383,7 @@ export default function BoardPanel({ gameId, gameTitle, state, reload, currentTi
                 <button style={btn} onClick={() => setBig(false)}>Close</button>
               </span>
             </div>
-            <BoardView board={board} t={t} trails={trails} svgRef={bigRef} maxHeight="78vh" />
+            <BoardView board={board} t={t} trails={trails} svgRef={bigRef} maxHeight="78vh" followed={followed} pieceIds={pieceIds} onPick={pick} />
             {legend(true)}
           </div>
         </div>

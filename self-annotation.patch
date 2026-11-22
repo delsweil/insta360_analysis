@@ -1,0 +1,559 @@
+
+--- a/web/components/BoardPanel.tsx	2026-11-12 23:03:49.000000000 +0100
++++ b/web/components/BoardPanel.tsx	2026-11-22 14:08:49.936646182 +0100
+@@ -5,6 +5,9 @@
+   type Board, type BoardState, type Box, type Raw,
+   boxOf, frameAt, parseBoard, partAt, playersIn, uploadBoard,
+ } from '@/lib/board'
++import { useTracks, useFollowed, pointAt, type Followed } from '@/lib/tracks'
++import { useClaim } from '@/lib/claims'
++import ClaimPanel from '@/components/ClaimPanel'
+ 
+ const NAVY = '#0f2972'
+ export const PAD = 3 // metres of grass around the pitch
+@@ -71,9 +74,12 @@
+   svgRef?: React.Ref<SVGSVGElement>
+   maxHeight?: string
+   translucent?: boolean   // small see-through version for over the video: pitch lines and dots only
++  followed?: Followed | null          // "This is me": pieces that are the player (gold ring)
++  pieceIds?: number[]                 // piece of each player of the moment shown (from the tracks file)
++  onPick?: (moment: number, k: number) => void   // set while the player is tapping themselves
+ }
+ 
+-function BoardView({ board, t, trails, svgRef, maxHeight, translucent }: ViewProps) {
++export function BoardView({ board, t, trails, svgRef, maxHeight, translucent, followed, pieceIds, onPick }: ViewProps) {
+   const part = partAt(board, t)
+   const [x0, x1, y0, y1] = boxOf(board, part)
+   const idx = frameAt(board, t)
+@@ -130,6 +136,14 @@
+             )
+           }),
+         )}
++        {followed && pieceIds && players.map((p, k) => {
++          const st = followed.status.get(pieceIds[k])
++          if (!st || p.team > 1 && p.team < 4) return null
++          return <circle key={`me${k}`} cx={p.x} cy={p.y} r={2.3} fill="none" stroke="#ffd400" strokeWidth={0.55} strokeDasharray={st === 'auto' ? '1.1 0.7' : undefined} />
++        })}
++        {onPick && idx >= 0 && players.map((p, k) => (p.team === 3 ? null : (
++          <circle key={`pk${k}`} cx={p.x} cy={p.y} r={2.6} fill="rgba(255,255,255,0.001)" style={{ cursor: 'pointer' }} onClick={e => { e.stopPropagation(); onPick(idx, k) }} />
++        )))}
+       </g>
+       {!frame && (
+         <text x={vx0 + vbW / 2} y={-vy1 + vbH / 2} textAnchor="middle" fontSize={vbW / 22} fill="#fff" opacity={0.85}>
+@@ -201,6 +215,11 @@
+   const [busy, setBusy] = useState(false)
+   const [msg, setMsg] = useState<string | null>(null)
+   const svgRef = useRef<SVGSVGElement>(null)
++  const [picking, setPicking] = useState(false)
++  const { state: tracksState, reload: reloadTracks } = useTracks(gameId, board)
++  const tracks = tracksState.status === 'ready' ? tracksState.tracks : null
++  const claim = useClaim(gameId, tracks?.tracker ?? null)
++  const followed = useFollowed(board, tracks, claim.claim)
+   const bigRef = useRef<SVGSVGElement>(null)
+ 
+   useEffect(() => { if (board) setShift(board.shift) }, [board])
+@@ -268,6 +287,14 @@
+   }
+ 
+   const t = currentTime + shift
++  const idxNow = frameAt(board, t)
++  const pieceIds = tracks && idxNow >= 0 ? tracks.fp[idxNow] : undefined
++  const pick = picking && tracks && claim.signedIn === true ? (m: number, k: number) => {
++    const pid = tracks.fp[m][k]
++    const pt = pointAt(board, m, k)
++    if (followed?.status.has(pid)) claim.addReject(pt); else claim.addSeed(pt)
++    setPicking(false)
++  } : undefined
+   if (compact) return <BoardView board={board} t={t} trails={false} translucent />
+   const part = partAt(board, t)
+   const idx = frameAt(board, t)
+@@ -319,8 +346,10 @@
+           <button style={btn} onClick={() => setBig(true)} title="Enlarge">⤢</button>
+         </span>
+       </div>
+-      <BoardView board={board} t={t} trails={trails} svgRef={svgRef} />
++      <BoardView board={board} t={t} trails={trails} svgRef={svgRef} followed={followed} pieceIds={pieceIds} onPick={pick} />
+       {legend(false)}
++      <ClaimPanel gameId={gameId} board={board} tracksState={tracksState} reloadTracks={reloadTracks} claim={claim}
++        followed={followed} picking={picking} setPicking={setPicking} isCoach={isCoach} />
+       <div style={{ fontSize: 10, color: '#8A8F9E', marginTop: 8 }}>
+         Positions are estimated from the video (a few metres off, more on the far side): read the shape, not the exact distances.
+       </div>
+@@ -354,7 +383,7 @@
+                 <button style={btn} onClick={() => setBig(false)}>Close</button>
+               </span>
+             </div>
+-            <BoardView board={board} t={t} trails={trails} svgRef={bigRef} maxHeight="78vh" />
++            <BoardView board={board} t={t} trails={trails} svgRef={bigRef} maxHeight="78vh" followed={followed} pieceIds={pieceIds} onPick={pick} />
+             {legend(true)}
+           </div>
+         </div>
+
+--- a/web/components/ClaimPanel.tsx	1970-01-01 01:00:00.000000000 +0100
++++ b/web/components/ClaimPanel.tsx	2026-11-22 14:08:49.936050673 +0100
+@@ -0,0 +1,185 @@
++'use client'
++
++import { useState } from 'react'
++import { type Board, boxOf, partAt } from '@/lib/board'
++import type { ClaimState } from '@/lib/claims'
++import { Pitch, PAD } from '@/components/BoardPanel'
++import {
++  type Followed, type Question, type Tracks, type TracksState,
++  pointAt, parseTracks, uploadTracks,
++} from '@/lib/tracks'
++
++const NAVY = '#0f2972'
++const GOLD = '#ffd400'
++const CAND = ['#e8780a', '#2b9bd8', '#c64fb0', '#2fa36b']
++
++const btn: React.CSSProperties = {
++  fontSize: 12, fontWeight: 600, color: NAVY, background: '#e8edf8', border: 'none',
++  borderRadius: 99, padding: '5px 12px', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
++}
++
++function fmt(sec: number) {
++  const s = Math.max(0, Math.floor(sec))
++  return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`
++}
++
++type Pos = { x: number; y: number }
++
++/** The positions of a piece in the few moments next to its end (dir = next) or start (dir = prev). */
++function trail(board: Board, tracks: Tracks, pid: number, f: number, step: 1 | -1, n = 15): Pos[] {
++  const out: Pos[] = []
++  for (let g = f, c = 0; g >= 0 && g < board.frames.length && c < n; g += step, c++) {
++    const k = tracks.fp[g].indexOf(pid)
++    if (k >= 0) { const p = pointAt(board, g, k); out.push({ x: p.x, y: p.y }) }
++  }
++  return out
++}
++
++export function QuestionMap({ board, tracks, q }: { board: Board; tracks: Tracks; q: Question }) {
++  const part = partAt(board, q.at)
++  const [x0, x1, y0, y1] = boxOf(board, part)
++  const fEnd = (p: number, which: 2 | 3) => tracks.pieces[p][which]
++  // you: the piece that is yours, looking back from its end (next) or forward from its start (prev)
++  const mine = q.dir === 'next' ? trail(board, tracks, q.from, fEnd(q.from, 3), -1) : trail(board, tracks, q.from, fEnd(q.from, 2), 1)
++  const cands = q.cands.map(c => q.dir === 'next' ? trail(board, tracks, c[0], fEnd(c[0], 2), 1) : trail(board, tracks, c[0], fEnd(c[0], 3), -1))
++  const path = (pts: Pos[]) => pts.map((p, i) => `${i ? 'L' : 'M'}${p.x},${p.y}`).join(' ')
++  const anchor = mine[0]
++  const vbW = x1 - x0 + 2 * PAD, vbH = y1 - y0 + 2 * PAD
++  return (
++    <svg viewBox={`${x0 - PAD} ${-(y1 + PAD)} ${vbW} ${vbH}`} style={{ display: 'block', width: '100%', borderRadius: 8 }} role="img" aria-label="Where you were and where the candidates are">
++      <g transform="scale(1,-1)">
++        <Pitch box={[x0, x1, y0, y1]} grass={0.9} />
++        {mine.length > 1 && <path d={path(mine)} fill="none" stroke={GOLD} strokeWidth={0.5} strokeLinecap="round" />}
++        {cands.map((pts, i) => pts.length > 1 && <path key={`p${i}`} d={path(pts)} fill="none" stroke={CAND[i % 4]} strokeWidth={0.5} strokeLinecap="round" opacity={0.9} />)}
++        {anchor && <circle cx={anchor.x} cy={anchor.y} r={1.9} fill="none" stroke={GOLD} strokeWidth={0.6} />}
++        {cands.map((pts, i) => pts[0] && (
++          <g key={`c${i}`}>
++            <circle cx={pts[0].x} cy={pts[0].y} r={1.7} fill={CAND[i % 4]} stroke="#0a1a3a" strokeWidth={0.3} />
++            <g transform={`translate(${pts[0].x},${pts[0].y}) scale(1,-1)`}>
++              <text x={0} y={0.75} textAnchor="middle" fontSize={2.2} fontWeight={700} fill="#fff">{i + 1}</text>
++            </g>
++          </g>
++        ))}
++      </g>
++    </svg>
++  )
++}
++
++interface Props {
++  gameId: string
++  board: Board
++  tracksState: TracksState
++  reloadTracks: () => void
++  claim: ClaimState
++  followed: Followed | null
++  picking: boolean
++  setPicking: (v: boolean) => void
++  isCoach: boolean
++}
++
++export default function ClaimPanel({ gameId, board, tracksState, reloadTracks, claim, followed, picking, setPicking, isCoach }: Props) {
++  const [skipped, setSkipped] = useState<Set<string>>(new Set())
++  const [busy, setBusy] = useState(false)
++  const [msg, setMsg] = useState<string | null>(null)
++  const tracks = tracksState.status === 'ready' ? tracksState.tracks : null
++
++  const box: React.CSSProperties = { marginTop: 10, paddingTop: 10, borderTop: '1px solid #E4E6EE', fontSize: 12, color: '#1a2340' }
++  const small: React.CSSProperties = { fontSize: 11, color: '#5b6377' }
++
++  async function onFile(file: File | undefined) {
++    if (!file) return
++    setBusy(true); setMsg(null)
++    try {
++      const raw = JSON.parse(await file.text()) as Record<string, unknown>
++      parseTracks(raw, board)
++      const err = await uploadTracks(gameId, raw)
++      if (err) setMsg(err); else reloadTracks()
++    } catch (e) { setMsg(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
++  }
++
++  if (tracksState.status === 'loading') return null
++  if (!tracks) {
++    if (!isCoach) return null
++    return (
++      <div style={box}>
++        <div style={{ fontWeight: 600 }}>This is me</div>
++        <div style={small}>
++          {tracksState.status === 'error' ? `The tracks file could not be read: ${tracksState.message}` :
++            'Players can mark themselves on the board once the tracks file is here. Make it with board_tracks.py from the board data and upload it.'}
++        </div>
++        <label style={{ ...btn, display: 'inline-block', marginTop: 6, opacity: busy ? 0.6 : 1 }}>
++          {busy ? 'Uploading...' : 'Upload tracks'}
++          <input type="file" accept=".json,application/json" disabled={busy} style={{ display: 'none' }} onChange={e => { onFile(e.target.files?.[0]); e.target.value = '' }} />
++        </label>
++        {msg && <div style={{ ...small, color: '#dc2626', marginTop: 6 }}>{msg}</div>}
++      </div>
++    )
++  }
++  if (claim.signedIn !== true) return null   // players who are not signed in do not see it
++
++  const q = followed?.questions.find(x => !skipped.has(x.key)) ?? null
++  const hasClaim = claim.claim.seeds.length > 0
++  const nOpen = followed ? followed.questions.filter(x => !skipped.has(x.key)).length : 0
++
++  function answer(q: Question, to: number | null) {
++    const from = q.dir === 'next' ? pointAt(board, tracks!.pieces[q.from][3], tracks!.fp[tracks!.pieces[q.from][3]].indexOf(q.from)) : pointAt(board, tracks!.pieces[q.from][2], tracks!.fp[tracks!.pieces[q.from][2]].indexOf(q.from))
++    let toPt = null
++    if (to !== null) {
++      const f = q.dir === 'next' ? tracks!.pieces[to][2] : tracks!.pieces[to][3]
++      toPt = pointAt(board, f, tracks!.fp[f].indexOf(to))
++    }
++    claim.answer({ dir: q.dir, from, to: toPt })
++  }
++
++  return (
++    <div style={box}>
++      <div style={{ fontWeight: 600, marginBottom: 4 }}>This is me</div>
++      {!hasClaim && !picking && (
++        <>
++          <div style={small}>Mark yourself on the board and Claude follows you through the game, asking only where it is unsure. Nobody else sees your answers.</div>
++          <button style={{ ...btn, background: NAVY, color: '#fff', marginTop: 6 }} onClick={() => setPicking(true)}>Find myself</button>
++        </>
++      )}
++      {picking && (
++        <div>
++          <div style={{ marginBottom: 6 }}>Pause the video where you can tell which dot is you, then tap yourself on the board.{hasClaim ? ' Tap a gold dot to say it is not you.' : ''}</div>
++          <button style={btn} onClick={() => setPicking(false)}>Cancel</button>
++        </div>
++      )}
++      {hasClaim && !picking && followed && (
++        <>
++          <div style={{ marginBottom: 6 }}>
++            You are the <span style={{ background: GOLD, color: '#0a1a3a', borderRadius: 4, padding: '0 5px', fontWeight: 600 }}>gold</span> ring on the board: followed for <strong>{fmt(followed.seconds)}</strong> so far.
++            {nOpen > 0 ? ` ${nOpen} question${nOpen === 1 ? '' : 's'} left.` : ' No open questions.'}
++          </div>
++          {q && (
++            <div style={{ background: '#f4f6fb', borderRadius: 10, padding: 8, marginBottom: 8 }}>
++              <div style={{ marginBottom: 6 }}>
++                {q.dir === 'next' ? 'At' : 'Before'} <strong>{fmt(q.at - board.shift)}</strong> in the video you were lost from view. Which dot is you {q.dir === 'next' ? 'afterwards' : 'before'}?
++              </div>
++              <QuestionMap board={board} tracks={tracks} q={q} />
++              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
++                {q.cands.map((c, i) => (
++                  <button key={c[0]} style={{ ...btn, background: CAND[i % 4], color: '#fff' }} onClick={() => answer(q, c[0])}>{i + 1}</button>
++                ))}
++                <button style={btn} onClick={() => answer(q, null)}>None of them</button>
++                <button style={btn} onClick={() => setSkipped(s => new Set(s).add(q.key))}>Skip</button>
++              </div>
++              <div style={{ ...small, marginTop: 6 }}>Gold line: your path up to here. Numbered lines: where the candidates are.</div>
++            </div>
++          )}
++          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
++            <button style={btn} onClick={() => setPicking(true)}>Mark myself again</button>
++            <button style={btn} onClick={() => { if (window.confirm('Remove everything you marked in this game?')) { claim.reset(); setSkipped(new Set()) } }}>Start over</button>
++          </div>
++        </>
++      )}
++      <label style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 8, ...small }}>
++        <input type="checkbox" checked={claim.optIn} onChange={e => claim.setOptIn(e.target.checked)} style={{ marginTop: 2 }} />
++        <span>Let the team use my answers to improve the tracking. Off by default. It is then used without your name.</span>
++      </label>
++      {followed && followed.lost > 0 && <div style={{ ...small, marginTop: 4 }}>{followed.lost} of your answers no longer fit the current tracks and are ignored.</div>}
++      {claim.error && <div style={{ ...small, color: '#dc2626', marginTop: 6 }}>{claim.error}</div>}
++    </div>
++  )
++}
+
+--- a/web/lib/claims.ts	1970-01-01 01:00:00.000000000 +0100
++++ b/web/lib/claims.ts	2026-11-22 14:07:04.101923838 +0100
+@@ -0,0 +1,76 @@
++// Saves what a player marked ("This is me" points and answers) in the table player_claims (web/supabase/player_claims.sql).
++import { useCallback, useEffect, useRef, useState } from 'react'
++import { supabase } from '@/lib/supabase'
++import { EMPTY_CLAIM, type Claim, type LinkAnswer, type Pt } from '@/lib/tracks'
++
++export type ClaimState = {
++  signedIn: boolean | null          // null while checking
++  claim: Claim
++  optIn: boolean
++  saving: boolean
++  error: string | null
++  addSeed: (p: Pt) => void
++  addReject: (p: Pt) => void
++  answer: (a: LinkAnswer) => void
++  setOptIn: (v: boolean) => void
++  reset: () => void
++}
++
++export function useClaim(gameId: string, tracker: string | null): ClaimState {
++  const [signedIn, setSignedIn] = useState<boolean | null>(null)
++  const [claim, setClaim] = useState<Claim>(EMPTY_CLAIM)
++  const [optIn, setOptInState] = useState(false)
++  const [saving, setSaving] = useState(false)
++  const [error, setError] = useState<string | null>(null)
++  const userId = useRef<string | null>(null)
++  const claimRef = useRef<Claim>(EMPTY_CLAIM)
++  const optRef = useRef(false)
++
++  useEffect(() => {
++    let dead = false
++    ;(async () => {
++      const { data } = await supabase.auth.getUser()
++      if (dead) return
++      userId.current = data.user?.id ?? null
++      setSignedIn(!!data.user)
++      if (!data.user) return
++      const { data: row, error: e } = await supabase.from('player_claims').select('data, training_opt_in').eq('game_id', gameId).eq('user_id', data.user.id).maybeSingle()
++      if (dead) return
++      if (e) { setError(/player_claims/.test(e.message) ? 'The table player_claims is missing: run web/supabase/player_claims.sql in the Supabase SQL editor.' : e.message); return }
++      if (row) {
++        const d = (row.data ?? {}) as Partial<Claim>
++        const c = { seeds: d.seeds ?? [], rejects: d.rejects ?? [], links: d.links ?? [] }
++        claimRef.current = c; optRef.current = !!row.training_opt_in
++        setClaim(c)
++        setOptInState(!!row.training_opt_in)
++      }
++    })()
++    return () => { dead = true }
++  }, [gameId])
++
++  const save = useCallback(async (c: Claim, opt: boolean) => {
++    if (!userId.current) return
++    setSaving(true); setError(null)
++    const { error: e } = await supabase.from('player_claims').upsert(
++      { game_id: gameId, user_id: userId.current, tracker, data: c, training_opt_in: opt, updated_at: new Date().toISOString() },
++      { onConflict: 'game_id,user_id' })
++    setSaving(false)
++    if (e) setError(/player_claims/.test(e.message) && /exist|relation|schema/i.test(e.message) ? 'The table player_claims is missing: run web/supabase/player_claims.sql in the Supabase SQL editor.' : e.message)
++  }, [gameId, tracker])
++
++  const update = useCallback((fn: (c: Claim) => Claim) => {
++    const next = fn(claimRef.current)
++    claimRef.current = next
++    setClaim(next)
++    void save(next, optRef.current)
++  }, [save])
++
++  return {
++    signedIn, claim, optIn, saving, error,
++    addSeed: p => update(c => ({ ...c, seeds: [...c.seeds, p] })),
++    addReject: p => update(c => ({ ...c, rejects: [...c.rejects, p] })),
++    answer: a => update(c => ({ ...c, links: [...c.links.filter(l => !(l.dir === a.dir && l.from.t === a.from.t && l.from.x === a.from.x && l.from.y === a.from.y)), a] })),
++    setOptIn: v => { optRef.current = v; setOptInState(v); void save(claimRef.current, v) },
++    reset: () => update(() => EMPTY_CLAIM),
++  }
++}
+
+--- a/web/lib/tracks.ts	1970-01-01 01:00:00.000000000 +0100
++++ b/web/lib/tracks.ts	2026-11-22 14:06:23.623495006 +0100
+@@ -0,0 +1,165 @@
++// "This is me": pieces of players that the tracker followed (`<game>_tracks.json`, written by board_tracks.py), and the
++// logic that follows one player through them from the points the player marked. Nothing here names a person.
++import { useCallback, useEffect, useMemo, useState } from 'react'
++import { supabase } from '@/lib/supabase'
++import { BOARD_BUCKET, type Board } from '@/lib/board'
++
++export const TRACKS_FORMAT = 'football-autopan-tracks'
++
++/** [piece, chance, distance m, gap s] */
++export type Cand = [number, number, number, number]
++export type Link = { c: Cand[]; s: number }          // s = 1: the tracker is sure of the best candidate
++export type Tracks = {
++  tracker: string
++  pieces: [number, number, number, number][]          // id, side (0 A, 1 B, 2 other, 3 referee), first moment, last moment
++  fp: number[][]                                      // fp[moment][k] = piece of the k-th player of that moment of the board file
++  next: Record<string, Link>
++  prev: Record<string, Link>
++}
++
++/** A place and moment the player marked: board time (seconds, the first column of the board file) and metres. */
++export type Pt = { t: number; x: number; y: number }
++export type LinkAnswer = { dir: 'next' | 'prev'; from: Pt; to: Pt | null }   // to = null: none of the candidates is me
++export type Claim = { seeds: Pt[]; rejects: Pt[]; links: LinkAnswer[] }
++export const EMPTY_CLAIM: Claim = { seeds: [], rejects: [], links: [] }
++
++export function tracksPath(gameId: string) {
++  return `${gameId}.tracks.json`
++}
++
++export function parseTracks(raw: Record<string, unknown>, board: Board): Tracks {
++  if (raw?.format !== TRACKS_FORMAT) throw new Error('This is not a tracks file (made by board_tracks.py).')
++  if (Number(raw.version) !== 1) throw new Error('This tracks file comes from a newer version of the analysis app.')
++  const fp = raw.fp as number[][]
++  if (!Array.isArray(fp) || fp.length !== board.frames.length) throw new Error('The tracks file does not belong to this board data (different number of moments).')
++  return {
++    tracker: String(raw.tracker ?? ''),
++    pieces: raw.pieces as Tracks['pieces'],
++    fp,
++    next: (raw.next as Tracks['next']) ?? {},
++    prev: (raw.prev as Tracks['prev']) ?? {},
++  }
++}
++
++export type TracksState = { status: 'loading' } | { status: 'none' } | { status: 'error'; message: string } | { status: 'ready'; tracks: Tracks; raw: Record<string, unknown> }
++
++export function useTracks(gameId: string | null, board: Board | null) {
++  const [state, setState] = useState<TracksState>({ status: 'loading' })
++  const [version, setVersion] = useState(0)
++  useEffect(() => {
++    if (!gameId || !board) return
++    let dead = false
++    ;(async () => {
++      try {
++        const { data } = supabase.storage.from(BOARD_BUCKET).getPublicUrl(tracksPath(gameId))
++        const res = await fetch(version ? `${data.publicUrl}?v=${version}` : data.publicUrl)
++        if (!res.ok) { if (!dead) setState({ status: 'none' }); return }
++        const raw = (await res.json()) as Record<string, unknown>
++        const tracks = parseTracks(raw, board)
++        if (!dead) setState({ status: 'ready', tracks, raw })
++      } catch (e) {
++        if (!dead) setState({ status: 'error', message: e instanceof Error ? e.message : String(e) })
++      }
++    })()
++    return () => { dead = true }
++  }, [gameId, board, version])
++  const reload = useCallback(() => setVersion(Date.now()), [])
++  return { state, reload }
++}
++
++/** Coach: puts the tracks file next to the board file. */
++export async function uploadTracks(gameId: string, raw: Record<string, unknown>): Promise<string | null> {
++  const body = new Blob([JSON.stringify(raw)], { type: 'application/json' })
++  const { error } = await supabase.storage.from(BOARD_BUCKET).upload(tracksPath(gameId), body, {
++    upsert: true, contentType: 'application/json', cacheControl: '60',
++  })
++  return error ? error.message : null
++}
++
++// ---- looking things up ----
++
++export type Index = { first: Map<number, [number, number]>; last: Map<number, [number, number]> }
++
++/** For each piece, the (moment, player index) where it starts and where it ends. */
++export function buildIndex(tracks: Tracks): Index {
++  const first = new Map<number, [number, number]>()
++  const last = new Map<number, [number, number]>()
++  tracks.fp.forEach((row, f) => row.forEach((pid, k) => {
++    if (!first.has(pid)) first.set(pid, [f, k])
++    last.set(pid, [f, k])
++  }))
++  return { first, last }
++}
++
++export function pointAt(board: Board, f: number, k: number): Pt {
++  const fr = board.frames[f]
++  return { t: board.times[f], x: (fr[3 + 3 * k] as number) / 10, y: (fr[4 + 3 * k] as number) / 10 }
++}
++
++/** The piece whose player was at (or within 2 m of) the marked point; -1 when there is none. */
++export function resolve(board: Board, tracks: Tracks, pt: Pt): number {
++  let lo = 0, hi = board.times.length - 1
++  while (lo < hi) { const m = (lo + hi) >> 1; if (board.times[m] < pt.t) lo = m + 1; else hi = m }
++  let best = lo
++  if (lo > 0 && Math.abs(board.times[lo - 1] - pt.t) <= Math.abs(board.times[lo] - pt.t)) best = lo - 1
++  if (Math.abs(board.times[best] - pt.t) > 1.0) return -1
++  const fr = board.frames[best]
++  let bd = 2.0, bp = -1
++  for (let k = 0; 3 + 3 * k + 2 < fr.length; k++) {
++    const d = Math.hypot((fr[3 + 3 * k] as number) / 10 - pt.x, (fr[4 + 3 * k] as number) / 10 - pt.y)
++    if (d < bd) { bd = d; bp = tracks.fp[best][k] }
++  }
++  return bp
++}
++
++export type Status = 'seed' | 'confirmed' | 'auto'
++export type Question = { key: string; dir: 'next' | 'prev'; from: number; at: number; cands: Cand[] }
++export type Followed = { status: Map<number, Status>; questions: Question[]; lost: number; seconds: number }
++
++/** The pieces that are the player: those they marked, those they confirmed, and those the tracker is sure about; plus the open questions. */
++export function follow(board: Board, tracks: Tracks, claim: Claim): Followed {
++  const status = new Map<number, Status>()
++  const t0 = (p: number) => board.times[tracks.pieces[p][2]]
++  const t1 = (p: number) => board.times[tracks.pieces[p][3]]
++  const rejected = new Set(claim.rejects.map(r => resolve(board, tracks, r)).filter(p => p >= 0))
++  const answers = new Map<string, number>()
++  let lost = 0
++  for (const l of claim.links) {
++    const p = resolve(board, tracks, l.from)
++    const q = l.to ? resolve(board, tracks, l.to) : -1
++    if (p < 0 || (l.to && q < 0)) { lost++; continue }
++    answers.set(`${l.dir}:${p}`, q)
++  }
++  const queue: number[] = []
++  const overlaps = (q: number) => { for (const c of status.keys()) if (Math.min(t1(c), t1(q)) - Math.max(t0(c), t0(q)) > 1.0) return true; return false }
++  const add = (q: number, st: Status) => {
++    if (q < 0 || status.has(q) || rejected.has(q) || tracks.pieces[q][1] > 1 || overlaps(q)) return false
++    status.set(q, st); queue.push(q); return true
++  }
++  for (const s of claim.seeds) { const p = resolve(board, tracks, s); if (p >= 0) add(p, 'seed'); else lost++ }
++  const questions: Question[] = []
++  while (queue.length) {
++    const p = queue.shift()!
++    for (const dir of ['next', 'prev'] as const) {
++      const key = `${dir}:${p}`
++      const ans = answers.get(key)
++      if (ans !== undefined) { if (ans >= 0) add(ans, 'confirmed'); continue }
++      const L = (dir === 'next' ? tracks.next : tracks.prev)[String(p)]
++      if (!L) continue
++      if (L.s === 1) { add(L.c[0][0], 'auto'); continue }
++      questions.push({ key, dir, from: p, at: dir === 'next' ? t1(p) : t0(p), cands: L.c })
++    }
++  }
++  const open = questions.filter(q => status.has(q.from)
++    && !q.cands.some(c => status.has(c[0]))
++    && q.cands.filter(c => !rejected.has(c[0]) && c[0] >= 0).length > 0)
++  open.sort((a, b) => a.at - b.at)
++  let seconds = 0
++  for (const p of status.keys()) seconds += t1(p) - t0(p)
++  return { status, questions: open, lost, seconds }
++}
++
++/** Hook-friendly memo of follow(). */
++export function useFollowed(board: Board | null, tracks: Tracks | null, claim: Claim) {
++  return useMemo(() => (board && tracks ? follow(board, tracks, claim) : null), [board, tracks, claim])
++}
+
+--- a/web/supabase/player_claims.sql	1970-01-01 01:00:00.000000000 +0100
++++ b/web/supabase/player_claims.sql	2026-11-22 14:06:23.621625908 +0100
+@@ -0,0 +1,27 @@
++-- "This is me": players mark themselves on the board; the tracker follows them and asks where it is unsure.
++-- Run once in the Supabase SQL editor.
++--
++-- One row per player and game. `data` holds what the player said, as points (video time in board seconds, x, y in metres),
++-- not as tracker ids, so the answers stay valid when the tracker changes. `tracker` is the version of the tracks file
++-- the answers were given against.
++-- Private: a player can read and change only their own row. Nobody else (coach included) can read it.
++-- Rows with training_opt_in = true are meant for improving the tracker; read them with the service role,
++-- and leave user_id out of what you export.
++create table if not exists player_claims (
++  id              uuid primary key default gen_random_uuid(),
++  game_id         text not null,   -- games.id (text so it fits whatever type that column has)
++  user_id         uuid not null default auth.uid() references auth.users (id) on delete cascade,
++  tracker         text,
++  data            jsonb not null default '{}'::jsonb,
++  training_opt_in boolean not null default false,
++  created_at      timestamptz not null default now(),
++  updated_at      timestamptz not null default now(),
++  unique (game_id, user_id)
++);
++
++alter table player_claims enable row level security;
++
++drop policy if exists "own claims: read" on player_claims;
++drop policy if exists "own claims: write" on player_claims;
++create policy "own claims: read"   on player_claims for select using (user_id = auth.uid());
++create policy "own claims: write"  on player_claims for all    using (user_id = auth.uid()) with check (user_id = auth.uid());

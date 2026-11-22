@@ -1,0 +1,24 @@
+parts: v0.onpitch.detections.jsonl (camera path: v0.auto.keyframes.json), v1.onpitch.detections.jsonl (camera path: v1.auto.keyframes.json), v2.onpitch.detections.jsonl (camera path: v2.auto.keyframes.json), v3.onpitch.detections.jsonl (camera path: v3.auto.keyframes.json)
+reading v0.onpitch.detections.jsonl ...
+reading v1.onpitch.detections.jsonl ...
+reading v2.onpitch.detections.jsonl ...
+reading v3.onpitch.detections.jsonl ...
+
+WHY PIECES END (4131 piece ends, all parts; third = where the player was, from the camera)
+cause          all    near  middle     far
+short          29%     28%     26%     30%
+edge           22%     26%      8%     24%
+crowd          20%     21%     32%     14%
+contested       0%      0%      0%      0%
+wide           16%     12%     21%     17%
+vanished       13%     12%     12%     14%
+(ends)        4131    1456     882    1793
+
+WHERE THE 'EDGE' ENDS ARE (890; area where players are seen: x -28..40 m, y 8..66 m, 1st-99th percentile)
+  far touchline (y max)        321    36%
+  near touchline (y min)       274    31%
+  left end (x min)             162    18%
+  right end (x max)            133    15%
+  Touchline ends of a player walking along the line point to the on-pitch test; ends at the left / right end point to the goal areas or the camera view.
+
+How to read it: 'vanished' = detector loss (needs more detections per second or a better detector); 'crowd' and 'contested' = ambiguity (a better linker, appearance); 'short' = junk pieces (filter or merge); 'edge' = leaves the view.
