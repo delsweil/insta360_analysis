@@ -146,6 +146,13 @@ export default function ClaimPanel({ gameId, board, me, video, isCoach }: Props)
       {picking && (
         <div>
           <div style={{ marginBottom: 6 }}>The video is paused. Tap the dot that is nearest to you on the video (or your dot on the board).{hasClaim ? ' Tap a gold one to say it is not you.' : ''} If the dots are not near the players, pause on another moment first.</div>
+          <div style={{ ...small, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+            Dots off? Move them:
+            <button style={btn} onClick={() => me.setAdj({ ...me.adj, up: Math.round((me.adj.up + 0.03) * 100) / 100 })}>▲ up</button>
+            <button style={btn} onClick={() => me.setAdj({ ...me.adj, up: Math.round((me.adj.up - 0.03) * 100) / 100 })}>▼ down</button>
+            <button style={btn} onClick={() => me.setAdj({ ...me.adj, spread: Math.round(me.adj.spread * 110) / 100 })}>spread</button>
+            <button style={btn} onClick={() => me.setAdj({ ...me.adj, spread: Math.round(me.adj.spread * 90) / 100 })}>squeeze</button>
+          </div>
           <button style={btn} onClick={() => setPicking(false)}>Cancel</button>
         </div>
       )}
