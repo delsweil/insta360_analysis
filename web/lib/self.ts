@@ -9,6 +9,8 @@ export type TagAdj = { up: number; spread: number }   // up: fraction of the pic
 export const DEFAULT_ADJ: TagAdj = { up: 0, spread: 1 }
 
 export type Me = {
+  liveShift: number | null           // the board's sync shift while it is being adjusted and not yet saved (null: use the saved one)
+  setLiveShift: (s: number | null) => void
   adj: TagAdj
   setAdj: (a: TagAdj) => void
   board: Board | null
@@ -34,6 +36,7 @@ export function useSelf(gameId: string, state: BoardState): Me {
   const claim = useClaim(gameId, tracks?.tracker ?? null)
   const followed = useFollowed(board, tracks, claim.claim)
   const [picking, setPicking] = useState(false)
+  const [liveShift, setLiveShift] = useState<number | null>(null)
   const [adj, setAdjState] = useState<TagAdj>(DEFAULT_ADJ)
   useEffect(() => {
     try { const v = localStorage.getItem('tag-adj'); if (v) setAdjState({ ...DEFAULT_ADJ, ...JSON.parse(v) }) } catch { /* no storage: defaults */ }
@@ -55,5 +58,5 @@ export function useSelf(gameId: string, state: BoardState): Me {
     }
   }, [picking, board, tracks, claim, followed])
   const open = followed ? followed.questions.filter(q => !skipped.has(q.key)) : []
-  return { adj, setAdj, board, tracks, tracksState, reloadTracks, claim, followed, picking, setPicking, question: open[0] ?? null, openQuestions: open.length, skip, resetSkips, onPick: pickFn }
+  return { liveShift, setLiveShift, adj, setAdj, board, tracks, tracksState, reloadTracks, claim, followed, picking, setPicking, question: open[0] ?? null, openQuestions: open.length, skip, resetSkips, onPick: pickFn }
 }

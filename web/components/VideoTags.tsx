@@ -16,7 +16,7 @@ export default function VideoTags({ me, currentTime }: { me: Me; currentTime: nu
   if (!board || !tracks || !followed || me.claim.signedIn !== true) return null
   const showAll = !!me.onPick
   if (!showAll && followed.status.size === 0) return null
-  const t = currentTime + board.shift
+  const t = currentTime + (me.liveShift ?? board.shift)
   const idx = frameAt(board, t)
   if (idx < 0) return null
   const fr = board.frames[idx]

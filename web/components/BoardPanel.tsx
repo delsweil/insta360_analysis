@@ -220,6 +220,8 @@ export default function BoardPanel({ gameId, gameTitle, state, reload, currentTi
   const bigRef = useRef<SVGSVGElement>(null)
 
   useEffect(() => { if (board) setShift(board.shift) }, [board])
+  const setLive = me?.setLiveShift
+  useEffect(() => { setLive?.(shift) }, [shift, setLive])
   useEffect(() => {
     if (!big) return
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') setBig(false) }
