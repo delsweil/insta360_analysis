@@ -23,8 +23,9 @@ export default function VideoTags({ me, currentTime }: { me: Me; currentTime: nu
   if (fr[1] == null || fr[2] == null) return null
   const k = board.kAngle
   const pan = fr[1] as number, fov = fr[2] as number
-  const half = Math.tan((fov * Math.PI) / 360)           // the picture is rendered in the detections' own angle units: no k here
-  const focal = (0.5 / Math.tan((k * fov * Math.PI) / 360)) * (16 / 9)   // picture heights per unit of height/depth (ground-map units, with k)
+  // The autopan render is cylindrical by default (kf_core.py): sideways position is linear in the angle from the centre, in the
+  // detections' own angle units (no k), and a foot Hc / d below the horizon sits (Hc / d) / (2 * half the vertical extent) up the picture.
+  const focal = 1 / ((fov * Math.PI / 180) * (9 / 16))      // picture heights per unit of (camera height / ground distance)
   const candNo = new Map<number, number>()
   question?.cands.forEach((c, i) => candNo.set(c[0], i))
   const colours = [board.teams.A?.colour ?? '#d62828', board.teams.B?.colour ?? '#1d4ed8']
@@ -38,13 +39,12 @@ export default function VideoTags({ me, currentTime }: { me: Me; currentTime: nu
     if (!mine && cand === undefined && !showAll) continue
     const lon = (Math.atan2(x, y) * 180) / Math.PI / k
     const dl = ((((lon - pan) % 360) + 540) % 360) - 180   // degrees from the centre of the picture, in the video's angle units
-    if (Math.abs(dl) >= 80) continue
-    const u = 0.5 + Math.tan((dl * Math.PI) / 180) / (2 * half)
-    const off = (k * dl * Math.PI) / 180
+    if (Math.abs(dl) >= fov / 2) continue
+    const u = 0.5 + dl / fov
     if (u < 0.02 || u > 0.98) continue
-    // pinhole camera above the pitch: a foot at depth z along the view axis is c / z below the horizon (fractions of the picture height).
+    // camera above the pitch: a foot at ground distance z is camera height / z below the horizon (fractions of the picture height).
     // The defaults were read off one Buch frame; the player can nudge them (Me.adj) for other cameras.
-    const z = Math.max(4, Math.hypot(x, y) * Math.cos(off))
+    const z = Math.max(4, Math.hypot(x, y))
     const v = Math.min(0.97, Math.max(0.06, HORIZON - me.adj.up + (CAMERA_M * me.adj.spread * focal) / z))
     const size = mine ? 30 : cand !== undefined ? 26 : 18
     const onClick = me.onPick ? (e: React.MouseEvent) => { e.stopPropagation(); me.onPick!(idx, j) } : undefined
