@@ -1,14 +1,16 @@
 'use client'
 
-import { boxOf, frameAt, partAt } from '@/lib/board'
+import { frameAt } from '@/lib/board'
 import type { Me } from '@/lib/self'
 
 const GOLD = '#ffd400'
+const HORIZON = 0.17
+const CAMERA_M = 4.8     // camera height above the pitch (m); read off one Buch frame, adjustable with 'spread'
 export const CAND_COLOURS = ['#e8780a', '#2b9bd8', '#c64fb0', '#2fa36b']
 
 /** Tags on the video for "This is me": your own tag (gold), the candidates of an open question (numbered), and, while you tap
- *  yourself, a dot for every player. The sideways position comes from the pan and field of view of the moment, so it is about
- *  right; the height on the picture is only a guess from the distance (nearer = lower), so a tag is near its player, not on his feet. */
+ *  yourself, a dot for every player. The sideways position comes from the pan and field of view of the moment; the height comes from a camera model with
+ *  two guessed numbers (horizon, camera height), so a tag is near its player, not on his feet. The player can nudge them. */
 export default function VideoTags({ me, currentTime }: { me: Me; currentTime: number }) {
   const { board, tracks, followed, question } = me
   if (!board || !tracks || !followed || me.claim.signedIn !== true) return null
@@ -21,8 +23,8 @@ export default function VideoTags({ me, currentTime }: { me: Me; currentTime: nu
   if (fr[1] == null || fr[2] == null) return null
   const k = board.kAngle
   const pan = fr[1] as number, fov = fr[2] as number
-  const half = Math.tan((k * fov * Math.PI) / 360)
-  const [, , y0, y1] = boxOf(board, partAt(board, t))
+  const half = Math.tan((fov * Math.PI) / 360)           // the picture is rendered in the detections' own angle units: no k here
+  const focal = (0.5 / Math.tan((k * fov * Math.PI) / 360)) * (16 / 9)   // picture heights per unit of height/depth (ground-map units, with k)
   const candNo = new Map<number, number>()
   question?.cands.forEach((c, i) => candNo.set(c[0], i))
   const colours = [board.teams.A?.colour ?? '#d62828', board.teams.B?.colour ?? '#1d4ed8']
@@ -35,12 +37,15 @@ export default function VideoTags({ me, currentTime }: { me: Me; currentTime: nu
     const cand = candNo.get(pid)
     if (!mine && cand === undefined && !showAll) continue
     const lon = (Math.atan2(x, y) * 180) / Math.PI / k
-    const off = (k * (lon - pan) * Math.PI) / 180
-    if (Math.abs(off) >= Math.PI / 2.2) continue
-    const u = 0.5 + Math.tan(off) / (2 * half)
+    const dl = ((((lon - pan) % 360) + 540) % 360) - 180   // degrees from the centre of the picture, in the video's angle units
+    if (Math.abs(dl) >= 80) continue
+    const u = 0.5 + Math.tan((dl * Math.PI) / 180) / (2 * half)
+    const off = (k * dl * Math.PI) / 180
     if (u < 0.02 || u > 0.98) continue
-    const near = Math.min(1, Math.max(0, (y - y0) / Math.max(1, y1 - y0)))
-    const v = 0.9 - 0.42 * near
+    // pinhole camera above the pitch: a foot at depth z along the view axis is c / z below the horizon (fractions of the picture height).
+    // The defaults were read off one Buch frame; the player can nudge them (Me.adj) for other cameras.
+    const z = Math.max(4, Math.hypot(x, y) * Math.cos(off))
+    const v = Math.min(0.97, Math.max(0.06, HORIZON - me.adj.up + (CAMERA_M * me.adj.spread * focal) / z))
     const size = mine ? 30 : cand !== undefined ? 26 : 18
     const onClick = me.onPick ? (e: React.MouseEvent) => { e.stopPropagation(); me.onPick!(idx, j) } : undefined
     tags.push(
