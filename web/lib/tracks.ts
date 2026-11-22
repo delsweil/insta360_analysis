@@ -112,6 +112,9 @@ export function resolve(board: Board, tracks: Tracks, pt: Pt): number {
   return bp
 }
 
+/** How far from a point the player marked the tracker follows them (seconds each way): a whole game would mean far too many questions. */
+export const WINDOW_S = 90
+
 export type Status = 'seed' | 'confirmed' | 'auto'
 export type Question = { key: string; dir: 'next' | 'prev'; from: number; at: number; cands: Cand[] }
 export type Followed = { status: Map<number, Status>; questions: Question[]; lost: number; seconds: number }
@@ -131,9 +134,11 @@ export function follow(board: Board, tracks: Tracks, claim: Claim): Followed {
     answers.set(`${l.dir}:${p}`, q)
   }
   const queue: number[] = []
+  const seedT = claim.seeds.map(s => s.t)
+  const inWindow = (q: number) => seedT.some(t => t0(q) <= t + WINDOW_S && t1(q) >= t - WINDOW_S)
   const overlaps = (q: number) => { for (const c of status.keys()) if (Math.min(t1(c), t1(q)) - Math.max(t0(c), t0(q)) > 1.0) return true; return false }
   const add = (q: number, st: Status) => {
-    if (q < 0 || status.has(q) || rejected.has(q) || tracks.pieces[q][1] > 1 || overlaps(q)) return false
+    if (q < 0 || status.has(q) || rejected.has(q) || tracks.pieces[q][1] > 1 || !inWindow(q) || overlaps(q)) return false
     status.set(q, st); queue.push(q); return true
   }
   for (const s of claim.seeds) { const p = resolve(board, tracks, s); if (p >= 0) add(p, 'seed'); else lost++ }

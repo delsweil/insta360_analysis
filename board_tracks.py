@@ -37,10 +37,10 @@ except ImportError:
 
 FORMAT = "football-autopan-tracks"
 VERSION = 1
-TRACKER = "link-1: motion model in metres, colour-aware, no stitching"
+TRACKER = "link-2: motion model in metres, colour-aware, with stitching"
 PART_GAP_S = 10.0          # no moments for this long = a new part: pieces are never joined across it
 WINDOW_S = 10.0           # how long after a piece ends a continuation may start
-SURE = 0.90                # best candidate at least this likely, and close enough = the tracker links by itself
+SURE = 0.80                # best candidate at least this likely, and close enough = the tracker links by itself
 SIDE = {0: 0, 4: 0, 1: 1, 5: 1}
 
 
@@ -65,7 +65,8 @@ def build(t, fr, x, y, team):
     f2 = rank[fr]
     o = np.lexsort((np.arange(len(f2)), f2))
     tid_s = np.full(len(fr), -1, int)
-    tid_s[o] = TS.link(f2[o], vt, x[o], y[o], team[o])
+    t0_ = TS.link(f2[o], vt, x[o], y[o], team[o])
+    tid_s[o] = TS.stitch(f2[o], vt, x[o], y[o], team[o], t0_)       # joins pieces across gaps where one continuation is clear
     # renumber by first appearance in time
     first = {}
     for idx in o:

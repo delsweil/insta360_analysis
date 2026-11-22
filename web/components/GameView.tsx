@@ -20,6 +20,8 @@ import VeoImportModal from '@/components/VeoImportModal'
 import SuggestionImport from '@/components/SuggestionImport'
 import BoardPanel from '@/components/BoardPanel'
 import { useBoard } from '@/lib/board'
+import { useSelf } from '@/lib/self'
+import VideoTags from '@/components/VideoTags'
 import { exportGame } from '@/lib/exportEvents'
 import StatsPanel, { StatsCard } from '@/components/StatsPanel'
 import { useStats } from '@/lib/stats'
@@ -102,6 +104,7 @@ export default function GameView({ gameId, shareToken }: Props) {
   }
   const boardDrag = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
   const { state: boardState, reload: reloadBoard } = useBoard(id)
+  const me = useSelf(id, boardState)
   const { state: statsState } = useStats(id)
   const [showStats, setShowStats] = useState(false) // phone HUD: statistics sheet
   // where a half starts in the video, known when the board data has it
@@ -2344,6 +2347,7 @@ export default function GameView({ gameId, shareToken }: Props) {
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               />
               {clipOverlay}
+              <VideoTags me={me} currentTime={currentTime} />
               {activeTacticalShapes.length > 0 && (
                 <div style={{
                   position: 'absolute', inset: 0,
@@ -2640,7 +2644,7 @@ export default function GameView({ gameId, shareToken }: Props) {
           {/* Right: tactical board + annotations */}
           {!focusMode && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <BoardPanel gameId={id} gameTitle={game.title} state={boardState} reload={reloadBoard} currentTime={currentTime} isCoach={isCoach} />
+            <BoardPanel gameId={id} gameTitle={game.title} state={boardState} reload={reloadBoard} currentTime={currentTime} isCoach={isCoach} me={me} video={{ seek: seekTo, pause: pauseVideo }} />
             <div style={{
               background: '#fff', border: '1px solid #E4E6EE',
               borderRadius: 12, padding: '12px 14px',

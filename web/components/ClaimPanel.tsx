@@ -2,16 +2,17 @@
 
 import { useState } from 'react'
 import { type Board, boxOf, partAt } from '@/lib/board'
-import type { ClaimState } from '@/lib/claims'
+import type { Me } from '@/lib/self'
+import { CAND_COLOURS } from '@/components/VideoTags'
 import { Pitch, PAD } from '@/components/BoardPanel'
 import {
-  type Followed, type Question, type Tracks, type TracksState,
-  pointAt, parseTracks, uploadTracks,
+  type Question, type Tracks,
+  pointAt, parseTracks, uploadTracks, WINDOW_S,
 } from '@/lib/tracks'
 
 const NAVY = '#0f2972'
 const GOLD = '#ffd400'
-const CAND = ['#e8780a', '#2b9bd8', '#c64fb0', '#2fa36b']
+const CAND = CAND_COLOURS
 
 const btn: React.CSSProperties = {
   fontSize: 12, fontWeight: 600, color: NAVY, background: '#e8edf8', border: 'none',
@@ -68,19 +69,16 @@ export function QuestionMap({ board, tracks, q }: { board: Board; tracks: Tracks
 interface Props {
   gameId: string
   board: Board
-  tracksState: TracksState
-  reloadTracks: () => void
-  claim: ClaimState
-  followed: Followed | null
-  picking: boolean
-  setPicking: (v: boolean) => void
+  me: Me
+  video?: { seek: (sec: number) => void; pause: () => void }
   isCoach: boolean
 }
 
-export default function ClaimPanel({ gameId, board, tracksState, reloadTracks, claim, followed, picking, setPicking, isCoach }: Props) {
-  const [skipped, setSkipped] = useState<Set<string>>(new Set())
+export default function ClaimPanel({ gameId, board, me, video, isCoach }: Props) {
+  const { tracksState, claim, followed, picking, setPicking, question: q } = me
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+  const [map, setMap] = useState(false)
   const tracks = tracksState.status === 'ready' ? tracksState.tracks : null
 
   const box: React.CSSProperties = { marginTop: 10, paddingTop: 10, borderTop: '1px solid #E4E6EE', fontSize: 12, color: '#1a2340' }
@@ -93,7 +91,7 @@ export default function ClaimPanel({ gameId, board, tracksState, reloadTracks, c
       const raw = JSON.parse(await file.text()) as Record<string, unknown>
       parseTracks(raw, board)
       const err = await uploadTracks(gameId, raw)
-      if (err) setMsg(err); else reloadTracks()
+      if (err) setMsg(err); else me.reloadTracks()
     } catch (e) { setMsg(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
   }
 
@@ -105,7 +103,7 @@ export default function ClaimPanel({ gameId, board, tracksState, reloadTracks, c
         <div style={{ fontWeight: 600 }}>This is me</div>
         <div style={small}>
           {tracksState.status === 'error' ? `The tracks file could not be read: ${tracksState.message}` :
-            'Players can mark themselves on the board once the tracks file is here. Make it with board_tracks.py from the board data and upload it.'}
+            'Players can mark themselves once the tracks file is here. Make it with board_tracks.py from the board data and upload it.'}
         </div>
         <label style={{ ...btn, display: 'inline-block', marginTop: 6, opacity: busy ? 0.6 : 1 }}>
           {busy ? 'Uploading...' : 'Upload tracks'}
@@ -117,18 +115,23 @@ export default function ClaimPanel({ gameId, board, tracksState, reloadTracks, c
   }
   if (claim.signedIn !== true) return null   // players who are not signed in do not see it
 
-  const q = followed?.questions.find(x => !skipped.has(x.key)) ?? null
   const hasClaim = claim.claim.seeds.length > 0
-  const nOpen = followed ? followed.questions.filter(x => !skipped.has(x.key)).length : 0
+  const nOpen = me.openQuestions
 
+  function endPt(p: number, which: 2 | 3) {
+    const f = tracks!.pieces[p][which]
+    return pointAt(board, f, tracks!.fp[f].indexOf(p))
+  }
   function answer(q: Question, to: number | null) {
-    const from = q.dir === 'next' ? pointAt(board, tracks!.pieces[q.from][3], tracks!.fp[tracks!.pieces[q.from][3]].indexOf(q.from)) : pointAt(board, tracks!.pieces[q.from][2], tracks!.fp[tracks!.pieces[q.from][2]].indexOf(q.from))
-    let toPt = null
-    if (to !== null) {
-      const f = q.dir === 'next' ? tracks!.pieces[to][2] : tracks!.pieces[to][3]
-      toPt = pointAt(board, f, tracks!.fp[f].indexOf(to))
-    }
-    claim.answer({ dir: q.dir, from, to: toPt })
+    claim.answer({ dir: q.dir, from: endPt(q.from, q.dir === 'next' ? 3 : 2), to: to === null ? null : endPt(to, q.dir === 'next' ? 2 : 3) })
+  }
+  function watch(q: Question) {
+    if (!video) return
+    video.seek(Math.max(0, q.at - board.shift - (q.dir === 'next' ? 4 : 10)))
+  }
+  function start() {
+    video?.pause()
+    setPicking(true)
   }
 
   return (
@@ -136,41 +139,45 @@ export default function ClaimPanel({ gameId, board, tracksState, reloadTracks, c
       <div style={{ fontWeight: 600, marginBottom: 4 }}>This is me</div>
       {!hasClaim && !picking && (
         <>
-          <div style={small}>Mark yourself on the board and Claude follows you through the game, asking only where it is unsure. Nobody else sees your answers.</div>
-          <button style={{ ...btn, background: NAVY, color: '#fff', marginTop: 6 }} onClick={() => setPicking(true)}>Find myself</button>
+          <div style={small}>Mark yourself on the video and the tracker follows you for a stretch of the game, asking only where it is unsure. Nobody else sees your answers.</div>
+          <button style={{ ...btn, background: NAVY, color: '#fff', marginTop: 6 }} onClick={start}>Find myself</button>
         </>
       )}
       {picking && (
         <div>
-          <div style={{ marginBottom: 6 }}>Pause the video where you can tell which dot is you, then tap yourself on the board.{hasClaim ? ' Tap a gold dot to say it is not you.' : ''}</div>
+          <div style={{ marginBottom: 6 }}>The video is paused. Tap the dot that is nearest to you on the video (or your dot on the board).{hasClaim ? ' Tap a gold one to say it is not you.' : ''} If the dots are not near the players, pause on another moment first.</div>
           <button style={btn} onClick={() => setPicking(false)}>Cancel</button>
         </div>
       )}
       {hasClaim && !picking && followed && (
         <>
           <div style={{ marginBottom: 6 }}>
-            You are the <span style={{ background: GOLD, color: '#0a1a3a', borderRadius: 4, padding: '0 5px', fontWeight: 600 }}>gold</span> ring on the board: followed for <strong>{fmt(followed.seconds)}</strong> so far.
+            You are the <span style={{ background: GOLD, color: '#0a1a3a', borderRadius: 4, padding: '0 5px', fontWeight: 600 }}>gold</span> tag on the video and board: followed for <strong>{fmt(followed.seconds)}</strong>, up to {WINDOW_S} s either side of where you tapped.
             {nOpen > 0 ? ` ${nOpen} question${nOpen === 1 ? '' : 's'} left.` : ' No open questions.'}
           </div>
           {q && (
             <div style={{ background: '#f4f6fb', borderRadius: 10, padding: 8, marginBottom: 8 }}>
               <div style={{ marginBottom: 6 }}>
-                {q.dir === 'next' ? 'At' : 'Before'} <strong>{fmt(q.at - board.shift)}</strong> in the video you were lost from view. Which dot is you {q.dir === 'next' ? 'afterwards' : 'before'}?
+                Around <strong>{fmt(q.at - board.shift)}</strong> the tracker lost you. Watch the video: when you are back on the picture, which numbered tag is you?
               </div>
-              <QuestionMap board={board} tracks={tracks} q={q} />
+              <button style={{ ...btn, background: NAVY, color: '#fff' }} onClick={() => watch(q)} disabled={!video}>▶ Watch this moment</button>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
                 {q.cands.map((c, i) => (
                   <button key={c[0]} style={{ ...btn, background: CAND[i % 4], color: '#fff' }} onClick={() => answer(q, c[0])}>{i + 1}</button>
                 ))}
                 <button style={btn} onClick={() => answer(q, null)}>None of them</button>
-                <button style={btn} onClick={() => setSkipped(s => new Set(s).add(q.key))}>Skip</button>
+                <button style={btn} onClick={() => me.skip(q.key)}>Skip</button>
               </div>
-              <div style={{ ...small, marginTop: 6 }}>Gold line: your path up to here. Numbered lines: where the candidates are.</div>
+              <div style={{ ...small, marginTop: 6 }}>
+                The numbered tags appear on the video next to the players the tracker thinks could be you.
+                <button style={{ ...btn, marginLeft: 6, padding: '2px 8px', fontSize: 11 }} onClick={() => setMap(v => !v)}>{map ? 'Hide board' : 'Board'}</button>
+              </div>
+              {map && <div style={{ marginTop: 6 }}><QuestionMap board={board} tracks={tracks} q={q} /></div>}
             </div>
           )}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            <button style={btn} onClick={() => setPicking(true)}>Mark myself again</button>
-            <button style={btn} onClick={() => { if (window.confirm('Remove everything you marked in this game?')) { claim.reset(); setSkipped(new Set()) } }}>Start over</button>
+            <button style={btn} onClick={start}>Mark myself again</button>
+            <button style={btn} onClick={() => { if (window.confirm('Remove everything you marked in this game?')) { claim.reset(); me.resetSkips() } }}>Start over</button>
           </div>
         </>
       )}

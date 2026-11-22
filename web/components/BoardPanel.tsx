@@ -5,8 +5,8 @@ import {
   type Board, type BoardState, type Box, type Raw,
   boxOf, frameAt, parseBoard, partAt, playersIn, uploadBoard,
 } from '@/lib/board'
-import { useTracks, useFollowed, pointAt, type Followed } from '@/lib/tracks'
-import { useClaim } from '@/lib/claims'
+import type { Followed } from '@/lib/tracks'
+import type { Me } from '@/lib/self'
 import ClaimPanel from '@/components/ClaimPanel'
 
 const NAVY = '#0f2972'
@@ -198,6 +198,8 @@ interface Props {
   reload: () => void
   currentTime: number
   isCoach: boolean
+  me?: Me               // "This is me" state (from useSelf in GameView); without it the card has no such section
+  video?: { seek: (sec: number) => void; pause: () => void }
   compact?: boolean     // only the see-through pitch, no card, text or buttons (mobile HUD)
 }
 
@@ -206,7 +208,7 @@ const btn: React.CSSProperties = {
   borderRadius: 99, padding: '3px 10px', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
 }
 
-export default function BoardPanel({ gameId, gameTitle, state, reload, currentTime, isCoach, compact }: Props) {
+export default function BoardPanel({ gameId, gameTitle, state, reload, currentTime, isCoach, compact, me, video }: Props) {
   const board = state.status === 'ready' ? state.board : null
   const raw = state.status === 'ready' ? state.raw : null
   const [trails, setTrails] = useState(false)
@@ -215,11 +217,6 @@ export default function BoardPanel({ gameId, gameTitle, state, reload, currentTi
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
-  const [picking, setPicking] = useState(false)
-  const { state: tracksState, reload: reloadTracks } = useTracks(gameId, board)
-  const tracks = tracksState.status === 'ready' ? tracksState.tracks : null
-  const claim = useClaim(gameId, tracks?.tracker ?? null)
-  const followed = useFollowed(board, tracks, claim.claim)
   const bigRef = useRef<SVGSVGElement>(null)
 
   useEffect(() => { if (board) setShift(board.shift) }, [board])
@@ -288,13 +285,9 @@ export default function BoardPanel({ gameId, gameTitle, state, reload, currentTi
 
   const t = currentTime + shift
   const idxNow = frameAt(board, t)
-  const pieceIds = tracks && idxNow >= 0 ? tracks.fp[idxNow] : undefined
-  const pick = picking && tracks && claim.signedIn === true ? (m: number, k: number) => {
-    const pid = tracks.fp[m][k]
-    const pt = pointAt(board, m, k)
-    if (followed?.status.has(pid)) claim.addReject(pt); else claim.addSeed(pt)
-    setPicking(false)
-  } : undefined
+  const pieceIds = me?.tracks && idxNow >= 0 ? me.tracks.fp[idxNow] : undefined
+  const followed = me?.followed ?? null
+  const pick = me?.onPick
   if (compact) return <BoardView board={board} t={t} trails={false} translucent />
   const part = partAt(board, t)
   const idx = frameAt(board, t)
@@ -348,8 +341,7 @@ export default function BoardPanel({ gameId, gameTitle, state, reload, currentTi
       </div>
       <BoardView board={board} t={t} trails={trails} svgRef={svgRef} followed={followed} pieceIds={pieceIds} onPick={pick} />
       {legend(false)}
-      <ClaimPanel gameId={gameId} board={board} tracksState={tracksState} reloadTracks={reloadTracks} claim={claim}
-        followed={followed} picking={picking} setPicking={setPicking} isCoach={isCoach} />
+      {me && <ClaimPanel gameId={gameId} board={board} me={me} video={video} isCoach={isCoach} />}
       <div style={{ fontSize: 10, color: '#8A8F9E', marginTop: 8 }}>
         Positions are estimated from the video (a few metres off, more on the far side): read the shape, not the exact distances.
       </div>
