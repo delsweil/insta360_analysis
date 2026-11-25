@@ -16,7 +16,7 @@
 
 import { useRef, useEffect, useCallback, useState, forwardRef, useImperativeHandle } from 'react'
 import ShapeSettingsPanel from './ShapeSettingsPanel'
-import { resolveAll, resolveShape, type Animated, type Resolved } from '@/lib/annoAnim'
+import { resolveAll, resolveShape, pinchPatch, type Animated, type Resolved } from '@/lib/annoAnim'
 import { markerSize, type MarkerSample } from '@/lib/annoAnim'
 
 export type NPoint = [number, number]
@@ -69,6 +69,8 @@ interface AnnotationCanvasProps {
   /** What the coach has taught us about marker size in this game, and where to report a new correction. */
   markerSamples?: MarkerSample[]
   onMarkerSample?: (s: MarkerSample) => void
+  /** Show the style panel for the selected shape over the video (default). The phone HUD turns it off and has its own bar. */
+  showSettings?: boolean
 }
 
 const DEFAULTS = {
@@ -88,6 +90,12 @@ function setDash(ctx: CanvasRenderingContext2D, dash: DashStyle) {
   if (dash === 'dashed') ctx.setLineDash([14, 10])
   else if (dash === 'dotted') ctx.setLineDash([3, 7])
   else ctx.setLineDash([])
+}
+/** The candidate with the smallest squared distance, if within `max`. */
+function nearest<K extends string>(c: [K, number][], max: number): K | null {
+  let best: K | null = null, bd = max
+  for (const [k, d] of c) if (d <= bd) { best = k; bd = d }
+  return best
 }
 function dist2(ax: number, ay: number, bx: number, by: number) { return (ax - bx) ** 2 + (ay - by) ** 2 }
 function distToSegment2(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
@@ -127,7 +135,7 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
   const {
     shapes, editable, tool,
     onAddShape, onUpdateShape, onRemoveShape, onRequestLabelText, onToggleVideo, pitchPolygon,
-    time, onDuplicateShape, penColor, markerSamples, onMarkerSample,
+    time, onDuplicateShape, penColor, markerSamples, onMarkerSample, showSettings = true,
   } = props
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -137,6 +145,10 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
   const preview = useRef<{ from: NPoint; to: NPoint; tool: 'zone' | 'curve' | 'cone' } | null>(null) // rubber band while dragging out a line / zone / body shape
   const numberCounter = useRef(1)
   const [connectorFrom, setConnectorFrom] = useState<string | null>(null)
+  // Touch: fingers are fat, so handles get a bigger target; two fingers pinch (and drag) the selected shape.
+  const touchy = useRef(false)
+  const pointers = useRef(new Map<number, [number, number]>())
+  const pinch = useRef<{ id: string; base: Shape; d0: number; c0: [number, number] } | null>(null)
 
   const [selInternal, setSelInternal] = useState<string | null>(null)
   const selectedId = props.selectedId !== undefined ? props.selectedId : selInternal
@@ -620,7 +632,7 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
 
   const hitHandle = useCallback((cx: number, cy: number, only: string | null) => {
     const c = canvasRef.current!
-    const t2 = ((HANDLE_RADIUS + 5) * pxScale()) ** 2
+    const t2 = ((HANDLE_RADIUS + 5) * (touchy.current ? 2 : 1) * pxScale()) ** 2
     const byId = new Map(current().map(s => [s.id, s]))
     for (const s of current()) {
       if (only !== null && s.id !== only) continue
@@ -639,9 +651,11 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
       if (s.type === 'highlight') {
         const [x, y] = toCanvas(s.pos)
         const rx = s.radiusX * c.width, ry = s.radiusY * c.height
-        if (dist2(x + rx, y, cx, cy) <= t2) return { shapeId: s.id, handle: 'radiusX' }
-        if (dist2(x, y + ry, cx, cy) <= t2) return { shapeId: s.id, handle: 'radiusY' }
-        if (dist2(x, y, cx, cy) <= t2) return { shapeId: s.id, handle: 'move' }
+        // The nearest handle wins: on a small marker a finger's reach covers all three, and the centre must still drag it.
+        const best = nearest<'radiusX' | 'radiusY' | 'move'>([
+          ['radiusX', dist2(x + rx, y, cx, cy)], ['radiusY', dist2(x, y + ry, cx, cy)], ['move', dist2(x, y, cx, cy) * 0.8],
+        ], t2)
+        if (best) return { shapeId: s.id, handle: best }
       }
       if (s.type === 'cone') {
         const [ox, oy] = toCanvas(s.pos)
@@ -649,9 +663,10 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
         const tipX = ox + r * Math.cos(s.angle), tipY = oy + r * Math.sin(s.angle)
         const a1 = s.angle + s.width / 2
         const wX = ox + r * Math.cos(a1), wY = oy + r * Math.sin(a1)
-        if (dist2(wX, wY, cx, cy) <= t2) return { shapeId: s.id, handle: 'width' }
-        if (dist2(tipX, tipY, cx, cy) <= t2) return { shapeId: s.id, handle: 'direction' }
-        if (dist2(ox, oy, cx, cy) <= t2) return { shapeId: s.id, handle: 'move' }
+        const best = nearest<'width' | 'direction' | 'move'>([
+          ['width', dist2(wX, wY, cx, cy)], ['direction', dist2(tipX, tipY, cx, cy)], ['move', dist2(ox, oy, cx, cy) * 0.8],
+        ], t2)
+        if (best) return { shapeId: s.id, handle: best }
       }
       if (s.type === 'connector') {
         const from = byId.get(s.fromId), to = byId.get(s.toId)
@@ -679,7 +694,7 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
         const p0 = toCanvas(s.from), p1 = toCanvas(s.control), p2 = toCanvas(s.to)
         for (let t = 0; t <= 1; t += 0.05) {
           const [x, y] = bezierPoint(t, p0, p1, p2)
-          if (dist2(x, y, cx, cy) <= (12 * scale) ** 2) return s.id
+          if (dist2(x, y, cx, cy) <= ((touchy.current ? 20 : 12) * scale) ** 2) return s.id
         }
       }
       if (s.type === 'highlight') {
@@ -702,7 +717,7 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
       }
       if (s.type === 'label' || s.type === 'number') {
         const [x, y] = toCanvas(s.pos)
-        if (dist2(x, y, cx, cy) <= (25 * scale) ** 2) return s.id
+        if (dist2(x, y, cx, cy) <= ((touchy.current ? 34 : 25) * scale) ** 2) return s.id
       }
       if (s.type === 'connector') {
         const from = byId.get(s.fromId), to = byId.get(s.toId)
@@ -735,7 +750,10 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
   function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     if (!editable) { onToggleVideo?.(); return }
     const [cx, cy] = xy(e)
+    touchy.current = e.pointerType === 'touch' || e.pointerType === 'pen'
     try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* not every browser/pointer supports capture */ }
+    pointers.current.set(e.pointerId, [cx, cy])
+    if (pointers.current.size >= 2) { startPinch(); return }
 
     if (tool === 'select') {
       const handleHit = hitHandle(cx, cy, selectedId)
@@ -856,6 +874,9 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
   function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
     if (!editable) return
     const [cx, cy] = xy(e)
+    if (pointers.current.has(e.pointerId)) pointers.current.set(e.pointerId, [cx, cy])
+    if (pointers.current.size >= 2) { movePinch(); return }
+    if (pinch.current) return   // one finger is still down after a pinch: ignore it until it lifts
     const p = toNorm(cx, cy)
     const canvas = canvasRef.current!
     const drag = dragTarget.current
@@ -955,10 +976,45 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
     }
   }
 
+  /** Two fingers down: whatever one finger had started is dropped, and the selected (else the touched) shape is pinched. */
+  function startPinch() {
+    dragTarget.current = null; preview.current = null; draftPoints.current = draftPoints.current.length === 1 ? [] : draftPoints.current
+    const pts = [...pointers.current.values()]
+    const [a, b] = pts
+    const c0: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+    const cur = current()
+    const id = (selectedId && cur.find(s => s.id === selectedId)?.id) || hitBody(c0[0], c0[1])
+    const base = id ? cur.find(s => s.id === id) : undefined
+    if (!id || !base) { pinch.current = null; return }
+    setSelectedId(id)
+    pinch.current = { id, base, d0: Math.max(1, Math.hypot(a[0] - b[0], a[1] - b[1])), c0 }
+  }
+  function movePinch() {
+    const pz = pinch.current; if (!pz) return
+    const [a, b] = [...pointers.current.values()]
+    const c = canvasRef.current!
+    const f = Math.hypot(a[0] - b[0], a[1] - b[1]) / pz.d0
+    const mid: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+    const patch = pinchPatch(pz.base, f, (mid[0] - pz.c0[0]) / c.width, (mid[1] - pz.c0[1]) / c.height)
+    if (patch) update(pz.id, patch)
+  }
+
   function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
+    const wasPinching = pointers.current.size >= 2
+    pointers.current.delete(e.pointerId)
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
+    if (wasPinching || pinch.current) {
+      const pz = pinch.current
+      if (pointers.current.size < 2 && pz) {
+        const s = live.current.shapes.find(x => x.id === pz.id)
+        reportSample(s ? resolveShape(s, getTau())?.s : undefined)   // a pinched marker is a size correction worth learning from
+      }
+      if (pointers.current.size === 0) pinch.current = null
+      dragTarget.current = null
+      return
+    }
     const drag = dragTarget.current
     dragTarget.current = null
-    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
     if (!editable || !drag) return
     const [cx, cy] = xy(e)
 
@@ -1007,10 +1063,10 @@ const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, AnnotationCanvasProp
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={() => { dragTarget.current = null; preview.current = null }}
+        onPointerCancel={e => { pointers.current.delete(e.pointerId); if (pointers.current.size === 0) pinch.current = null; dragTarget.current = null; preview.current = null }}
       />
 
-      {editable && selectedShape && (
+      {editable && showSettings && selectedShape && (
         <ShapeSettingsPanel
           shape={selectedShape}
           onChange={patch => update(selectedShape.id, patch)}

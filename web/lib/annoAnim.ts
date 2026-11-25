@@ -333,3 +333,42 @@ export function markerSize(samples: MarkerSample[], y: number, aspect: number): 
   rx = Math.min(0.09, Math.max(0.008, rx))
   return { radiusX: rx, radiusY: Math.max(0.008, rx * aspect * Math.min(1.4, Math.max(0.25, flat))) }
 }
+
+/** The point a shape is scaled around when pinched: its anchor, so it grows in place instead of drifting. */
+export function pivotOf(s: Shape): NPoint {
+  switch (s.type) {
+    case 'zone': {
+      const n = Math.max(1, s.points.length)
+      return [s.points.reduce((a, p) => a + p[0], 0) / n, s.points.reduce((a, p) => a + p[1], 0) / n]
+    }
+    case 'curve': return [(s.from[0] + s.to[0]) / 2, (s.from[1] + s.to[1]) / 2]
+    case 'connector': return [0, 0]
+    default: return s.pos
+  }
+}
+
+export const MIN_PINCH = 0.01
+/**
+ * What a two-finger pinch does to a shape: scale it by `f` about its own anchor and slide it by (dx, dy), all in 0..1 units.
+ * Returns the patch to apply (null when the shape cannot be pinched, e.g. text or a connector, which follows its markers).
+ * Markers keep their ellipse shape; a body shape grows in length; zones and lines scale their points.
+ */
+export function pinchPatch(s: Shape, f: number, dx = 0, dy = 0): Partial<Shape> | null {
+  if (!isFinite(f) || f <= 0) return null
+  const pv = pivotOf(s)
+  const sc = (p: NPoint): NPoint => [pv[0] + (p[0] - pv[0]) * f + dx, pv[1] + (p[1] - pv[1]) * f + dy]
+  const mv = (p: NPoint): NPoint => [p[0] + dx, p[1] + dy]
+  switch (s.type) {
+    case 'highlight':
+      return {
+        pos: mv(s.pos),
+        radiusX: Math.max(MIN_PINCH, Math.min(0.12, s.radiusX * f)),
+        radiusY: Math.max(MIN_PINCH, Math.min(0.2, s.radiusY * f)),
+      } as Partial<Shape>
+    case 'cone': return { pos: mv(s.pos), length: Math.max(0.03, Math.min(0.9, s.length * f)) } as Partial<Shape>
+    case 'zone': return { points: s.points.map(sc) } as Partial<Shape>
+    case 'curve': return { from: sc(s.from), control: sc(s.control), to: sc(s.to) } as Partial<Shape>
+    case 'label': case 'number': return { pos: mv(s.pos) } as Partial<Shape>
+    default: return null
+  }
+}

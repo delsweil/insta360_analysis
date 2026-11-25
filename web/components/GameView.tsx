@@ -17,6 +17,7 @@ import TimingStrip from '@/components/TimingStrip'
 import TransportBar, { RATES } from '@/components/TransportBar'
 import FloatingDrawTools, { DRAW_TOOLS, DrawHint } from '@/components/FloatingDrawTools'
 import AnnotationTimeline from '@/components/AnnotationTimeline'
+import MobileDrawLayer from '@/components/MobileDrawLayer'
 import { applyEdit, resolveShape, duplicateShape, addKeyframeAt, removeKeyframe, keyframeAt, staggerReveal, clearReveal, isAnimated, spanEnd, type MarkerSample } from '@/lib/annoAnim'
 import { EditorClock, holdOf, holdToColumn, freezeLength, annoEnd, totalLength, useSmoothVideoTime, useViewerClock, type Holding, type Hold } from '@/lib/annoPlayback'
 import VeoImportModal from '@/components/VeoImportModal'
@@ -110,6 +111,10 @@ export default function GameView({ gameId, shareToken }: Props) {
   const me = useSelf(id, boardState)
   const { state: statsState } = useStats(id)
   const [showStats, setShowStats] = useState(false) // phone HUD: statistics sheet
+  const [showTimeline, setShowTimeline] = useState(() => { // phone HUD: the drawing's timeline sheet (hidden by default, the choice is remembered)
+    try { return localStorage.getItem('hud-timeline') === '1' } catch { return false }
+  })
+  const chooseTimeline = (on: boolean) => { setShowTimeline(on); try { localStorage.setItem('hud-timeline', on ? '1' : '0') } catch {} }
   // where a half starts in the video, known when the board data has it
   const halfStart = useCallback((half: string) => {
     if (boardState.status !== 'ready') return null
@@ -627,6 +632,15 @@ export default function GameView({ gameId, shareToken }: Props) {
     if (selectedShapeId) updateDraftShape(selectedShapeId, { color: c } as Partial<Shape>, editorClock.get())
   }, [selectedShapeId, updateDraftShape, editorClock])
 
+  const toggleKeyframe = useCallback((sid: string) => {
+    const tau = editorClock.get()
+    setDraftShapes(prev => prev.map(sh => {
+      if (sh.id !== sid) return sh
+      const k = keyframeAt(sh, tau)
+      return k ? removeKeyframe(sh, k.t) : addKeyframeAt(sh, tau)
+    }))
+  }, [editorClock])
+
   // The drawing's timing as the coach has set it so far.
   const anchorSec = markIn ?? currentTime
   const drawHold: Hold = holdOf(autoResumeSec)
@@ -637,6 +651,36 @@ export default function GameView({ gameId, shareToken }: Props) {
   const drawTotal = totalLength(drawF, draftShapes, anchorSec, drawEnd)
   const drawRange = Math.max(drawTotal + 1, 6)   // the timeline always has room beyond the end
   const drawHasTiming = draftShapes.some(sh => { const a = sh as { t0?: number; t1?: number; draw?: boolean }; return (a.t0 ?? 0) > 0 || a.t1 != null || !!a.draw })
+  /** The drawing's timeline: desktop shows it under the video, the phone HUD in a sheet (compact = touch sizes, no save button there). */
+  const drawTimeline = (compact: boolean) => (
+    <AnnotationTimeline
+      compact={compact}
+      shapes={draftShapes}
+      selectedId={selectedShapeId}
+      onSelect={setSelectedShapeId}
+      onChangeShape={(sid, next) => setDraftShapes(prev => prev.map(sh => sh.id === sid ? next : sh))}
+      onReplaceAll={setDraftShapes}
+      clock={editorClock}
+      total={drawTotal}
+      range={drawRange}
+      F={drawF}
+      hold={drawHold}
+      onHold={h => setAutoResumeSec(holdToColumn(h))}
+      autoKey={autoKey}
+      onAutoKey={setAutoKey}
+      onToggleKeyframe={toggleKeyframe}
+      onReveal={() => { setDraftShapes(prev => staggerReveal(prev)); editorClock.scrub(0) }}
+      onShowAll={() => setDraftShapes(prev => clearReveal(prev))}
+      animated={drawHasTiming}
+      onSave={compact ? undefined : () => {
+        mobileCanvasRef.current?.finalizePending()
+        desktopCanvasRef.current?.finalizePending()
+        handleRangeSave()
+      }}
+      saving={saving}
+      saveLabel={editingAnnotationId ? 'Save changes' : 'Save annotation'}
+    />
+  )
   useEffect(() => {
     editorClock.configure({
       anchor: anchorSec, F: drawF, total: drawTotal, maxScrub: drawRange, getVideo,
@@ -1362,6 +1406,10 @@ export default function GameView({ gameId, shareToken }: Props) {
           onUpdateShape={updateDraftShape}
           onRemoveShape={removeDraftShape}
           onToggleVideo={undefined}
+          selectedId={selectedShapeId}
+          onSelect={setSelectedShapeId}
+          onDuplicateShape={duplicateDraftShape}
+          showSettings={false}
           penColor={penColor}
           markerSamples={markerSamples}
           onMarkerSample={addMarkerSample}
@@ -1464,7 +1512,7 @@ export default function GameView({ gameId, shareToken }: Props) {
         <div onClick={e => e.stopPropagation()} style={{
           position: 'absolute', top: '50%', left: '50%',
           transform: 'translate(-50%, -50%)',
-          zIndex: 10, display: 'flex', alignItems: 'center', gap: 14,
+          zIndex: 10, display: isDrawing ? 'none' : 'flex', alignItems: 'center', gap: 14,   // while drawing, the timeline sheet is the transport
         }}>
           {([-30, -10] as const).map(delta => (
             <button
@@ -1518,7 +1566,7 @@ export default function GameView({ gameId, shareToken }: Props) {
         {/* ── Bottom HUD ── */}
         <div onClick={e => e.stopPropagation()} style={{
           position: 'absolute', bottom: 0, left: 0, right: 0,
-          zIndex: 10,
+          zIndex: 10, display: isDrawing ? 'none' : 'block',
           paddingTop: 0, paddingLeft: 12, paddingRight: 12,
           paddingBottom: 'max(10px, env(safe-area-inset-bottom))',
         }}>
@@ -1631,122 +1679,7 @@ export default function GameView({ gameId, shareToken }: Props) {
           </div>
 
           {/* Action row — drawing mode replaces normal controls */}
-          {isDrawing ? (
-            /* ── Mobile draw toolbar ── */
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-              {/* Tool picker row */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5, overflowX: 'auto', paddingBottom: 2 }}>
-                {([
-                  { key: 'select',    icon: '↖', label: 'Auswahl' },
-                  { key: 'zone',      icon: '▭', label: 'Zone' },
-                  { key: 'curve',     icon: '↝', label: 'Linie' },
-                  { key: 'connector', icon: '⌇', label: 'Pfeil' },
-                  { key: 'cone',      icon: '◣', label: 'Spieler' },
-                  { key: 'highlight', icon: '◎', label: 'Spot' },
-                  { key: 'label',     icon: 'T', label: 'Text' },
-                  { key: 'number',    icon: '①', label: 'Nr.' },
-                ] as const).map(t => {
-                  const isSelected = drawTool === t.key
-                  return (
-                    <button
-                      key={t.key}
-                      onClick={() => setDrawTool(t.key as typeof drawTool)}
-                      title={t.label}
-                      style={{
-                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-                        padding: '5px 8px', borderRadius: 8, flexShrink: 0,
-                        border: `1.5px solid ${isSelected ? '#4ade80' : 'rgba(255,255,255,0.2)'}`,
-                        background: isSelected ? 'rgba(74,222,128,0.15)' : 'rgba(255,255,255,0.07)',
-                        color: isSelected ? '#4ade80' : 'rgba(255,255,255,0.7)',
-                        cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
-                      }}
-                    >
-                      <span style={{ fontSize: 14 }}>{t.icon}</span>
-                      <span style={{ fontSize: 8, fontWeight: 600, letterSpacing: '0.03em' }}>{t.label}</span>
-                    </button>
-                  )
-                })}
-              </div>
-              {/* Undo / Clear / Done row */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                <button
-                  onClick={() => setDraftShapes(prev => prev.slice(0, -1))}
-                  disabled={draftShapes.length === 0}
-                  style={{
-                    padding: '0 12px', height: 36,
-                    background: 'rgba(255,255,255,0.07)',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    borderRadius: 9,
-                    color: draftShapes.length > 0 ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.25)',
-                    fontSize: 12, fontWeight: 600,
-                    fontFamily: 'DM Sans, sans-serif', cursor: draftShapes.length > 0 ? 'pointer' : 'default',
-                    flexShrink: 0,
-                  }}
-                >↩ Undo</button>
-                <button
-                  onClick={() => setDraftShapes([])}
-                  style={{
-                    padding: '0 12px', height: 36,
-                    background: 'rgba(239,68,68,0.1)',
-                    border: '1px solid rgba(239,68,68,0.3)',
-                    borderRadius: 9, color: 'rgba(239,68,68,0.85)',
-                    fontSize: 12, fontWeight: 600,
-                    fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
-                  }}
-                >✕ Clear</button>
-                <div style={{ flex: 1 }} />
-                {/* Hint */}
-                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', flexShrink: 0 }}>
-                  {draftShapes.length} shapes
-                </span>
-                <button
-                  onClick={() => {
-                    mobileCanvasRef.current?.finalizePending()
-                    desktopCanvasRef.current?.finalizePending()
-                    resetEditor()
-                    setIsDrawing(false)
-                    setDrawTool('select')
-                    setEditingAnnotationId(null)
-                    setMarkIn(null)
-                    setAnnotationEndSec(null)
-                    setClipEndSec(null)
-                  }}
-                  style={{
-                    padding: '0 16px', height: 36,
-                    background: '#0f2972', border: 'none',
-                    borderRadius: 9, color: '#fff',
-                    fontSize: 12, fontWeight: 700,
-                    fontFamily: 'DM Sans, sans-serif', cursor: 'pointer', flexShrink: 0,
-                  }}
-                >✓ Fertig</button>
-
-                {/* Fullscreen toggle (drawing mode) */}
-                <button
-                  onClick={() => {
-                    if (!document.fullscreenElement) {
-                      document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {})
-                    } else {
-                      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {})
-                    }
-                  }}
-                  style={{
-                    padding: '0 11px', height: 36,
-                    background: 'rgba(255,255,255,0.08)',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    cursor: 'pointer', flexShrink: 0,
-                  }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    {isFullscreen
-                      ? <path d="M5 2H2v3M9 2h3v3M5 12H2V9M9 12h3V9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                      : <path d="M2 5V2h3M9 2h3v3M2 9v3h3M12 9v3H9" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    }
-                  </svg>
-                </button>
-              </div>
-            </div>
-          ) : (
+          {isDrawing ? null : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             {!readOnly && (<>
             {/* Mark / Save clip button */}
@@ -1980,6 +1913,30 @@ export default function GameView({ gameId, shareToken }: Props) {
           </div>
           )}
         </div>
+
+        {isDrawing && (
+          <MobileDrawLayer
+            tool={drawTool}
+            onTool={setDrawTool}
+            penColor={penColor}
+            onPenColor={choosePenColor}
+            canUndo={draftShapes.length > 0}
+            onUndo={() => setDraftShapes(prev => prev.slice(0, -1))}
+            shapeCount={draftShapes.length}
+            onCancel={finishDrawing}
+            onSave={() => { mobileCanvasRef.current?.finalizePending(); handleRangeSave() }}
+            saving={saving}
+            saveLabel={editingAnnotationId ? 'Speichern' : 'Fertig'}
+            hasSelection={!!selectedShapeId && draftShapes.some(s => s.id === selectedShapeId)}
+            onDuplicate={() => selectedShapeId && duplicateDraftShape(selectedShapeId)}
+            onDelete={() => selectedShapeId && removeDraftShape(selectedShapeId)}
+            onKeyframe={() => selectedShapeId && toggleKeyframe(selectedShapeId)}
+            timelineOpen={showTimeline}
+            onToggleTimeline={() => chooseTimeline(!showTimeline)}
+          >
+            {drawTimeline(true)}
+          </MobileDrawLayer>
+        )}
 
         {showClip && (
           <ClipModal
@@ -2514,41 +2471,7 @@ export default function GameView({ gameId, shareToken }: Props) {
             </div>
 
             {/* The drawing's timeline: when shapes appear and move, and whether the video freezes */}
-            {isDrawing && (
-              <AnnotationTimeline
-                shapes={draftShapes}
-                selectedId={selectedShapeId}
-                onSelect={setSelectedShapeId}
-                onChangeShape={(sid, next) => setDraftShapes(prev => prev.map(sh => sh.id === sid ? next : sh))}
-                onReplaceAll={setDraftShapes}
-                clock={editorClock}
-                total={drawTotal}
-                range={drawRange}
-                F={drawF}
-                hold={drawHold}
-                onHold={h => setAutoResumeSec(holdToColumn(h))}
-                autoKey={autoKey}
-                onAutoKey={setAutoKey}
-                onToggleKeyframe={sid => {
-                  const tau = editorClock.get()
-                  setDraftShapes(prev => prev.map(sh => {
-                    if (sh.id !== sid) return sh
-                    const k = keyframeAt(sh, tau)
-                    return k ? removeKeyframe(sh, k.t) : addKeyframeAt(sh, tau)
-                  }))
-                }}
-                onReveal={() => { setDraftShapes(prev => staggerReveal(prev)); editorClock.scrub(0) }}
-                onShowAll={() => setDraftShapes(prev => clearReveal(prev))}
-                animated={drawHasTiming}
-                onSave={() => {
-                  mobileCanvasRef.current?.finalizePending()
-                  desktopCanvasRef.current?.finalizePending()
-                  handleRangeSave()
-                }}
-                saving={saving}
-                saveLabel={editingAnnotationId ? 'Save changes' : 'Save annotation'}
-              />
-            )}
+            {isDrawing && drawTimeline(false)}
 
             {/* Match statistics: a card that opens under the video */}
             {!focusMode && statsState.status === 'ready' && (

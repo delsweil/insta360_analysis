@@ -3,7 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   resolveShape, applyEdit, alphaAt, spanEnd, staggerReveal, isAnimated, removeKeyframe, setWindow,
-  markerSize, keyframeAt, duplicateShape, clearReveal, shiftShape, addKeyframeAt,
+  markerSize, keyframeAt, duplicateShape, clearReveal, shiftShape, addKeyframeAt, pinchPatch, pivotOf,
 } from './annoAnim.ts'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -159,4 +159,27 @@ test('addKeyframeAt pins the current look so the next edit moves from there', ()
   near((resolveShape(s, 1)!.s as any).pos[0], s.kf[0].v.pos[0])
   assert.equal(addKeyframeAt(s, 1.01).kf.length, 2, 'already a keyframe there')
   assert.equal(addKeyframeAt(hl(), 0).kf, undefined, 'nothing to pin at the start')
+})
+
+test('pinch scales a marker in place, keeps its ellipse and respects limits', () => {
+  const p: any = pinchPatch(hl(), 2)
+  near(p.radiusX, 0.06); near(p.radiusY, 0.1); assert.deepEqual(p.pos, [0.2, 0.5])
+  const big: any = pinchPatch(hl(), 100); near(big.radiusX, 0.12); near(big.radiusY, 0.2)
+  const small: any = pinchPatch(hl(), 0.0001); assert.ok(small.radiusX >= 0.01)
+})
+
+test('pinch scales a zone about its centre and a line about its midpoint; two fingers also drag', () => {
+  const z: any = { id: 'z', type: 'zone', points: [[0.2, 0.2], [0.4, 0.2], [0.4, 0.4], [0.2, 0.4]], color: '#fff', opacity: 0.3, dash: 'solid' }
+  const pz: any = pinchPatch(z, 2)
+  near(pz.points[0][0], 0.1); near(pz.points[2][0], 0.5)
+  const c = pivotOf(z); near(c[0], 0.3); near(c[1], 0.3)
+  const moved: any = pinchPatch(hl(), 1, 0.1, -0.1); near(moved.pos[0], 0.3); near(moved.pos[1], 0.4)
+  const cu: any = { id: 'c', type: 'curve', from: [0.2, 0.5], control: [0.3, 0.4], to: [0.4, 0.5], style: 'pass', color: '#fff', opacity: 1, dash: 'solid' }
+  const pc: any = pinchPatch(cu, 2); near(pc.from[0], 0.1); near(pc.to[0], 0.5)
+})
+
+test('pinch ignores shapes it cannot scale and bad factors', () => {
+  assert.equal(pinchPatch({ id: 'k', type: 'connector', fromId: 'a', toId: 'b' } as any, 2), null)
+  assert.equal(pinchPatch(hl(), NaN), null)
+  assert.equal(pinchPatch(hl(), 0), null)
 })

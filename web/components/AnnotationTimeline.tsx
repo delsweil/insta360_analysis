@@ -34,10 +34,12 @@ interface Props {
   onSave?: () => void
   saving?: boolean
   saveLabel?: string
+  /** Phone layout: bigger touch targets, narrower labels, no card chrome (the parent supplies the sheet). */
+  compact?: boolean
 }
 
-const LABEL_W = 132
-const ROW_H = 24
+const LABEL_W_DESKTOP = 132
+const ROW_H_DESKTOP = 24
 const NAVY = '#0f2972'
 
 function rowLabel(s: Shape): { icon: string; text: string } {
@@ -64,6 +66,8 @@ function drag(onMove: (e: PointerEvent) => void, onEnd?: () => void) {
 
 export default function AnnotationTimeline(p: Props) {
   const { shapes, selectedId, clock, total, range, F, hold } = p
+  const LABEL_W = p.compact ? 76 : LABEL_W_DESKTOP
+  const ROW_H = p.compact ? 30 : ROW_H_DESKTOP
   useSyncExternalStore(clock.subscribe, clock.getVersion, clock.getVersion)
   const [, frame] = useReducer((n: number) => n + 1, 0)
   const playing = clock.isPlaying()
@@ -99,19 +103,19 @@ export default function AnnotationTimeline(p: Props) {
   const canKey = !!selected && tau > baseTime(selected) + 0.05
 
   const btn = (on = false): React.CSSProperties => ({
-    fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 7, cursor: 'pointer', whiteSpace: 'nowrap',
+    fontSize: 11, fontWeight: 600, padding: p.compact ? '6px 9px' : '4px 10px', borderRadius: 7, cursor: 'pointer', whiteSpace: 'nowrap',
     border: `1.5px solid ${on ? NAVY : '#E4E6EE'}`, background: on ? NAVY : '#fff', color: on ? '#fff' : '#4b5163',
   })
 
   return (
-    <div style={{ background: '#fff', border: '1px solid #E4E6EE', borderRadius: 12, padding: '10px 12px', fontFamily: 'DM Sans, sans-serif', userSelect: 'none' }}>
+    <div style={{ background: '#fff', border: '1px solid #E4E6EE', borderRadius: 12, padding: p.compact ? '8px 10px' : '10px 12px', fontFamily: 'DM Sans, sans-serif', userSelect: 'none', touchAction: 'none' }}>
       {/* controls */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: p.compact ? 6 : 8, flexWrap: 'wrap', marginBottom: p.compact ? 4 : 8 }}>
         <button onClick={() => clock.toggle()} style={{ ...btn(true), minWidth: 74 }} title="Preview the drawing (Space)">
           {playing ? '❚❚ Pause' : '▶ Preview'}
         </button>
         <button onClick={() => clock.scrub(0)} style={btn()} title="Back to the start">⏮</button>
-        <span style={{ fontSize: 12, fontWeight: 700, color: NAVY, fontVariantNumeric: 'tabular-nums', minWidth: 92 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: NAVY, fontVariantNumeric: 'tabular-nums', minWidth: p.compact ? 70 : 92 }}>
           {fmt(tau)} <span style={{ fontWeight: 400, color: '#8A8F9E' }}>/ {fmt(total)}</span>
         </span>
 
@@ -138,13 +142,13 @@ export default function AnnotationTimeline(p: Props) {
               onChange={e => p.onHold({ mode: 'freeze', sec: Math.max(0, Math.round(Number(e.target.value) || 0)) })}
               style={{ width: 52, fontSize: 11, padding: '3px 5px', border: '1px solid #E4E6EE', borderRadius: 5, outline: 'none' }}
             />
-            s <span style={{ opacity: 0.7 }}>{hold.sec === 0 ? '(until play is pressed)' : '(then plays on)'}</span>
+            s {!p.compact && <span style={{ opacity: 0.7 }}>{hold.sec === 0 ? '(until play is pressed)' : '(then plays on)'}</span>}
           </label>
         )}
 
         <span style={{ flex: 1 }} />
 
-        <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', color: '#4b5163' }}
+        <label style={{ fontSize: p.compact ? 12 : 11, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', color: '#4b5163' }}
           title="Move a shape while the playhead is later than its start and a keyframe is created automatically">
           <input type="checkbox" checked={p.autoKey} onChange={e => p.onAutoKey(e.target.checked)} /> Auto-key
         </label>
@@ -153,11 +157,11 @@ export default function AnnotationTimeline(p: Props) {
           onClick={() => selected && p.onToggleKeyframe(selected.id)}
           style={{ ...btn(onKey), opacity: selected && (canKey || onKey) ? 1 : 0.4 }}
           title="Add or remove a keyframe for the selected shape at the playhead"
-        >◆ {onKey ? 'Remove keyframe' : 'Keyframe here'}</button>
+        >◆ {p.compact ? (onKey ? 'Remove' : 'Keyframe') : (onKey ? 'Remove keyframe' : 'Keyframe here')}</button>
         <button onClick={p.onReveal} disabled={shapes.length < 2} style={{ ...btn(), opacity: shapes.length < 2 ? 0.4 : 1 }}
           title="Shapes appear one after another in the order you drew them">One by one</button>
         {p.animated && <button onClick={p.onShowAll} style={btn()} title="Show everything from the start, without timing">All at once</button>}
-        {p.onSave && (
+        {p.onSave && !p.compact && (
           <button onClick={p.onSave} disabled={p.saving} style={{ ...btn(true), background: '#16a34a', borderColor: '#16a34a', minWidth: 110, opacity: p.saving ? 0.6 : 1 }}>
             {p.saving ? 'Saving…' : `✓ ${p.saveLabel ?? 'Save'}`}
           </button>
@@ -201,7 +205,7 @@ export default function AnnotationTimeline(p: Props) {
           {shapes.length === 0 && (
             <>
               <div />
-              <div style={{ fontSize: 11, color: '#8A8F9E', padding: '10px 0' }}>Draw something on the video: each shape gets a row here.</div>
+              <div style={{ fontSize: 11, color: '#8A8F9E', padding: p.compact ? '4px 0' : '10px 0' }}>Draw something on the video: each shape gets a row here.</div>
             </>
           )}
           {shapes.map(s => {
@@ -242,17 +246,17 @@ export default function AnnotationTimeline(p: Props) {
                     }}
                     title="Drag to slide this shape's timing"
                     style={{
-                      position: 'absolute', top: 7, height: 10, left: pct(t0), width: `calc(${pct(t1)} - ${pct(t0)})`,
+                      position: 'absolute', top: p.compact ? 9 : 7, height: p.compact ? 12 : 10, left: pct(t0), width: `calc(${pct(t1)} - ${pct(t0)})`,
                       background: col, opacity: sel ? 0.85 : 0.5, borderRadius: 5, cursor: 'grab', boxShadow: '0 0 0 1px rgba(0,0,0,0.25)',
                     }}
                   />
                   {sel && (
                     <>
-                      <Grip left={pct(t0)} title="Appears" onDown={e => {
+                      <Grip big={p.compact} left={pct(t0)} title="Appears" onDown={e => {
                         e.stopPropagation(); e.preventDefault()
                         drag(ev => p.onChangeShape(s.id, setWindow(s, tAt(ev.clientX, ev.shiftKey), undefined)))
                       }} />
-                      <Grip left={pct(t1)} title="Disappears (drag to the end for 'stays')" onDown={e => {
+                      <Grip big={p.compact} left={pct(t1)} title="Disappears (drag to the end for 'stays')" onDown={e => {
                         e.stopPropagation(); e.preventDefault()
                         drag(ev => {
                           const t = tAt(ev.clientX, ev.shiftKey)
@@ -280,7 +284,7 @@ export default function AnnotationTimeline(p: Props) {
                         })
                       }}
                       style={{
-                        position: 'absolute', top: 5, left: `calc(${pct(k.t)} - 7px)`, width: 14, height: 14, cursor: 'ew-resize', zIndex: 2,
+                        position: 'absolute', top: p.compact ? 7 : 5, left: `calc(${pct(k.t)} - ${p.compact ? 9 : 7}px)`, width: p.compact ? 18 : 14, height: p.compact ? 18 : 14, cursor: 'ew-resize', zIndex: 2,
                         transform: 'rotate(45deg) scale(0.72)', background: Math.abs(k.t - tau) < 0.06 ? '#facc15' : '#fff',
                         border: `2px solid ${NAVY}`, borderRadius: 2,
                       }}
@@ -305,11 +309,11 @@ export default function AnnotationTimeline(p: Props) {
 
 function RowFragment({ children }: { children: React.ReactNode }) { return <>{children}</> }
 
-function Grip({ left, title, onDown }: { left: string; title: string; onDown: (e: React.PointerEvent) => void }) {
+function Grip({ left, title, onDown, big }: { left: string; title: string; onDown: (e: React.PointerEvent) => void; big?: boolean }) {
   return (
     <div
       title={title} onPointerDown={onDown}
-      style={{ position: 'absolute', top: 4, height: 16, width: 8, left: `calc(${left} - 4px)`, background: '#fff', border: `2px solid ${NAVY}`, borderRadius: 3, cursor: 'col-resize', zIndex: 3 }}
+      style={{ position: 'absolute', top: big ? 2 : 4, height: big ? 26 : 16, width: big ? 14 : 8, left: `calc(${left} - ${big ? 7 : 4}px)`, background: '#fff', border: `2px solid ${NAVY}`, borderRadius: 3, cursor: 'col-resize', zIndex: 3 }}
     />
   )
 }
