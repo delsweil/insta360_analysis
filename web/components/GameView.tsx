@@ -1350,6 +1350,28 @@ export default function GameView({ gameId, shareToken }: Props) {
       setVideoRate(next)
     }
 
+    // The drawing layer. Viewing: it lives outside the fading HUD so a drawing stays on screen when the controls are hidden.
+    const mobileCanvas = (
+        <AnnotationCanvas
+          ref={mobileCanvasRef}
+          shapes={activeTacticalShapes}
+          editable={isDrawing}
+          tool={drawTool}
+          time={canvasTime}
+          onAddShape={s => setDraftShapes(prev => [...prev, s])}
+          onUpdateShape={updateDraftShape}
+          onRemoveShape={removeDraftShape}
+          onToggleVideo={undefined}
+          selectedId={selectedShapeId}
+          onSelect={setSelectedShapeId}
+          onDuplicateShape={duplicateDraftShape}
+          showSettings={false}
+          penColor={penColor}
+          markerSamples={markerSamples}
+          onMarkerSample={addMarkerSample}
+        />
+    )
+
     return (
       <div
         style={{
@@ -1381,6 +1403,8 @@ export default function GameView({ gameId, shareToken }: Props) {
           }}
         />
 
+        {!isDrawing && <div style={{ position: 'absolute', inset: 0, zIndex: 7, pointerEvents: 'none' }}>{mobileCanvas}</div>}
+
         {/* ── HUD wrapper — shown/hidden by tap ── */}
         {/* Tapping the wrapper background (not a button) hides the HUD.
             While drawing, always visible so the draw toolbar stays accessible. */}
@@ -1395,25 +1419,8 @@ export default function GameView({ gameId, shareToken }: Props) {
           }}
         >
 
-        {/* Tactical shapes overlay */}
-        <AnnotationCanvas
-          ref={mobileCanvasRef}
-          shapes={activeTacticalShapes}
-          editable={isDrawing}
-          tool={drawTool}
-          time={canvasTime}
-          onAddShape={s => setDraftShapes(prev => [...prev, s])}
-          onUpdateShape={updateDraftShape}
-          onRemoveShape={removeDraftShape}
-          onToggleVideo={undefined}
-          selectedId={selectedShapeId}
-          onSelect={setSelectedShapeId}
-          onDuplicateShape={duplicateDraftShape}
-          showSettings={false}
-          penColor={penColor}
-          markerSamples={markerSamples}
-          onMarkerSample={addMarkerSample}
-        />
+        {/* Tactical shapes overlay while drawing (the draw controls sit above it); otherwise it is outside this wrapper, see below */}
+        {isDrawing && mobileCanvas}
 
         {/* Orange recording border */}
         {isRecording && (
