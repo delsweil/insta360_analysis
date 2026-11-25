@@ -84,7 +84,7 @@ def build(t, fr, x, y, team):
     return pid, pieces
 
 
-def candidates(pieces, t, fr, x, y, pid, window=WINDOW_S):
+def candidates(pieces, t, fr, x, y, pid, window=WINDOW_S, loose=False, reach=1.0, top=4):
     """for every piece: the pieces that could continue it (next) and could have come before it (prev)"""
     n = len(pieces)
     s_t = np.array([t[p[2]] for p in pieces]); e_t = np.array([t[p[3]] for p in pieces])
@@ -106,11 +106,16 @@ def candidates(pieces, t, fr, x, y, pid, window=WINDOW_S):
     side = np.array([p[1] for p in pieces])
     out_next, out_prev = {}, {}
     for a in range(n):
-        if side[a] > 1:
+        if side[a] == 3 or (side[a] > 1 and not loose):
             continue
         cand = []
         for b in range(n):
-            if b == a or side[b] != side[a]:
+            if b == a or side[b] == 3:
+                continue
+            if loose:                                   # an unknown colour (side 2) may join either team; two known sides must agree
+                if side[a] < 2 and side[b] < 2 and side[a] != side[b]:
+                    continue
+            elif side[b] != side[a]:
                 continue
             gap = s_t[b] - e_t[a]
             if gap < -0.4 or gap > window:
@@ -118,12 +123,12 @@ def candidates(pieces, t, fr, x, y, pid, window=WINDOW_S):
             gap = max(gap, 0.0)
             pred = (p1[a][0] + v1[a][0] * gap * 0.8, p1[a][1] + v1[a][1] * gap * 0.8)
             d = math.hypot(p0[b][0] - pred[0], p0[b][1] - pred[1])
-            if d <= 4 + 7 * gap:
+            if d <= (4 + 7 * gap) * reach:
                 cand.append([b, d, gap, math.exp(-d / (2 + 1.5 * gap))])
         if cand:
             tot = sum(c[3] for c in cand)
             cand.sort(key=lambda c: -c[3])
-            out_next[a] = [[c[0], round(c[3] / tot, 3), round(c[1], 1), round(c[2], 1)] for c in cand[:4]]
+            out_next[a] = [[c[0], round(c[3] / tot, 3), round(c[1], 1), round(c[2], 1)] for c in cand[:top]]
     for a, lst in out_next.items():                                # the predecessors are the same pairs seen from the other end
         for b, p, d, gap in lst:
             out_prev.setdefault(b, []).append([a, p, d, gap])
@@ -132,7 +137,7 @@ def candidates(pieces, t, fr, x, y, pid, window=WINDOW_S):
         tot = sum(math.exp(-c[2] / (2 + 1.5 * c[3])) for c in lst)
         for c in lst:
             c[1] = round(math.exp(-c[2] / (2 + 1.5 * c[3])) / tot, 3)
-        lst.sort(key=lambda c: -c[1]); out_prev[b] = lst[:4]
+        lst.sort(key=lambda c: -c[1]); out_prev[b] = lst[:top]
     return out_next, out_prev
 
 
