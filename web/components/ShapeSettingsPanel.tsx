@@ -12,6 +12,7 @@ interface Props {
   shape: Shape
   onChange: (patch: Partial<Shape>) => void
   onRemove: () => void
+  onDuplicate?: () => void
   onClose: () => void
 }
 
@@ -30,7 +31,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-export default function ShapeSettingsPanel({ shape, onChange, onRemove, onClose }: Props) {
+export default function ShapeSettingsPanel({ shape, onChange, onRemove, onDuplicate, onClose }: Props) {
   const hasStyle = shape.type === 'zone' || shape.type === 'curve' || shape.type === 'highlight' || shape.type === 'cone' || shape.type === 'connector'
 
   // Draggable via the header — defaults to the top-right corner, but stays
@@ -124,9 +125,6 @@ export default function ShapeSettingsPanel({ shape, onChange, onRemove, onClose 
               style={{ width: '100%', fontSize: 12, padding: '5px 8px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.15)', background: '#111318', color: '#fff', outline: 'none', boxSizing: 'border-box' }}
             />
           </Field>
-          <div style={{ fontSize: 10, opacity: 0.5, marginBottom: 8 }}>
-            Drag the right handle to resize width, bottom handle for height — makes it elliptical rather than a perfect circle.
-          </div>
         </>
       )}
 
@@ -149,6 +147,16 @@ export default function ShapeSettingsPanel({ shape, onChange, onRemove, onClose 
         </Field>
       )}
 
+      {shape.type === 'curve' && (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, marginBottom: 8, cursor: 'pointer' }}>
+          <input
+            type="checkbox" checked={!!shape.draw}
+            onChange={e => onChange({ draw: e.target.checked || undefined } as Partial<Shape>)}
+          />
+          Line draws itself on
+        </label>
+      )}
+
       {shape.type === 'number' && (
         <Field label="Sequence number">
           <input
@@ -169,6 +177,8 @@ export default function ShapeSettingsPanel({ shape, onChange, onRemove, onClose 
         </Field>
       )}
 
+      <details style={{ marginBottom: 8 }}>
+        <summary style={{ fontSize: 11, opacity: 0.7, cursor: 'pointer', marginBottom: 6 }}>Colour, opacity, line style</summary>
       <Field label="Color">
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <input
@@ -213,12 +223,24 @@ export default function ShapeSettingsPanel({ shape, onChange, onRemove, onClose 
         </Field>
       )}
 
-      <button
-        onClick={onRemove}
-        style={{ width: '100%', fontSize: 12, fontWeight: 600, padding: '7px 0', borderRadius: 6, border: 'none', background: '#b91c1c', color: '#fff', cursor: 'pointer', marginTop: 2 }}
-      >
-        Remove
-      </button>
+      </details>
+
+      <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
+        {onDuplicate && (
+          <button
+            onClick={onDuplicate} title="Duplicate (Ctrl/⌘+D)"
+            style={{ flex: 1, fontSize: 12, fontWeight: 600, padding: '7px 0', borderRadius: 6, border: '1px solid rgba(255,255,255,0.2)', background: 'transparent', color: '#fff', cursor: 'pointer' }}
+          >
+            Duplicate
+          </button>
+        )}
+        <button
+          onClick={onRemove} title="Remove (Delete)"
+          style={{ flex: 1, fontSize: 12, fontWeight: 600, padding: '7px 0', borderRadius: 6, border: 'none', background: '#b91c1c', color: '#fff', cursor: 'pointer' }}
+        >
+          Remove
+        </button>
+      </div>
     </div>
   )
 }

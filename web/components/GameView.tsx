@@ -15,7 +15,10 @@ import AnnotationCanvas, { type Shape, type Tool, type AnnotationCanvasHandle } 
 import RecordExportButton from '@/components/RecordExportButton'
 import TimingStrip from '@/components/TimingStrip'
 import TransportBar, { RATES } from '@/components/TransportBar'
-import FloatingDrawTools, { DRAW_TOOLS } from '@/components/FloatingDrawTools'
+import FloatingDrawTools, { DRAW_TOOLS, DrawHint } from '@/components/FloatingDrawTools'
+import AnnotationTimeline from '@/components/AnnotationTimeline'
+import { applyEdit, resolveShape, duplicateShape, addKeyframeAt, removeKeyframe, keyframeAt, staggerReveal, clearReveal, isAnimated, spanEnd, type MarkerSample } from '@/lib/annoAnim'
+import { EditorClock, holdOf, holdToColumn, freezeLength, annoEnd, totalLength, useSmoothVideoTime, useViewerClock, type Holding, type Hold } from '@/lib/annoPlayback'
 import VeoImportModal from '@/components/VeoImportModal'
 import SuggestionImport from '@/components/SuggestionImport'
 import BoardPanel from '@/components/BoardPanel'
@@ -156,6 +159,28 @@ export default function GameView({ gameId, shareToken }: Props) {
   const [editingLabelId, setEditingLabelId] = useState<string | null>(null)
   const [hudVisible, setHudVisible] = useState(false)
   const [mobilePlaybackRate, setMobilePlaybackRate] = useState(1)
+
+  // ── Animated drawings ──
+  const [penColor, setPenColor] = useState('#facc15')               // colour for new shapes
+  const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null)
+  const [autoKey, setAutoKey] = useState(true)                      // moving a shape after its start makes a keyframe
+  const autoKeyRef = useRef(true)
+  const currentTimeRef = useRef(0)
+  useEffect(() => { autoKeyRef.current = autoKey; currentTimeRef.current = currentTime })   // latest values for handlers that must not re-bind on every tick
+  const holdingRef = useRef<Holding>(null)                          // set while the app has frozen the video for a drawing
+  const editorClock = useMemo(() => new EditorClock(), [])          // the coach's playhead (external store: scrubbing doesn't re-render this view)
+  const getVideo = useSmoothVideoTime(currentTime, isPlaying, mobilePlaybackRate)
+
+  // Marker sizes the coach has set in this game: the next markers come out that size (see lib/annoAnim.ts markerSize)
+  const [markerSamples, setMarkerSamples] = useState<MarkerSample[]>(() => {
+    try { const raw = localStorage.getItem(`marker-sizes:${gameId ?? ''}`); return raw ? JSON.parse(raw) : [] } catch { return [] }   // (a shared link has no gameId: nothing to load)
+  })
+  const markerSamplesRef = useRef<MarkerSample[]>(markerSamples)
+  const addMarkerSample = useCallback((sample: MarkerSample) => {
+    const next = [...markerSamplesRef.current, sample].slice(-12)
+    markerSamplesRef.current = next; setMarkerSamples(next)
+    try { localStorage.setItem(`marker-sizes:${id}`, JSON.stringify(next)) } catch { /* ignore */ }
+  }, [id])
   const [isMuted, setIsMuted] = useState(true) // starts muted for autoplay
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [showFsHint, setShowFsHint] = useState(false)
@@ -165,13 +190,20 @@ export default function GameView({ gameId, shareToken }: Props) {
   // tied to pause state. "Shown" = timestamp_sec, "removed" = the explicit
   // annotation_end_sec a coach sets on the timing strip (falls back to a
   // brief 1.5s window if never set, e.g. on older annotations).
-  const activeTacticalShapes: Shape[] = isDrawing
-    ? draftShapes
+  const activeAnno: Annotation | null = isDrawing ? null
     : annotations.find(a =>
         a.label === 'tactical' && a.shapes?.length &&
         currentTime >= a.timestamp_sec &&
-        currentTime <= (a.annotation_end_sec ?? a.timestamp_sec + 1.5)
-      )?.shapes ?? []
+        currentTime <= annoEnd(a)
+      ) ?? null
+  const activeTacticalShapes: Shape[] = isDrawing ? draftShapes : activeAnno?.shapes ?? []
+  const activeClockInfo = useMemo(() => activeAnno
+    ? { id: activeAnno.id, anchor: activeAnno.timestamp_sec, F: freezeLength(holdOf(activeAnno.auto_resume_sec), activeAnno.shapes ?? []) }
+    : null, [activeAnno])
+  const viewerTime = useViewerClock(activeClockInfo, holdingRef, getVideo)
+  // The canvas gets a clock only when something moves: static drawings are drawn once, exactly as before.
+  const canvasTime: (() => number) | undefined = isDrawing ? editorClock.get
+    : activeAnno && (isAnimated(activeAnno.shapes ?? []) || holdOf(activeAnno.auto_resume_sec).mode === 'live') ? viewerTime : undefined
 
   // Filtered annotations
   const filteredAnnotations = annotations.filter(a => passesFilter(a.label, filter))
@@ -315,6 +347,7 @@ export default function GameView({ gameId, shareToken }: Props) {
     const c = clipRef.current
     if (c) sec = Math.min(Math.max(sec, c.start), c.end - 0.2) // a clip link never leaves its window
     firedAnnotationIds.current.clear() // allow re-triggering annotations when a viewer jumps around
+    holdingRef.current = null
     playerRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: 'seekTo', args: [sec, true] }), '*'
     )
@@ -339,6 +372,7 @@ export default function GameView({ gameId, shareToken }: Props) {
   }, [])
 
   const resumeVideo = useCallback(() => {
+    holdingRef.current = null   // playing on ends the freeze; the drawing continues from where it is
     playerRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*'
     )
@@ -501,57 +535,116 @@ export default function GameView({ gameId, shareToken }: Props) {
         !firedAnnotationIds.current.has(a.id) &&
         a.timestamp_sec > prev && a.timestamp_sec <= currentTime
       )
-      if (hit) {
+      if (hit && holdOf(hit.auto_resume_sec).mode === 'freeze') {
         firedAnnotationIds.current.add(hit.id)
+        holdingRef.current = { id: hit.id, startMs: performance.now() }
+        scrubTo(hit.timestamp_sec)   // the pause lands a moment late: go back to the very frame the coach drew on
         pauseVideo()
       }
     }
     prevTimeRef.current = currentTime
-  }, [currentTime, annotations, isDrawing, pauseVideo])
+  }, [currentTime, annotations, isDrawing, pauseVideo, scrubTo])
 
-  // Auto-resume playback on its own once auto_resume_sec elapses for the
-  // paused annotation — for viewers watching hands-free only. Never for
-  // coaches: a coach pausing near an existing annotation is very often
-  // actually pausing to start a *new* one, and having playback yank itself
-  // forward mid-thought was the actual bug behind "it restarts before I can
-  // annotate" — this feature and coaching are fundamentally different intents.
+  // A timed freeze (auto_resume_sec > 0) plays on by itself once its time is up — for viewers watching hands-free only.
+  // Never for coaches: a coach pausing near an existing drawing is very often pausing to start a new one. And only for a freeze
+  // the app itself made (holdingRef), not for any manual pause that happens to be inside a drawing's window.
   useEffect(() => {
     if (autoResumeTimeoutRef.current) {
       clearTimeout(autoResumeTimeoutRef.current)
       autoResumeTimeoutRef.current = null
     }
-    if (isCoach || isDrawing || isPlaying) return
-
-    const ann = annotations.find(a =>
-      a.label === 'tactical' && a.shapes?.length &&
-      currentTime >= a.timestamp_sec &&
-      currentTime <= (a.annotation_end_sec ?? a.timestamp_sec + 1.5)
-    )
-    const delay = ann?.auto_resume_sec ?? 0
-    if (ann && delay > 0) {
-      autoResumeTimeoutRef.current = setTimeout(() => {
-        resumeVideo()
-      }, delay * 1000)
-    }
-
+    const h = holdingRef.current
+    if (isCoach || isDrawing || isPlaying || !h) return
+    const ann = annotations.find(a => a.id === h.id)
+    const hold = ann ? holdOf(ann.auto_resume_sec) : null
+    if (!hold || hold.mode !== 'freeze' || hold.sec <= 0) return
+    const remaining = hold.sec * 1000 - (performance.now() - h.startMs)
+    autoResumeTimeoutRef.current = setTimeout(() => { resumeVideo() }, Math.max(0, remaining))
     return () => {
       if (autoResumeTimeoutRef.current) clearTimeout(autoResumeTimeoutRef.current)
     }
   }, [currentTime, isPlaying, isDrawing, isCoach, annotations, resumeVideo])
 
+  // A fresh drawing (or a different one opened for editing) starts with the playhead at 0 and nothing selected.
+  const resetEditor = useCallback(() => {
+    holdingRef.current = null
+    editorClock.reset(0)
+    setSelectedShapeId(null)
+    setAutoKey(true)
+  }, [editorClock])
+
   const startDrawing = useCallback(() => {
     pauseVideo()
+    resetEditor()
+    setMarkIn(m => m ?? currentTimeRef.current)   // the drawing is anchored to the frame you start on: no separate "Mark in" press
     setDrawTool('select')
     setIsDrawing(true)
-  }, [pauseVideo])
+  }, [pauseVideo, resetEditor])
 
   const finishDrawing = useCallback(() => {
     mobileCanvasRef.current?.finalizePending()
     desktopCanvasRef.current?.finalizePending()
+    resetEditor()
     setIsDrawing(false); setDrawTool('select'); setEditingAnnotationId(null); setMarkIn(null)
     setAnnotationEndSec(null); setClipEndSec(null)
-  }, [])
+  }, [resetEditor])
 
+  // ── editing the draft: every edit goes through applyEdit, which turns a move after the shape's start into a keyframe ──
+  const updateDraftShape = useCallback((shapeId: string, patch: Partial<Shape>, tau?: number) => {
+    setDraftShapes(prev => prev.map(s => s.id === shapeId ? applyEdit(s, patch, tau ?? 0, autoKeyRef.current) : s))
+  }, [])
+  const removeDraftShape = useCallback((shapeId: string) => {
+    setDraftShapes(prev => prev.filter(s => s.id !== shapeId)
+      // cascade delete: drop any connector that referenced the removed shape
+      .filter(s => !(s.type === 'connector' && (s.fromId === shapeId || s.toId === shapeId))))
+    setSelectedShapeId(cur => (cur === shapeId ? null : cur))
+  }, [])
+  const draftShapesRef = useRef<Shape[]>([])
+  useEffect(() => { draftShapesRef.current = draftShapes })
+  const duplicateDraftShape = useCallback((shapeId: string) => {
+    const src = draftShapesRef.current.find(s => s.id === shapeId)
+    if (!src) return
+    const copy = duplicateShape(resolveShape(src, editorClock.get())?.s ?? src)
+    setDraftShapes(prev => [...prev, copy])
+    setSelectedShapeId(copy.id)
+  }, [editorClock])
+  const nudgeDraftShape = useCallback((shapeId: string, dx: number, dy: number) => {
+    const tau = editorClock.get()
+    setDraftShapes(prev => prev.map(s => {
+      if (s.id !== shapeId) return s
+      const cur = resolveShape(s, tau)?.s
+      if (!cur) return s
+      const mv = (pt: [number, number]): [number, number] => [pt[0] + dx, pt[1] + dy]
+      let patch: Partial<Shape> | null = null
+      if (cur.type === 'zone') patch = { points: cur.points.map(mv) }
+      else if (cur.type === 'curve') patch = { from: mv(cur.from), control: mv(cur.control), to: mv(cur.to) }
+      else if ('pos' in cur) patch = { pos: mv(cur.pos) } as Partial<Shape>
+      return patch ? applyEdit(s, patch, tau, autoKeyRef.current) : s
+    }))
+  }, [editorClock])
+  const choosePenColor = useCallback((c: string) => {
+    setPenColor(c)
+    if (selectedShapeId) updateDraftShape(selectedShapeId, { color: c } as Partial<Shape>, editorClock.get())
+  }, [selectedShapeId, updateDraftShape, editorClock])
+
+  // The drawing's timing as the coach has set it so far.
+  const anchorSec = markIn ?? currentTime
+  const drawHold: Hold = holdOf(autoResumeSec)
+  const drawF = freezeLength(drawHold, draftShapes)
+  // Keyframes past the end of the drawing's window would never be seen: the window is kept long enough for the animation.
+  const drawNeed = isAnimated(draftShapes) ? anchorSec + (drawHold.mode === 'live' ? spanEnd(draftShapes) : Math.max(0, spanEnd(draftShapes) - drawF)) + 0.6 : 0
+  const drawEnd = Math.max(annotationEndSec ?? anchorSec + 1.5, Math.ceil(drawNeed * 10) / 10)
+  const drawTotal = totalLength(drawF, draftShapes, anchorSec, drawEnd)
+  const drawRange = Math.max(drawTotal + 1, 6)   // the timeline always has room beyond the end
+  const drawHasTiming = draftShapes.some(sh => { const a = sh as { t0?: number; t1?: number; draw?: boolean }; return (a.t0 ?? 0) > 0 || a.t1 != null || !!a.draw })
+  useEffect(() => {
+    editorClock.configure({
+      anchor: anchorSec, F: drawF, total: drawTotal, maxScrub: drawRange, getVideo,
+      seekPaused: sec => { scrubTo(sec); pauseVideo() },
+      seekPlay: sec => seekTo(sec),
+      pause: pauseVideo,
+    })
+  }, [editorClock, anchorSec, drawF, drawTotal, drawRange, getVideo, scrubTo, pauseVideo, seekTo])
   // Keyboard on the desktop layout: space/K play, arrows and J/L jump, comma/period frames, brackets speed, D draw, 1-8 tools
   useEffect(() => {
     if (isMobile || forceHud) return
@@ -560,9 +653,25 @@ export default function GameView({ gameId, shareToken }: Props) {
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return
       if (e.metaKey || e.ctrlKey) {
         if (isDrawing && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); setDraftShapes(prev => prev.slice(0, -1)) }
+        if (isDrawing && selectedShapeId && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); duplicateDraftShape(selectedShapeId) }
         return
       }
       if (e.altKey) return
+      if (isDrawing) {
+        // While drawing, the keys work the drawing's own playhead, not the video.
+        if (e.key === ' ') { e.preventDefault(); editorClock.toggle(); return }
+        if ((e.key === 'Delete' || e.key === 'Backspace') && selectedShapeId) { e.preventDefault(); removeDraftShape(selectedShapeId); return }
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          e.preventDefault()
+          const sgn = e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1
+          if (selectedShapeId) {
+            const d = (e.shiftKey ? 0.012 : 0.003) * sgn
+            nudgeDraftShape(selectedShapeId, e.key === 'ArrowLeft' || e.key === 'ArrowRight' ? d : 0, e.key === 'ArrowUp' || e.key === 'ArrowDown' ? d : 0)
+          } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') editorClock.scrub(editorClock.get() + sgn * (e.shiftKey ? 1 : 0.1))
+          return
+        }
+        if (e.key === ',' || e.key === '.') { e.preventDefault(); editorClock.scrub(editorClock.get() + (e.key === ',' ? -0.04 : 0.04)); return }
+      }
       const k = e.key
       const idx = RATES.indexOf(mobilePlaybackRate)
       if (k === ' ' || k === 'k' || k === 'K') { e.preventDefault(); if (isPlaying) pauseVideo(); else resumeVideo() }
@@ -583,7 +692,7 @@ export default function GameView({ gameId, shareToken }: Props) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [isMobile, forceHud, isDrawing, isPlaying, isCoach, selectedLabel, mobilePlaybackRate, pauseVideo, resumeVideo, seekBy, stepFrame, changeRate, startDrawing])
+  }, [isMobile, forceHud, isDrawing, isPlaying, isCoach, selectedLabel, mobilePlaybackRate, pauseVideo, resumeVideo, seekBy, stepFrame, changeRate, startDrawing, selectedShapeId, editorClock, duplicateDraftShape, removeDraftShape, nudgeDraftShape])
 
   const handleQuickSave = useCallback(async () => {
     if (saving) return
@@ -626,7 +735,7 @@ export default function GameView({ gameId, shareToken }: Props) {
       const patch = {
         timestamp_sec: markIn ?? undefined,
         shapes: draftShapes.length ? draftShapes : null,
-        annotation_end_sec: draftShapes.length ? annotationEndSec : null,
+        annotation_end_sec: draftShapes.length ? drawEnd : null,
         end_timestamp_sec: draftShapes.length ? clipEndSec : null,
         auto_resume_sec: draftShapes.length ? autoResumeSec : null,
         context_start_sec: draftShapes.length ? contextStartSec : null,
@@ -661,7 +770,7 @@ export default function GameView({ gameId, shareToken }: Props) {
           label: selectedLabel,
           note: note.trim() || null,
           shapes: draftShapes.length ? draftShapes : null,
-          annotation_end_sec: draftShapes.length ? annotationEndSec : null,
+          annotation_end_sec: draftShapes.length ? drawEnd : null,
           auto_resume_sec: draftShapes.length ? autoResumeSec : null,
           context_start_sec: draftShapes.length ? contextStartSec : null,
           is_public: true,
@@ -683,6 +792,7 @@ export default function GameView({ gameId, shareToken }: Props) {
       setSaved(true)
       setTimeout(() => setSaved(false), 1500)
     }
+    resetEditor()
     setMarkIn(null)
     setDraftShapes([])
     setIsDrawing(false)
@@ -693,7 +803,7 @@ export default function GameView({ gameId, shareToken }: Props) {
     setEditingAnnotationId(null)
     setNote('')
     setSaving(false)
-  }, [saving, markIn, currentTime, selectedLabel, note, draftShapes, annotationEndSec, clipEndSec, autoResumeSec, contextStartSec, editingAnnotationId, id])
+  }, [saving, markIn, currentTime, selectedLabel, note, draftShapes, drawEnd, clipEndSec, autoResumeSec, contextStartSec, editingAnnotationId, id, resetEditor])
 
   const handleDelete = useCallback(async (annId: string) => {
     await supabase.from('annotations').delete().eq('id', annId)
@@ -974,6 +1084,7 @@ export default function GameView({ gameId, shareToken }: Props) {
               setAutoResumeSec(ann.auto_resume_sec ?? 0)
               setContextStartSec(ann.context_start_sec ?? null)
               setEditingAnnotationId(ann.id)
+              resetEditor()
               setDrawTool('select')
               setIsDrawing(true)
               if (isMobile || forceHud) setShowAnnotations(false)
@@ -1246,15 +1357,14 @@ export default function GameView({ gameId, shareToken }: Props) {
           shapes={activeTacticalShapes}
           editable={isDrawing}
           tool={drawTool}
+          time={canvasTime}
           onAddShape={s => setDraftShapes(prev => [...prev, s])}
-          onUpdateShape={(shapeId, patch) =>
-            setDraftShapes(prev => prev.map(s => s.id === shapeId ? { ...s, ...patch } as Shape : s))
-          }
-          onRemoveShape={shapeId => setDraftShapes(prev =>
-            prev.filter(s => s.id !== shapeId)
-              .filter(s => !(s.type === 'connector' && (s.fromId === shapeId || s.toId === shapeId)))
-          )}
+          onUpdateShape={updateDraftShape}
+          onRemoveShape={removeDraftShape}
           onToggleVideo={undefined}
+          penColor={penColor}
+          markerSamples={markerSamples}
+          onMarkerSample={addMarkerSample}
         />
 
         {/* Orange recording border */}
@@ -1593,6 +1703,7 @@ export default function GameView({ gameId, shareToken }: Props) {
                   onClick={() => {
                     mobileCanvasRef.current?.finalizePending()
                     desktopCanvasRef.current?.finalizePending()
+                    resetEditor()
                     setIsDrawing(false)
                     setDrawTool('select')
                     setEditingAnnotationId(null)
@@ -2359,16 +2470,17 @@ export default function GameView({ gameId, shareToken }: Props) {
                 shapes={activeTacticalShapes}
                 editable={isDrawing}
                 tool={drawTool}
+                time={canvasTime}
                 onAddShape={s => setDraftShapes(prev => [...prev, s])}
-                onUpdateShape={(shapeId, patch) =>
-                  setDraftShapes(prev => prev.map(s => s.id === shapeId ? { ...s, ...patch } as Shape : s))
-                }
-                onRemoveShape={shapeId => setDraftShapes(prev =>
-                  prev.filter(s => s.id !== shapeId)
-                    // cascade delete: drop any connector that referenced the removed shape
-                    .filter(s => !(s.type === 'connector' && (s.fromId === shapeId || s.toId === shapeId)))
-                )}
+                onUpdateShape={updateDraftShape}
+                onRemoveShape={removeDraftShape}
                 onToggleVideo={() => (isPlaying ? pauseVideo() : resumeVideo())}
+                selectedId={selectedShapeId}
+                onSelect={setSelectedShapeId}
+                onDuplicateShape={duplicateDraftShape}
+                penColor={penColor}
+                markerSamples={markerSamples}
+                onMarkerSample={addMarkerSample}
               />
               {boardOverlay}
               {boardState.status === 'ready' && !showBoard && (
@@ -2394,9 +2506,49 @@ export default function GameView({ gameId, shareToken }: Props) {
                   onUndo={() => setDraftShapes(prev => prev.slice(0, -1))}
                   onClear={() => setDraftShapes([])}
                   onDone={finishDrawing}
+                  penColor={penColor}
+                  onPenColor={choosePenColor}
                 />
               )}
+              {isDrawing && <DrawHint tool={drawTool} />}
             </div>
+
+            {/* The drawing's timeline: when shapes appear and move, and whether the video freezes */}
+            {isDrawing && (
+              <AnnotationTimeline
+                shapes={draftShapes}
+                selectedId={selectedShapeId}
+                onSelect={setSelectedShapeId}
+                onChangeShape={(sid, next) => setDraftShapes(prev => prev.map(sh => sh.id === sid ? next : sh))}
+                onReplaceAll={setDraftShapes}
+                clock={editorClock}
+                total={drawTotal}
+                range={drawRange}
+                F={drawF}
+                hold={drawHold}
+                onHold={h => setAutoResumeSec(holdToColumn(h))}
+                autoKey={autoKey}
+                onAutoKey={setAutoKey}
+                onToggleKeyframe={sid => {
+                  const tau = editorClock.get()
+                  setDraftShapes(prev => prev.map(sh => {
+                    if (sh.id !== sid) return sh
+                    const k = keyframeAt(sh, tau)
+                    return k ? removeKeyframe(sh, k.t) : addKeyframeAt(sh, tau)
+                  }))
+                }}
+                onReveal={() => { setDraftShapes(prev => staggerReveal(prev)); editorClock.scrub(0) }}
+                onShowAll={() => setDraftShapes(prev => clearReveal(prev))}
+                animated={drawHasTiming}
+                onSave={() => {
+                  mobileCanvasRef.current?.finalizePending()
+                  desktopCanvasRef.current?.finalizePending()
+                  handleRangeSave()
+                }}
+                saving={saving}
+                saveLabel={editingAnnotationId ? 'Save changes' : 'Save annotation'}
+              />
+            )}
 
             {/* Match statistics: a card that opens under the video */}
             {!focusMode && statsState.status === 'ready' && (
@@ -2481,33 +2633,19 @@ export default function GameView({ gameId, shareToken }: Props) {
                   {isDrawing ? (
                     <>
                       <div style={{ fontSize: 11, color: '#8A8F9E', padding: '2px 0 6px' }}>
-                        Drawing tools are on the video (keys 1–8, Ctrl/⌘+Z undo, Esc = select).
+                        Tools are on the video (keys 1–8, Esc = select). Space previews, ← → move the playhead, Ctrl/⌘+Z undoes.
                         <button onClick={finishDrawing} style={{
                           marginLeft: 8, fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 99, border: 'none',
                           background: '#0f2972', color: '#fff', cursor: 'pointer',
                         }}>Done</button>
                       </div>
-                      <div style={{
-                        display: 'flex', alignItems: 'center', gap: 6,
-                        fontSize: 11, color: '#8A8F9E', marginTop: 4,
-                      }}>
-                        <span>Auto-resume video after:</span>
-                        <input
-                          type="number" min={0} max={60} value={autoResumeSec}
-                          onChange={e => setAutoResumeSec(Math.max(0, Number(e.target.value) || 0))}
-                          style={{
-                            width: 46, fontSize: 11, padding: '3px 6px',
-                            border: '1px solid #E4E6EE', borderRadius: 5,
-                            outline: 'none', fontFamily: 'DM Sans, sans-serif',
-                          }}
-                        />
-                        <span>sec (0 = wait for manual play)</span>
-                      </div>
                       {markIn !== null && (
+                        <details style={{ marginTop: 6 }}>
+                        <summary style={{ fontSize: 11, color: '#8A8F9E', cursor: 'pointer' }}>Clip range for sharing ({formatTime(contextStartSec ?? Math.max(0, markIn - 2))} – {formatTime(clipEndSec ?? (markIn + 5))})</summary>
                         <TimingStrip
                           timestampSec={markIn}
                           contextStart={contextStartSec ?? Math.max(0, markIn - 2)}
-                          annotationEnd={annotationEndSec ?? (markIn + 1.5)}
+                          annotationEnd={drawEnd}
                           clipEnd={clipEndSec ?? (markIn + 5)}
                           onChangeTimestamp={setMarkIn}
                           onChangeContextStart={setContextStartSec}
@@ -2515,6 +2653,7 @@ export default function GameView({ gameId, shareToken }: Props) {
                           onChangeClipEnd={setClipEndSec}
                           onScrub={scrubTo}
                         />
+                        </details>
                       )}
                     </>
                   ) : (
