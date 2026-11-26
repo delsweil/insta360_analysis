@@ -12,7 +12,7 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   TEAM_COLORS, equipSize, ballRadius, symbolUnit, viewBoxOf, drawOrder, dimText, gridSizeText, textHeight,
-  makeShape, isMeaningful, moveShapes, updateShape, shapesInRect, shapeBox, unionBox, scaleOf, equipDims, playerRadius, isLight, hitTest, handleAt, handlesOf, handlePatch, lineEndTarget, snapPt, snapStep, clampPt,
+  makeShape, isMeaningful, moveShapes, rotateShapes, gridCentre, gridCorners, updateShape, shapesInRect, shapeBox, unionBox, scaleOf, equipDims, playerRadius, isLight, hitTest, handleAt, handlesOf, handlePatch, lineEndTarget, snapPt, snapStep, clampPt,
   type Scene, type SceneShape, type SceneBackground, type Tool, type Team, type EquipKind, type Pt,
 } from '@/lib/scene'
 import { arrowHead, blobPath, boxPath, curvePoints, decimate, hashStr, polyPath, smoothPath, trimPolyline, wavy, wobble, dist } from '@/lib/sketch'
@@ -101,7 +101,7 @@ const Background = memo(function Background({ bg, k, look, plain }: { bg: SceneB
       )}
       {bg.type === 'free' && (
         <g>
-          <path d={boxPath([0, 0], [bg.width_m, bg.height_m], seed, look === 'sketch' ? 1.4 * k : 0)} fill="none" stroke={INK} strokeWidth={2.6 * k} strokeDasharray={`${16 * k} ${10 * k}`} strokeLinecap="round" />
+          <path d={boxPath([0, 0], [bg.width_m, bg.height_m], seed, 0)} fill="none" stroke={INK} strokeWidth={2.6 * k} strokeDasharray={`${16 * k} ${10 * k}`} strokeLinecap="round" />
           <text x={bg.width_m / 2} y={-8 * k} textAnchor="middle" fontSize={15 * k} fill={DIM} style={{ fontFamily: look === 'sketch' ? HAND : SANS }} fontWeight={600}>{`${String(bg.width_m).replace('.', ',')} m`}</text>
           <text transform={`translate(${-8 * k} ${bg.height_m / 2}) rotate(-90)`} textAnchor="middle" fontSize={15 * k} fill={DIM} style={{ fontFamily: look === 'sketch' ? HAND : SANS }} fontWeight={600}>{`${String(bg.height_m).replace('.', ',')} m`}</text>
         </g>
@@ -137,6 +137,7 @@ interface Props {
 type Drag =
   | { kind: 'move'; ids: string[]; anchorId: string; start: Pt; before: SceneShape[]; created: boolean; moved: boolean }
   | { kind: 'marquee'; start: Pt; add: string[]; moved: boolean }
+  | { kind: 'grot'; ids: string[]; centre: Pt; start: number; before: SceneShape[]; moved: boolean; flipped: boolean }
   | { kind: 'handle'; id: string; key: string; before: SceneShape[]; moved: boolean }
   | { kind: 'create'; id: string; before: SceneShape[]; tool: Tool }
 
@@ -158,7 +159,7 @@ export default function SceneCanvas(props: Props) {
   const kTouch = 1 / ppm
   const k = (editable || plain ? 1 : Math.min(1, Math.max(0.3, (vb.w * ppm) / 520))) / ppm
   const sketch = look === 'sketch'
-  const amp = sketch ? 1.5 * k : 0
+  const amp = 0 // lines are steady; the 'sketch' look only chooses the handwriting font for labels
 
   useEffect(() => {
     const el = svgRef.current
@@ -172,6 +173,16 @@ export default function SceneCanvas(props: Props) {
 
   const shapes = draft ?? scene.shapes
   const players = useMemo(() => new Map(shapes.filter(s => s.type === 'player').map(s => [s.id, s])), [shapes])
+
+  /** Rotation handle of a multi-selection: above the middle of its frame, or below it near the top edge of the picture. */
+  function groupRotHandle(): { pos: Pt; centre: Pt; flipped: boolean } | null {
+    if (selectedIds.length < 2) return null
+    const box = unionBox(shapes.filter(x => selectedIds.includes(x.id)).map(x => shapeBox(x, bg)))
+    if (!box) return null
+    const centre: Pt = [(box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2], off = 6 * k + 14 * k
+    const top: Pt = [centre[0], box.y0 - off], bottom: Pt = [centre[0], box.y1 + off]
+    return top[1] >= vb.y + 4 * k ? { pos: top, centre, flipped: false } : { pos: bottom, centre, flipped: true }
+  }
 
   const toWorld = useCallback((e: { clientX: number; clientY: number }): Pt => {
     const el = svgRef.current!
@@ -206,7 +217,7 @@ export default function SceneCanvas(props: Props) {
       onSelect?.([s.id])
       return
     }
-    if ((d.kind === 'move' && (d.moved || d.created)) || (d.kind === 'handle' && d.moved)) onCommit?.(cur)
+    if ((d.kind === 'move' && (d.moved || d.created)) || (d.kind === 'handle' && d.moved) || (d.kind === 'grot' && d.moved)) onCommit?.(cur)
   }
 
   function onPointerDown(e: React.PointerEvent<SVGSVGElement>) {
@@ -221,6 +232,13 @@ export default function SceneCanvas(props: Props) {
     const base = scene.shapes
 
     if (tool === 'select') {
+      if (selectedIds.length > 1) {
+        const gh = groupRotHandle()
+        if (gh && dist(gh.pos, p) <= tol * 1.4) {
+          dragRef.current = { kind: 'grot', ids: selectedIds, centre: gh.centre, start: Math.atan2(p[0] - gh.centre[0], -(p[1] - gh.centre[1])), before: base, moved: false, flipped: gh.flipped }
+          pointerId.current = e.pointerId; svgRef.current?.setPointerCapture(e.pointerId); return
+        }
+      }
       const sel = selectedIds.length === 1 ? base.find(x => x.id === selectedIds[0]) : undefined
       if (sel) {
         const key = handleAt(sel, bg, p, tol * 1.2, base)
@@ -268,6 +286,14 @@ export default function SceneCanvas(props: Props) {
     if (!d || e.pointerId !== pointerId.current) return
     const p = clampPt(toWorld(e), bg)
     const step = snap ? snapStep(bg) : undefined
+    if (d.kind === 'grot') {
+      const ang = Math.atan2(p[0] - d.centre[0], -(p[1] - d.centre[1]))
+      const deg = Math.round(((ang - d.start) * 180) / Math.PI / 5) * 5
+      if (!d.moved && deg === 0) return
+      d.moved = true
+      setDraft(rotateShapes(d.before, d.ids, deg, d.centre))
+      return
+    }
     if (d.kind === 'marquee') {
       if (!d.moved && Math.hypot(p[0] - d.start[0], p[1] - d.start[1]) < 6 * kTouch) return
       d.moved = true
@@ -330,7 +356,7 @@ export default function SceneCanvas(props: Props) {
         const fillC = s.color ?? TEAM_COLORS[s.team]
         return (
           <g key={s.id} data-shape-id={s.id} data-type="player">
-            <path d={blobPath(s.pos, r, seed, sketch ? 0.11 : 0)} fill={fillC} stroke={INK} strokeWidth={sw} strokeLinejoin="round" />
+            <path d={blobPath(s.pos, r, seed, 0)} fill={fillC} stroke={INK} strokeWidth={sw} strokeLinejoin="round" />
             {s.num ? <text x={s.pos[0]} y={s.pos[1]} textAnchor="middle" dominantBaseline="central" fontSize={r * 1.15} fontWeight={700} fill={isLight(fillC) ? INK : '#fff'} style={{ fontFamily: font }}>{s.num}</text> : null}
           </g>
         )
@@ -360,7 +386,7 @@ export default function SceneCanvas(props: Props) {
         return (
           <g key={s.id} data-shape-id={s.id} data-type="line" data-kind={s.kind} fill="none" stroke={s.color ?? INK} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
             <path d={polyPath(body)} strokeDasharray={s.kind === 'return' ? `${11 * k} ${8 * k}` : undefined} />
-            <path d={arrowHead(from, tip, head, seed, sketch ? 2 * k : 0)} />
+            <path d={arrowHead(from, tip, head, seed, 0)} />
           </g>
         )
       }
@@ -382,12 +408,14 @@ export default function SceneCanvas(props: Props) {
         )
       }
       case 'grid': {
-        const x0 = Math.min(s.a[0], s.b[0]), x1 = Math.max(s.a[0], s.b[0]), y1 = Math.max(s.a[1], s.b[1]), y0 = Math.min(s.a[1], s.b[1])
+        const bx = shapeBox(s, bg), c = gridCentre(s)
         return (
           <g key={s.id} data-shape-id={s.id} data-type="grid">
-            <path d={boxPath(s.a, s.b, seed, amp)} fill="none" stroke={s.color ?? INK} strokeWidth={sw} strokeDasharray={`${16 * k} ${10 * k}`} strokeLinecap="round" />
-            {s.label?.trim() ? <text x={(x0 + x1) / 2} y={y0 - 9 * k} textAnchor="middle" fontSize={20 * k} fontWeight={700} fill={s.color ?? INK} style={{ fontFamily: font }}>{s.label}</text> : null}
-            {s.showSize ? <text x={(x0 + x1) / 2} y={y1 + 18 * k} textAnchor="middle" fontSize={15 * k} fontWeight={600} fill={s.color ?? DIM} style={{ fontFamily: font }}>{gridSizeText(s)}</text> : null}
+            <g transform={s.angle ? `rotate(${s.angle} ${c[0]} ${c[1]})` : undefined}>
+              <path d={boxPath(s.a, s.b, seed, amp)} fill="none" stroke={s.color ?? INK} strokeWidth={sw} strokeDasharray={`${16 * k} ${10 * k}`} strokeLinecap="round" />
+            </g>
+            {s.label?.trim() ? <text x={(bx.x0 + bx.x1) / 2} y={bx.y0 - 9 * k} textAnchor="middle" fontSize={20 * k} fontWeight={700} fill={s.color ?? INK} style={{ fontFamily: font }}>{s.label}</text> : null}
+            {s.showSize ? <text x={(bx.x0 + bx.x1) / 2} y={bx.y1 + 18 * k} textAnchor="middle" fontSize={15 * k} fontWeight={600} fill={s.color ?? DIM} style={{ fontFamily: font }}>{gridSizeText(s)}</text> : null}
           </g>
         )
       }
@@ -407,7 +435,7 @@ export default function SceneCanvas(props: Props) {
       case 'line': return <path d={polyPath(curvePoints(s.from, s.to, s.bend, 28))} {...stroke} strokeWidth={11 * k} />
       case 'dim': return <path d={`M${s.a[0]} ${s.a[1]}L${s.b[0]} ${s.b[1]}`} {...stroke} strokeWidth={11 * k} />
       case 'pen': return <path d={smoothPath(s.points)} {...stroke} strokeWidth={11 * k} />
-      case 'grid': return <path d={`M${s.a[0]} ${s.a[1]}H${s.b[0]}V${s.b[1]}H${s.a[0]}Z`} {...stroke} strokeWidth={9 * k} />
+      case 'grid': return <path d={polyPath([...gridCorners(s), gridCorners(s)[0]])} {...stroke} strokeWidth={9 * k} />
       case 'text': { const h = textHeight(s.size, u), w = Math.max(1, s.text.length) * h * 0.55; return <rect x={s.pos[0] - w / 2 - 4 * k} y={s.pos[1] - h / 2 - 4 * k} width={w + 8 * k} height={h + 8 * k} rx={4 * k} {...stroke} strokeWidth={3 * k} strokeDasharray={`${6 * k} ${5 * k}`} /> }
     }
   }
@@ -415,6 +443,7 @@ export default function SceneCanvas(props: Props) {
   const selectedShapes = editable ? shapes.filter(s => selectedIds.includes(s.id)) : []
   const selected = selectedShapes.length === 1 ? selectedShapes[0] : undefined
   const groupBox = selectedShapes.length > 1 ? unionBox(selectedShapes.map(s => shapeBox(s, bg))) : null
+  const gHandle = groupRotHandle()
   const ordered = drawOrder(shapes)
   const cursor = !editable ? 'default' : tool === 'select' ? 'default' : 'crosshair'
 
@@ -441,6 +470,12 @@ export default function SceneCanvas(props: Props) {
           {h.key === 'rot' ? <path d={`M${h.pos[0] - 3 * k} ${h.pos[1]}a${3 * k} ${3 * k} 0 1 1 ${3 * k} ${3 * k}`} fill="none" stroke={HALO} strokeWidth={1.6 * k} /> : null}
         </g>
       ))}
+      {gHandle && (
+        <g data-handle="grot">
+          <circle cx={gHandle.pos[0]} cy={gHandle.pos[1]} r={8 * k} fill="#fff" stroke={HALO} strokeWidth={2.2 * k} />
+          <path d={`M${gHandle.pos[0] - 3.5 * k} ${gHandle.pos[1]}a${3.5 * k} ${3.5 * k} 0 1 1 ${3.5 * k} ${3.5 * k}`} fill="none" stroke={HALO} strokeWidth={1.6 * k} />
+        </g>
+      )}
       {marquee && <rect data-testid="marquee" x={Math.min(marquee.a[0], marquee.b[0])} y={Math.min(marquee.a[1], marquee.b[1])} width={Math.abs(marquee.b[0] - marquee.a[0])} height={Math.abs(marquee.b[1] - marquee.a[1])} fill={HALO} fillOpacity={0.08} stroke={HALO} strokeWidth={1.6 * k} strokeDasharray={`${7 * k} ${5 * k}`} />}
     </svg>
   )

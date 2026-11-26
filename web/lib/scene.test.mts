@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   defaultBackground, viewBoxOf, symbolUnit, formatMetres, dimText, gridSizeText, clampFrameSize, snapPt, snapStep, clampPt,
   makeShape, isMeaningful, moveShape, removeShape, duplicateShape, copyScene, emptyScene, hitTest, handlesOf, handleAt, handlePatch,
-  lineEndTarget, drawOrder, moveShapes, duplicateShapes, removeShapes, colorShapes, scaleShapes, shapesInRect, shapeBox, sizeHandle, scaleOf, equipDims, isLight, rotHandle, equipSize, updateShape, hist, hPush, hUndo, hRedo,
+  lineEndTarget, drawOrder, moveShapes, duplicateShapes, removeShapes, colorShapes, scaleShapes, shapesInRect, shapeBox, rotPt, gridCorners, gridCentre, inGrid, gridResized, rotateShapes, shapesInGrid, cloneShapes, fieldShape, sizeHandle, scaleOf, equipDims, isLight, rotHandle, equipSize, updateShape, hist, hPush, hUndo, hRedo,
   type SceneShape, type Scene,
 } from './scene.ts'
 import { dist, curvePoints, trimPolyline, resample, wobble, wavy, arrowHead, blobPath, decimate, pathLength, hashStr } from './sketch.ts'
@@ -148,9 +148,9 @@ test('the rotation handle swings to the other side when it would fall outside th
 
 test('grid corner handles resize', () => {
   const g = { id: 'g', type: 'grid', a: [2, 2], b: [10, 10], showSize: true } as SceneShape
-  assert.equal(handlesOf(g, bg).length, 4)
-  assert.deepEqual(handlePatch(g, 'b', [12, 14], [g], bg), { b: [12, 14] })
-  assert.deepEqual(handlePatch(g, 'ab', [1, 12], [g], bg), { a: [1, 2], b: [10, 12] })
+  assert.equal(handlesOf(g, bg).length, 5) // four corners and the rotation handle
+  assert.deepEqual({ ...g, ...handlePatch(g, 'b', [12, 14], [g], bg) }, { ...g, a: [2, 2], b: [12, 14] })
+  assert.deepEqual({ ...g, ...handlePatch(g, 'ab', [1, 12], [g], bg) }, { ...g, a: [1, 2], b: [10, 12] })
 })
 
 test('dragging a new line end snaps to a player', () => {
@@ -264,3 +264,74 @@ test('rectangle selection takes what lies completely inside', () => {
   const b = shapeBox(player('x', 5, 5), bg); assert.ok(b.x0 < 5 && b.x1 > 5)
 })
 test('light colours get dark text', () => { assert.ok(isLight('#ffffff') && isLight('#f5c542')); assert.ok(!isLight('#1b2a6b') && !isLight('#ef4444')) })
+
+// rotated fields, group rotation, clipboard, Feldaufbau
+const grid = (id: string, a: [number, number], b: [number, number], angle?: number): SceneShape => ({ id, type: 'grid', a, b, showSize: true, ...(angle ? { angle } : {}) } as SceneShape)
+const near = (p: number[], q: number[], e = 1e-6) => Math.abs(p[0] - q[0]) < e && Math.abs(p[1] - q[1]) < e
+test('rotating points is clockwise on screen and reversible', () => {
+  assert.ok(near(rotPt([1, 0], [0, 0], 90), [0, 1])); assert.ok(near(rotPt(rotPt([3, 2], [1, 1], 37), [1, 1], -37), [3, 2]))
+})
+test('a turned field: corners, inside test and hit test follow the angle', () => {
+  const g = grid('g', [0, 0], [10, 4], 90) as Extract<SceneShape, { type: 'grid' }>
+  const cs = gridCorners(g) // centre (5,2): the 10 × 4 field now stands upright, 4 wide and 10 high
+  const xs = cs.map(c => c[0]), ys = cs.map(c => c[1])
+  assert.ok(Math.abs(Math.max(...xs) - Math.min(...xs) - 4) < 1e-6 && Math.abs(Math.max(...ys) - Math.min(...ys) - 10) < 1e-6)
+  assert.ok(inGrid(g, [5, -2.5]) && !inGrid(g, [9, 2]))
+  assert.equal(hitTest([g], [5, -3], 0.3, bg), 'g') // its (turned) top edge
+  assert.equal(hitTest([g], [9.5, 2], 0.3, bg), null) // where the unturned right end would be
+  assert.deepEqual(gridCentre(g), [5, 2])
+})
+test('dragging a corner of a turned field keeps the opposite corner fixed in the picture', () => {
+  const g = grid('g', [0, 0], [10, 4], 30)
+  const before = gridCorners(g as Extract<SceneShape, { type: 'grid' }>)
+  const patch = handlePatch(g, 'b', rotPt([12, 6], [5, 2], 30), [g], defaultBackground('pitch')) as Partial<SceneShape>
+  const g2 = { ...g, ...patch } as Extract<SceneShape, { type: 'grid' }>
+  const after = gridCorners(g2)
+  assert.ok(near(after[0], before[0], 1e-6)) // corner a did not move
+  assert.ok(near(after[2], rotPt([12, 6], [5, 2], 30), 1e-6)) // dragged corner is where it was dragged
+  const pk = handlePatch(g, 'ab', before[3], [g], defaultBackground('pitch')) as Partial<SceneShape>
+  assert.ok(near(gridCorners({ ...g, ...pk } as Extract<SceneShape, { type: 'grid' }>)[1], before[1], 1e-6))
+})
+test('field rotation handle sets the angle in 5° steps and resizing keeps centre and angle', () => {
+  const g = grid('g', [20, 20], [40, 30]) as Extract<SceneShape, { type: 'grid' }>
+  const pitch = defaultBackground('pitch')
+  assert.ok(handlesOf(g, pitch).some(h => h.key === 'rot'))
+  const p = handlePatch(g, 'rot', [50, 25], [g], pitch) as { angle: number }
+  assert.equal(p.angle, 90)
+  const r = { ...g, angle: 40 } as Extract<SceneShape, { type: 'grid' }>
+  const n = { ...r, ...gridResized(r, 12, 6) } as Extract<SceneShape, { type: 'grid' }>
+  assert.deepEqual(gridCentre(n), gridCentre(r)); assert.equal(n.angle, 40); assert.equal(Math.abs(n.b[0] - n.a[0]), 12)
+})
+test('rotating a group turns equipment and fields, moves the rest around the centre', () => {
+  const shapes: SceneShape[] = [player('p', 10, 0), { id: 'e', type: 'equip', kind: 'goal', pos: [0, 10], angle: 0 }, grid('g', [0, 0], [4, 2]), line('l', [0, 0], [10, 0], { fromId: undefined })]
+  const out = rotateShapes(shapes, ['p', 'e', 'g', 'l'], 90, [0, 0])
+  assert.ok(near((out[0] as { pos: number[] }).pos, [0, 10])); assert.equal((out[1] as { angle: number }).angle, 90)
+  assert.ok(near((out[1] as { pos: number[] }).pos, [-10, 0]))
+  assert.equal((out[2] as { angle?: number }).angle, 90)
+  assert.ok(near((out[3] as { to: number[] }).to, [0, 10]))
+  const back = rotateShapes(out, ['p', 'e', 'g', 'l'], -90, [0, 0])
+  assert.ok(near((back[0] as { pos: number[] }).pos, [10, 0])); assert.equal((back[2] as { angle?: number }).angle, undefined); assert.equal((back[1] as { angle: number }).angle, 0)
+  assert.equal((rotateShapes(shapes, ['p'], 90, [0, 0])[1] as { angle: number }).angle, 0) // unselected shapes stay
+})
+test('"select all in a field" takes the field and what lies inside it, turned or not', () => {
+  const shapes: SceneShape[] = [grid('g', [0, 0], [20, 10]), player('in', 5, 5), player('out', 25, 5), { id: 'e', type: 'equip', kind: 'cone', pos: [19, 9], angle: 0 }]
+  assert.deepEqual(shapesInGrid(shapes, 'g', bg).sort(), ['e', 'g', 'in'])
+  const turned = shapes.map(s => (s.id === 'g' ? grid('g', [0, 0], [20, 10], 90) : s))
+  // turned 90° around (10,5): the field now covers x 5..15, y -5..15; the player at (5,5) sits on its left edge
+  assert.ok(shapesInGrid(turned, 'g', bg).includes('g')); assert.ok(!shapesInGrid(turned, 'g', bg).includes('out'))
+  assert.deepEqual(shapesInGrid(shapes, 'nope', bg), [])
+})
+test('pasting clones with fresh ids and keeps attachments inside the pasted set', () => {
+  const src: SceneShape[] = [player('p1', 2, 2), player('p2', 10, 2), line('l1', [2, 2], [10, 2], { fromId: 'p1', toId: 'p2' })]
+  const c = cloneShapes(src, 1, 1)
+  assert.equal(c.length, 3); assert.ok(c.every(s => !src.some(o => o.id === s.id)))
+  const l = c.find(s => s.type === 'line') as Extract<SceneShape, { type: 'line' }>
+  assert.ok(c.some(s => s.id === l.fromId) && c.some(s => s.id === l.toId)); assert.deepEqual((c[0] as { pos: number[] }).pos, [3, 3])
+})
+test('Feldaufbau: a form becomes a labelled field of its own size inside the frame', () => {
+  const pitch = defaultBackground('pitch')
+  const f = fieldShape(pitch, '1 · Over the River', 20, 30, 0, '#ef4444') as Extract<SceneShape, { type: 'grid' }>
+  assert.equal(f.label, '1 · Over the River'); assert.ok(Math.abs(Math.abs(f.b[0] - f.a[0]) - 20) < 1e-9 && Math.abs(Math.abs(f.b[1] - f.a[1]) - 30) < 1e-9)
+  const g = fieldShape(pitch, 'x', 20, 30, 1) as Extract<SceneShape, { type: 'grid' }>
+  assert.notDeepEqual(g.a, f.a) // the next one is nudged
+})

@@ -3,12 +3,12 @@
 // The sketch editor: tool bar, selection panel, undo/redo, background and size, and the canvas.
 // It owns the editing history; the parent gets every committed state through onChange and saves it. Give it a `key` per scene.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import SceneCanvas, { equipGlyph, INK, POLE_COLORS, type Look } from './SceneCanvas'
 import {
   TEAMS, TEAM_COLORS, TEAM_NAMES, EQUIP_KINDS, EQUIP_LABELS, LINE_LABELS, BG_LABELS, defaultBackground, clampFrameSize,
   duplicateShapes, removeShapes, updateShape, colorShapes, scaleShapes, equipSize, symbolUnit, newId, hist, hPush, hUndo, hRedo,
-  COLOR_CHOICES, canColor, canScale, scaleOf,
+  COLOR_CHOICES, fieldShape, canColor, canScale, scaleOf, rotateShapes, shapesInGrid, shapeBox, unionBox, gridSize, gridResized, cloneShapes,
   type Scene, type SceneShape, type Tool, type Team, type EquipKind, type BackgroundType, type Pt, type Hist, type LineKind,
 } from '@/lib/scene'
 
@@ -58,8 +58,17 @@ function EquipIcon({ kind, color }: { kind: EquipKind; color?: string }) {
   )
 }
 
+// The clipboard for copying shapes between sketches lives in localStorage so it works across forms and sessions.
+const CLIP = 'sceneClipboard'
+const CLIP_EVENT = 'sceneclip'
+function readClip(): string { try { return localStorage.getItem(CLIP) ?? '' } catch { return '' } }
+function subscribeClip(cb: () => void) {
+  window.addEventListener('storage', cb); window.addEventListener(CLIP_EVENT, cb)
+  return () => { window.removeEventListener('storage', cb); window.removeEventListener(CLIP_EVENT, cb) }
+}
+
 /** A number field that lets you clear and retype freely: it only applies a value once it is a valid size, and tidies the text on blur. */
-function SizeInput({ value, onValue, label, testId, style }: { value: number; onValue: (v: number) => void; label: string; testId: string; style: React.CSSProperties }) {
+function SizeInput({ value, onValue, label, testId, style, min = 3, max = Infinity }: { value: number; onValue: (v: number) => void; label: string; testId: string; style: React.CSSProperties; min?: number; max?: number }) {
   const shown = String(value).replace('.', ',')
   const [text, setText] = useState(shown)
   const [focus, setFocus] = useState(false)
@@ -77,7 +86,7 @@ function SizeInput({ value, onValue, label, testId, style }: { value: number; on
         const t = e.target.value.replace(/[^0-9.,]/g, '')
         setText(t)
         const n = parseFloat(t.replace(',', '.'))
-        if (Number.isFinite(n) && n >= 3) onValue(n)
+        if (Number.isFinite(n) && n >= min && n <= max) onValue(n)
       }}
     />
   )
@@ -90,15 +99,17 @@ interface Props {
   scene: Scene
   onChange: (s: Scene) => void
   readOnly?: boolean
+  /** Feldaufbau: forms that can be laid onto the pitch as labelled fields of their own size. */
+  placeables?: { key: string; label: string; w: number; h: number; color?: string }[]
 }
 
-export default function SceneEditor({ scene, onChange, readOnly = false }: Props) {
+export default function SceneEditor({ scene, onChange, readOnly = false, placeables }: Props) {
   const [h, setH] = useState<Hist<Scene>>(() => hist(scene))
   const [tool, setTool] = useState<Tool>('select')
   const [team, setTeam] = useState<Team>('a')
   const [equip, setEquip] = useState<EquipKind>('cone')
   const [poleColor, setPoleColor] = useState(POLE_COLORS[0])
-  const [look, setLook] = useState<Look>('sketch')
+  const look: Look = 'sketch' // steady lines; 'sketch' only selects the handwriting font for labels
   const [snap, setSnap] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [pendingText, setPendingText] = useState<Pt | null>(null)
@@ -140,6 +151,27 @@ export default function SceneEditor({ scene, onChange, readOnly = false }: Props
     const r = duplicateShapes(cur.shapes, ids, o, o)
     setShapes(r.shapes); setSelectedIds(r.newIds)
   }, [ids, cur, setShapes])
+  const pasteN = useRef(0)
+  const clipRaw = useSyncExternalStore(subscribeClip, readClip, () => '')
+  const clipCount = useMemo(() => { try { const c = JSON.parse(clipRaw || 'null'); return Array.isArray(c?.shapes) ? c.shapes.length : 0 } catch { return 0 } }, [clipRaw])
+  const copySel = useCallback(() => {
+    if (!picked.length) return
+    try { localStorage.setItem(CLIP, JSON.stringify({ shapes: picked })); pasteN.current = 0; window.dispatchEvent(new Event(CLIP_EVENT)) } catch { /* storage full or blocked */ }
+  }, [picked])
+  const paste = useCallback(() => {
+    try {
+      const c = JSON.parse(readClip() || 'null')
+      if (!Array.isArray(c?.shapes) || !c.shapes.length) return
+      pasteN.current += 1
+      const o = symbolUnit(cur.background) * 1.6 * pasteN.current
+      const copies = cloneShapes(c.shapes as SceneShape[], o, o)
+      setShapes([...cur.shapes, ...copies]); setSelectedIds(copies.map(x => x.id)); setTool('select')
+    } catch { /* nothing usable on the clipboard */ }
+  }, [cur, setShapes])
+  const turn = (deg: number) => {
+    const box = unionBox(picked.map(x => shapeBox(x, cur.background)))
+    if (box) setShapes(rotateShapes(cur.shapes, ids, deg, [(box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2]))
+  }
   const recolor = (color: string | undefined) => setShapes(colorShapes(cur.shapes, ids, color))
   const resize = (f: number) => setShapes(scaleShapes(cur.shapes, ids, f))
   const colorTargets = picked.filter(canColor)
@@ -155,13 +187,15 @@ export default function SceneEditor({ scene, onChange, readOnly = false }: Props
       if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo() }
       else if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo() }
       else if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSel() }
+      else if (mod && e.key.toLowerCase() === 'c' && ids.length) { e.preventDefault(); copySel() }
+      else if (mod && e.key.toLowerCase() === 'v') { e.preventDefault(); paste() }
       else if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); setTool('select'); setSelectedIds(cur.shapes.map(s => s.id)) }
       else if ((e.key === 'Delete' || e.key === 'Backspace') && ids.length) { e.preventDefault(); deleteSel() }
       else if (e.key === 'Escape') { setSelectedIds([]); setPendingText(null); setTool('select'); setFull(false) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [readOnly, undo, redo, duplicateSel, deleteSel, ids.length, cur.shapes])
+  }, [readOnly, undo, redo, duplicateSel, deleteSel, copySel, paste, ids.length, cur.shapes])
 
   function addText() {
     const t = textValue.trim()
@@ -210,13 +244,25 @@ export default function SceneEditor({ scene, onChange, readOnly = false }: Props
           </span>
         )}
         <span style={{ flex: 1 }} />
-        <button data-testid="look" onClick={() => setLook(look === 'sketch' ? 'clean' : 'sketch')} style={btn(false)} title="Aussehen">{look === 'sketch' ? 'Skizze' : 'Sauber'}</button>
         <button data-testid="snap" onClick={() => setSnap(!snap)} style={btn(snap)} title="Auf ganze Meter einrasten">Raster</button>
         <button data-testid="undo" onClick={undo} disabled={!h.past.length} style={btn(false, { opacity: h.past.length ? 1 : 0.4 })} title="Rückgängig (Strg+Z)">↶</button>
         <button data-testid="redo" onClick={redo} disabled={!h.future.length} style={btn(false, { opacity: h.future.length ? 1 : 0.4 })} title="Wiederholen">↷</button>
+        {clipCount > 0 && <button data-testid="paste" onClick={paste} style={btn(false)} title="Aus der Zwischenablage einfügen (Strg+V), auch in anderen Skizzen">Einfügen · {clipCount}</button>}
         <button data-testid="delete-top" onClick={deleteSel} disabled={!ids.length} aria-label="Auswahl löschen" title="Auswahl löschen (Entf)" style={btn(false, { display: 'inline-flex', alignItems: 'center', opacity: ids.length ? 1 : 0.4, color: ids.length ? '#991b1b' : '#4A4F5C' })}><TrashIcon /></button>
         <button data-testid="fullscreen" onClick={() => setFull(!full)} style={btn(full)} title="Vollbild">{full ? 'Schließen' : 'Vollbild'}</button>
       </div>
+
+      {placeables && (
+        <div data-testid="placeables" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+          <span style={small}>Aufs Feld legen</span>
+          {placeables.map(pb => (
+            <button key={pb.key} data-testid="place-form" onClick={() => { const f = fieldShape(cur.background, pb.label, pb.w, pb.h, cur.shapes.filter(x => x.type === 'grid').length, pb.color); setShapes([...cur.shapes, f]); setSelectedIds([f.id]); setTool('select') }} style={btn(false, { display: 'inline-flex', alignItems: 'center', gap: 6 })}>
+              {pb.color && <span style={{ width: 10, height: 10, borderRadius: 3, background: pb.color, display: 'inline-block' }} />}{pb.label}<span style={{ color: MUTED, fontWeight: 500 }}>{String(pb.w).replace('.', ',')}×{String(pb.h).replace('.', ',')} m</span>
+            </button>
+          ))}
+          <button data-testid="place-other" onClick={() => { const f = fieldShape(cur.background, 'Anderes Team', 30, 20, cur.shapes.filter(x => x.type === 'grid').length, '#8a8f9e'); setShapes([...cur.shapes, f]); setSelectedIds([f.id]); setTool('select') }} style={btn(false)}>+ Anderes Team</button>
+        </div>
+      )}
 
       {/* tools */}
       <div data-testid="toolbar" style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4, marginBottom: 6 }}>
@@ -323,6 +369,17 @@ export default function SceneEditor({ scene, onChange, readOnly = false }: Props
             <>
               <input data-testid="grid-label" placeholder="Beschriftung, z. B. Feld A" value={selected.label ?? ''} onChange={e => patchSel({ label: e.target.value || undefined } as Partial<SceneShape>, 'grid')} style={{ ...input, flex: 1, minWidth: 160 }} />
               <button onClick={() => patchSel({ showSize: !selected.showSize } as Partial<SceneShape>)} style={btn(selected.showSize)}>Größe anzeigen</button>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <SizeInput testId="grid-w" label="Breite des Feldes in Metern" min={1} max={200} style={{ ...input, width: 64 }} value={Math.round(gridSize(selected).w * 10) / 10} onValue={v => patchSel(gridResized(selected, v, gridSize(selected).h), 'gridsize')} />
+                <span style={{ fontSize: 12, color: MUTED }}>×</span>
+                <SizeInput testId="grid-h" label="Höhe des Feldes in Metern" min={1} max={200} style={{ ...input, width: 64 }} value={Math.round(gridSize(selected).h * 10) / 10} onValue={v => patchSel(gridResized(selected, gridSize(selected).w, v), 'gridsize')} />
+                <span style={{ fontSize: 12, color: MUTED }}>m</span>
+              </span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <SizeInput testId="grid-angle" label="Drehung in Grad" min={0} max={360} style={{ ...input, width: 56 }} value={Math.round(selected.angle ?? 0)} onValue={v => patchSel({ angle: v % 360 || undefined } as Partial<SceneShape>, 'gridangle')} />
+                <span style={{ fontSize: 12, color: MUTED }}>°</span>
+              </span>
+              <button data-testid="grid-select-content" onClick={() => setSelectedIds(shapesInGrid(cur.shapes, selected.id, cur.background))} style={btn(false)} title="Das Feld und alles darin auswählen, um es gemeinsam zu drehen, zu verschieben oder zu kopieren">Inhalt wählen</button>
             </>
           )}
           {selected?.type === 'text' && (
@@ -352,7 +409,16 @@ export default function SceneEditor({ scene, onChange, readOnly = false }: Props
             </span>
           )}
           <span style={{ flex: 1 }} />
+          {(many || selected?.type === 'grid') && (
+            <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>
+              <span style={small}>Drehen</span>
+              <button data-testid="turn-left" onClick={() => turn(-15)} style={btn(false)} aria-label="15° gegen den Uhrzeigersinn">⟲ 15°</button>
+              <button data-testid="turn-right" onClick={() => turn(15)} style={btn(false)} aria-label="15° im Uhrzeigersinn">⟳ 15°</button>
+              <button data-testid="turn-90" onClick={() => turn(90)} style={btn(false)} aria-label="90° im Uhrzeigersinn">90°</button>
+            </span>
+          )}
           {many && <button onClick={() => setSelectedIds([])} style={btn(false)}>Auswahl aufheben</button>}
+          <button data-testid="copy" onClick={copySel} style={btn(false)} title="Kopieren (Strg+C). Einfügen geht auch in einer anderen Skizze.">Kopieren</button>
           <button data-testid="duplicate" onClick={duplicateSel} style={btn(false)}>Duplizieren</button>
           <button data-testid="delete" onClick={deleteSel} style={btn(false, { color: '#991b1b', borderColor: '#fca5a5' })}>Löschen</button>
         </div>

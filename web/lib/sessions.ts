@@ -9,6 +9,8 @@ export type TrainingSession = {
   focus: string
   visibility: SessionVisibility
   tags: string[]
+  /** Feldaufbau: one sketch that shows where each form stands on the pitch. */
+  layout?: Scene | null
   created_by: string
   created_at: string
   updated_at: string
@@ -138,3 +140,9 @@ export function parseMinutes(input: string): number | null {
 export function totalMinutes(forms: Pick<SessionForm, 'duration_min'>[]): number { return forms.reduce((a, f) => a + (f.duration_min ?? 0), 0) }
 
 export function sceneOf(r: FormSceneRow): Scene { return { background: r.background, shapes: r.shapes ?? [], caption: r.caption ?? '' } }
+
+/** How much room a form needs on the pitch: the size of its first sketch's frame. */
+export function formFootprint(first: FormSceneRow | undefined): { w: number; h: number } {
+  const bg = first?.background
+  return bg ? { w: bg.width_m, h: bg.height_m } : { w: 20, h: 30 }
+}

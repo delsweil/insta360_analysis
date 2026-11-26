@@ -38,7 +38,7 @@ export type SceneShape = { id: string } & Animated & (
   | { type: 'equip'; kind: EquipKind; pos: Pt; angle: number; color?: string; num?: string; scale?: number }
   | { type: 'line'; kind: LineKind; from: Pt; to: Pt; bend: number; fromId?: string; toId?: string; color?: string }
   | { type: 'dim'; a: Pt; b: Pt; text?: string; color?: string }
-  | { type: 'grid'; a: Pt; b: Pt; label?: string; showSize: boolean; color?: string }
+  | { type: 'grid'; a: Pt; b: Pt; label?: string; showSize: boolean; color?: string; angle?: number }
   | { type: 'pen'; points: Pt[]; color: string }
   | { type: 'text'; pos: Pt; text: string; size: number; color?: string }
 )
@@ -105,6 +105,74 @@ export function dimText(s: Extract<SceneShape, { type: 'dim' }>): string {
 export function gridSizeText(s: Extract<SceneShape, { type: 'grid' }>): string {
   const w = Math.round(Math.abs(s.b[0] - s.a[0]) * 10) / 10, h = Math.round(Math.abs(s.b[1] - s.a[1]) * 10) / 10
   return `${de(w)} × ${de(h)} m`
+}
+
+/** A labelled field of w × h metres for the Feldaufbau, dropped near the middle of the frame and nudged by n so new ones don't sit exactly on top of each other. */
+export function fieldShape(bg: SceneBackground, label: string, w: number, h: number, n: number, color?: string): SceneShape {
+  const u = symbolUnit(bg), cx = bg.width_m / 2 + (n % 5) * u * 1.5 - u * 3, cy = bg.height_m / 2 + (n % 5) * u * 1.5 - u * 3
+  const r = (v: number) => Math.round(v * 100) / 100
+  return { id: newId(), type: 'grid', a: [r(cx - w / 2), r(cy - h / 2)], b: [r(cx + w / 2), r(cy + h / 2)], label, showSize: true, ...(color ? { color } : {}) }
+}
+
+// ── Rotated fields and group rotation ──────────────────────────
+
+export const rotPt = (p: Pt, c: Pt, deg: number): Pt => {
+  const a = (deg * Math.PI) / 180, cos = Math.cos(a), sin = Math.sin(a), dx = p[0] - c[0], dy = p[1] - c[1]
+  return [c[0] + dx * cos - dy * sin, c[1] + dx * sin + dy * cos]
+}
+type Grid = Extract<SceneShape, { type: 'grid' }>
+export const gridCentre = (g: Grid): Pt => [(g.a[0] + g.b[0]) / 2, (g.a[1] + g.b[1]) / 2]
+export const gridSize = (g: Grid): { w: number; h: number } => ({ w: Math.abs(g.b[0] - g.a[0]), h: Math.abs(g.b[1] - g.a[1]) })
+/** The four corners of a field in the picture: a, (b.x,a.y), b, (a.x,b.y), turned by its angle around its centre. */
+export function gridCorners(g: Grid): Pt[] {
+  const c = gridCentre(g), ang = g.angle ?? 0
+  return ([g.a, [g.b[0], g.a[1]], g.b, [g.a[0], g.b[1]]] as Pt[]).map(q => (ang ? rotPt(q, c, ang) : q))
+}
+/** Is p inside the (possibly turned) field, with a margin? */
+export function inGrid(g: Grid, p: Pt, pad = 0): boolean {
+  const q = g.angle ? rotPt(p, gridCentre(g), -g.angle) : p
+  return q[0] >= Math.min(g.a[0], g.b[0]) - pad && q[0] <= Math.max(g.a[0], g.b[0]) + pad && q[1] >= Math.min(g.a[1], g.b[1]) - pad && q[1] <= Math.max(g.a[1], g.b[1]) + pad
+}
+/** Same centre and angle, new size (metres). */
+export function gridResized(g: Grid, w: number, h: number): Partial<SceneShape> {
+  const c = gridCentre(g)
+  return { a: [c[0] - w / 2, c[1] - h / 2], b: [c[0] + w / 2, c[1] + h / 2] } as Partial<SceneShape>
+}
+export function gridNew(g: Grid, c: Pt, w: number, h: number, angle = g.angle ?? 0): Partial<SceneShape> {
+  return { a: [c[0] - w / 2, c[1] - h / 2], b: [c[0] + w / 2, c[1] + h / 2], angle: ((angle % 360) + 360) % 360 || undefined } as Partial<SceneShape>
+}
+
+/** Turn shapes by `deg` (clockwise on screen) around `centre`. Equipment and fields turn too; players, the ball and text only change place. */
+export function rotateShapes(shapes: SceneShape[], ids: string[], deg: number, centre: Pt): SceneShape[] {
+  const set = new Set(ids), r = (q: Pt) => rotPt(q, centre, deg)
+  return shapes.map(s => {
+    if (!set.has(s.id)) return s
+    switch (s.type) {
+      case 'player': case 'ball': case 'text': return withPatch(s, { pos: r(s.pos) } as Partial<SceneShape>)
+      case 'equip': return withPatch(s, { pos: r(s.pos), angle: (((s.angle + deg) % 360) + 360) % 360 } as Partial<SceneShape>)
+      case 'line': return withPatch(s, { from: r(s.from), to: r(s.to) } as Partial<SceneShape>)
+      case 'dim': return withPatch(s, { a: r(s.a), b: r(s.b) } as Partial<SceneShape>)
+      case 'pen': return withPatch(s, { points: s.points.map(r) } as Partial<SceneShape>)
+      case 'grid': {
+        const c = gridCentre(s), nc = r(c), dx = nc[0] - c[0], dy = nc[1] - c[1]
+        const ang = (((s.angle ?? 0) + deg) % 360 + 360) % 360
+        return withPatch(s, { a: [s.a[0] + dx, s.a[1] + dy], b: [s.b[0] + dx, s.b[1] + dy], angle: Math.abs(ang) < 1e-9 || Math.abs(ang - 360) < 1e-9 ? undefined : ang } as Partial<SceneShape>)
+      }
+    }
+  })
+}
+
+/** The field itself plus everything whose middle lies inside it. Used to turn or move a whole set-up as one. */
+export function shapesInGrid(shapes: SceneShape[], gridId: string, bg: SceneBackground): string[] {
+  const g = shapes.find(s => s.id === gridId)
+  if (!g || g.type !== 'grid') return []
+  const out = [gridId]
+  for (const s of shapes) {
+    if (s.id === gridId) continue
+    const b = shapeBox(s, bg)
+    if (inGrid(g, [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2])) out.push(s.id)
+  }
+  return out
 }
 
 // ── Sizes of things ────────────────────────────────────────────
@@ -215,6 +283,11 @@ export function duplicateShapes(shapes: SceneShape[], ids: string[], dx: number,
     return c
   })
   return { shapes: [...shapes, ...out], newIds: out.map(c => c.id) }
+}
+
+/** Copies of loose shapes (from the clipboard) shifted by dx, dy, with fresh ids. Lines keep their attachment to players copied with them. */
+export function cloneShapes(src: SceneShape[], dx: number, dy: number): SceneShape[] {
+  return duplicateShapes(src, src.map(s => s.id), dx, dy).shapes.slice(src.length)
 }
 
 export function removeShapes(shapes: SceneShape[], ids: string[]): SceneShape[] {
@@ -365,8 +438,9 @@ export function hitTest(shapes: SceneShape[], p: Pt, tol: number, bg: SceneBackg
       }
       case 'grid': {
         const x0 = Math.min(s.a[0], s.b[0]), x1 = Math.max(s.a[0], s.b[0]), y0 = Math.min(s.a[1], s.b[1]), y1 = Math.max(s.a[1], s.b[1])
-        const nearX = (Math.abs(p[0] - x0) <= tol || Math.abs(p[0] - x1) <= tol) && p[1] >= y0 - tol && p[1] <= y1 + tol
-        const nearY = (Math.abs(p[1] - y0) <= tol || Math.abs(p[1] - y1) <= tol) && p[0] >= x0 - tol && p[0] <= x1 + tol
+        const q = s.angle ? rotPt(p, gridCentre(s), -s.angle) : p
+        const nearX = (Math.abs(q[0] - x0) <= tol || Math.abs(q[0] - x1) <= tol) && q[1] >= y0 - tol && q[1] <= y1 + tol
+        const nearY = (Math.abs(q[1] - y0) <= tol || Math.abs(q[1] - y1) <= tol) && q[0] >= x0 - tol && q[0] <= x1 + tol
         hit = nearX || nearY
         break
       }
@@ -392,11 +466,26 @@ export function handlesOf(s: SceneShape, bg: SceneBackground, shapes?: SceneShap
       return [{ key: 'from', pos: t[0] }, { key: 'to', pos: t[t.length - 1] }, { key: 'bend', pos: m }]
     }
     case 'dim': return [{ key: 'a', pos: s.a }, { key: 'b', pos: s.b }]
-    case 'grid': return [{ key: 'a', pos: s.a }, { key: 'b', pos: s.b }, { key: 'ab', pos: [s.a[0], s.b[1]] }, { key: 'ba', pos: [s.b[0], s.a[1]] }]
+    case 'grid': {
+      const [ca, cba, cb, cab] = gridCorners(s)
+      return [{ key: 'a', pos: ca }, { key: 'b', pos: cb }, { key: 'ab', pos: cab }, { key: 'ba', pos: cba }, { key: 'rot', pos: gridRotHandle(s, bg).pos }]
+    }
     case 'equip': return [{ key: 'rot', pos: rotHandle(s, bg).pos }, { key: 'size', pos: sizeHandle(s, bg) }]
     case 'player': case 'ball': return [{ key: 'size', pos: sizeHandle(s, bg) }]
     default: return []
   }
+}
+
+/** Rotation handle of a field: above the middle of its top edge, or below the bottom edge when that would leave the picture. */
+export function gridRotHandle(g: Grid, bg: SceneBackground): { pos: Pt; flipped: boolean } {
+  const u = symbolUnit(bg), c = gridCentre(g), { h } = gridSize(g), ang = g.angle ?? 0
+  const v = viewBoxOf(bg), pad = u * 0.4
+  const at = (dy: number): Pt => rotPt([c[0], c[1] + dy], c, ang)
+  const inside = (q: Pt) => q[0] >= v.x + pad && q[0] <= v.x + v.w - pad && q[1] >= v.y + pad && q[1] <= v.y + v.h - pad
+  const front = at(-(h / 2 + u * 1.3))
+  if (inside(front)) return { pos: front, flipped: false }
+  const back = at(h / 2 + u * 1.3)
+  return inside(back) ? { pos: back, flipped: true } : { pos: front, flipped: false }
 }
 
 /** Extent (half-diagonal, metres) of a symbol at scale 1, used to place and read the size handle. */
@@ -450,10 +539,26 @@ export function handlePatch(s: SceneShape, key: string, p: Pt, shapes: SceneShap
   }
   if (s.type === 'dim') return (key === 'a' ? { a: q } : { b: q }) as Partial<SceneShape>
   if (s.type === 'grid') {
-    if (key === 'a') return { a: q } as Partial<SceneShape>
-    if (key === 'b') return { b: q } as Partial<SceneShape>
-    if (key === 'ab') return { a: [q[0], s.a[1]], b: [s.b[0], q[1]] } as Partial<SceneShape>
-    if (key === 'ba') return { a: [s.a[0], q[1]], b: [q[0], s.b[1]] } as Partial<SceneShape>
+    if (key === 'rot') {
+      const c = gridCentre(s)
+      let deg = (Math.atan2(p[0] - c[0], -(p[1] - c[1])) * 180) / Math.PI
+      if (gridRotHandle(s, bg).flipped) deg -= 180
+      deg = ((Math.round(deg / 5) * 5) % 360 + 360) % 360
+      return { angle: deg || undefined } as Partial<SceneShape>
+    }
+    // dragging a corner: the opposite corner stays where it is in the picture, whatever the angle
+    const ang = s.angle ?? 0, c0 = gridCentre(s)
+    const world: Record<string, Pt> = { a: s.a, ba: [s.b[0], s.a[1]], b: s.b, ab: [s.a[0], s.b[1]] }
+    const opposite: Record<string, string> = { a: 'b', b: 'a', ab: 'ba', ba: 'ab' }
+    if (!(key in world)) return null
+    const F = ang ? rotPt(world[opposite[key]], c0, ang) : world[opposite[key]]
+    const Q = q
+    const c1: Pt = [(Q[0] + F[0]) / 2, (Q[1] + F[1]) / 2]
+    const Ql = ang ? rotPt(Q, c1, -ang) : Q, Fl = ang ? rotPt(F, c1, -ang) : F
+    if (key === 'a') return { a: Ql, b: Fl } as Partial<SceneShape>
+    if (key === 'b') return { a: Fl, b: Ql } as Partial<SceneShape>
+    if (key === 'ab') return { a: [Ql[0], Fl[1]], b: [Fl[0], Ql[1]] } as Partial<SceneShape>
+    return { a: [Fl[0], Ql[1]], b: [Ql[0], Fl[1]] } as Partial<SceneShape>
   }
   if ((s.type === 'player' || s.type === 'ball' || s.type === 'equip') && key === 'size') {
     const base = baseExtent(s, u)
@@ -493,7 +598,7 @@ export function shapeBox(s: SceneShape, bg: SceneBackground): Box {
     }
     case 'line': return ofPts(curvePoints(s.from, s.to, s.bend, 16))
     case 'dim': return ofPts([s.a, s.b])
-    case 'grid': return ofPts([s.a, s.b])
+    case 'grid': return ofPts(gridCorners(s))
     case 'pen': return ofPts(s.points)
     case 'text': { const h = textHeight(s.size, u), w = Math.max(1, s.text.length) * h * 0.55; return { x0: s.pos[0] - w / 2, x1: s.pos[0] + w / 2, y0: s.pos[1] - h / 2, y1: s.pos[1] + h / 2 } }
   }

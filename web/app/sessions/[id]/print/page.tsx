@@ -143,6 +143,12 @@ function PrintInner({ id }: { id: string }) {
             {session.focus?.trim() && <div style={{ fontSize: 14, color: '#1c2033', whiteSpace: 'pre-wrap', marginBottom: 6 }}>{session.focus}</div>}
             {session.tags.length > 0 && <div style={{ fontSize: 12, color: MUTED }}>{session.tags.map(t => `#${t}`).join('   ')}</div>}
             <div style={{ fontSize: 13, color: MUTED, marginTop: 6, fontWeight: 500 }}>{forms.length} {forms.length === 1 ? 'Form' : 'Formen'}{mins > 0 ? `  ·  ${mins} Min. gesamt` : ''}</div>
+            {session.layout && session.layout.shapes.length > 0 && (
+              <div style={{ marginTop: '6mm', breakInside: 'avoid' }}>
+                <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: MUTED, marginBottom: 4 }}>Feldaufbau</div>
+                <SceneCanvas scene={session.layout} plain style={{ maxHeight: '120mm', border: '1px solid #d9dce6', borderRadius: 6 }} testId="print-layout" />
+              </div>
+            )}
             {forms.length > 0 && (
               <table className="overview">
                 <thead><tr><th>Nr.</th><th>Form</th><th>Art</th><th>Dauer</th><th>Spieler</th></tr></thead>
