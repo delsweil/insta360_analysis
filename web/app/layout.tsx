@@ -1,17 +1,22 @@
 import type { Metadata } from "next";
-import { Bebas_Neue, DM_Sans } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
-const bebasNeue = Bebas_Neue({
-  weight: "400",
+// The fonts ship with the app (app/fonts) so a build never depends on Google Fonts being reachable.
+const bebasNeue = localFont({
+  src: [{ path: "./fonts/bebas-neue-latin-400-normal.woff2", weight: "400", style: "normal" }],
   variable: "--font-bebas",
-  subsets: ["latin"],
+  display: "swap",
 });
 
-const dmSans = DM_Sans({
-  weight: ["400", "500", "600"],
+const dmSans = localFont({
+  src: [
+    { path: "./fonts/dm-sans-latin-400-normal.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/dm-sans-latin-500-normal.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/dm-sans-latin-600-normal.woff2", weight: "600", style: "normal" },
+  ],
   variable: "--font-dm-sans",
-  subsets: ["latin"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
