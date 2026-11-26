@@ -14,7 +14,8 @@ export const MAX_S = 30
 
 export const clampSec = (v: number, fallback: number) => (Number.isFinite(v) ? Math.round(Math.min(MAX_S, Math.max(MIN_S, v)) * 10) / 10 : fallback)
 export const moveOf = (t?: Timing | null) => clampSec(t?.move_s ?? DEFAULT_MOVE_S, DEFAULT_MOVE_S)
-export const holdOf = (t?: Timing | null) => clampSec(t?.hold_s ?? DEFAULT_HOLD_S, DEFAULT_HOLD_S)
+/** A pause may be 0: then the movement flows straight into the next one. */
+export const holdOf = (t?: Timing | null) => { const v = t?.hold_s ?? DEFAULT_HOLD_S; return Number.isFinite(v) ? Math.round(Math.min(MAX_S, Math.max(0, v)) * 10) / 10 : DEFAULT_HOLD_S }
 
 export interface Step { scene: Scene; timing?: Timing | null }
 export interface Seg { index: number; kind: 'hold' | 'move'; t0: number; t1: number }
@@ -31,6 +32,14 @@ export function plan(steps: Step[]): { segs: Seg[]; total: number; starts: numbe
   return { segs, total: t, starts }
 }
 
+/** Easing for one movement: slow start only if the players stood still before, slow end only if they stop afterwards. */
+export function easeFor(p: number, slowIn: boolean, slowOut: boolean): number {
+  const x = Math.min(1, Math.max(0, p))
+  if (slowIn && slowOut) return ease(x)
+  if (slowIn) return x * x
+  if (slowOut) return 1 - (1 - x) * (1 - x)
+  return x
+}
 export const ease = (p: number) => { const x = Math.min(1, Math.max(0, p)); return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2 }
 const lerp = (a: number, b: number, p: number) => a + (b - a) * p
 const lerpPt = (a: Pt, b: Pt, p: number): Pt => [lerp(a[0], b[0], p), lerp(a[1], b[1], p)]
@@ -95,8 +104,8 @@ function tweenShape(a: SceneShape, b: SceneShape, p: number, e: number, scene: S
 }
 
 /** What is on screen while moving from scene A to scene B, p = 0..1 (linear time; easing is applied here). */
-export function tween(A: Scene, B: Scene, p: number): Scene {
-  const e = ease(p)
+export function tween(A: Scene, B: Scene, p: number, slowIn = true, slowOut = true): Scene {
+  const e = easeFor(p, slowIn, slowOut)
   const inB = new Map(B.shapes.map(s => [s.id, s]))
   const inA = new Map(A.shapes.map(s => [s.id, s]))
   const out: SceneShape[] = []
@@ -144,7 +153,10 @@ export function frameAt(steps: Step[], t: number): Frame {
   if (!seg) return { scene: { background: { type: 'blank', width_m: 40, height_m: 30 }, shapes: [], caption: '' }, index: 0, kind: 'hold' }
   if (seg.kind === 'hold') return { scene: steps[seg.index].scene, index: seg.index, kind: 'hold' }
   const p = (tt - seg.t0) / (seg.t1 - seg.t0)
-  return { scene: tween(steps[seg.index - 1].scene, steps[seg.index].scene, p), index: p < 0.5 ? seg.index - 1 : seg.index, kind: 'move' }
+  const i = seg.index
+  const slowIn = i - 1 === 0 || holdOf(steps[i - 1].timing) > 0
+  const slowOut = i === steps.length - 1 || holdOf(steps[i].timing) > 0
+  return { scene: tween(steps[i - 1].scene, steps[i].scene, p, slowIn, slowOut), index: p < 0.5 ? seg.index - 1 : seg.index, kind: 'move' }
 }
 
 export function formatTime(s: number): string {

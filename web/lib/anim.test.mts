@@ -17,7 +17,7 @@ test('time line: first scene is held, the others are moved into and held; defaul
   assert.ok(Math.abs(p.total - (DEFAULT_HOLD_S + 2 + 3 + DEFAULT_MOVE_S + DEFAULT_HOLD_S)) < 1e-9)
   const r1 = (x: number) => Math.round(x * 10) / 10
   assert.deepEqual(p.starts.map(r1), [0, DEFAULT_HOLD_S + 2, DEFAULT_HOLD_S + 2 + 3 + DEFAULT_MOVE_S].map(r1))
-  assert.equal(moveOf(null), DEFAULT_MOVE_S); assert.equal(holdOf({ hold_s: 0 }), 0.2); assert.equal(holdOf({ hold_s: 999 }), 30); assert.equal(clampSec(NaN, 1), 1)
+  assert.equal(moveOf(null), DEFAULT_MOVE_S); assert.equal(holdOf({ hold_s: 0 }), 0); assert.equal(holdOf({ hold_s: -3 }), 0); assert.equal(holdOf({ hold_s: 999 }), 30); assert.equal(clampSec(NaN, 1), 1)
   assert.equal(plan([]).total, 0)
 })
 test('easing starts and ends gently and is monotonic', () => {
@@ -81,4 +81,15 @@ test('tween: a carried ball travels with its carrier', () => {
   const m = tween(A, B, 0.5)
   const p = m.shapes.find(s => s.id === 'p') as any, b = m.shapes.find(s => s.id === 'b') as any
   assert.ok(Math.abs(b.pos[0] - p.pos[0] - 0.5) < 1e-9 && Math.abs(b.pos[1] - p.pos[1]) < 1e-9)
+})
+
+test('flow: with no pause the movement does not slow down at the sketch change', () => {
+  const mk = (x: number, t?: { move_s?: number; hold_s?: number }) => ({ scene: scene([pl('p', x, 0)]), timing: t })
+  const steps = [mk(0, { hold_s: 0 }), mk(10, { move_s: 2, hold_s: 0 }), mk(20, { move_s: 2, hold_s: 1 })]
+  const at = (t: number) => (frameAt(steps, t).scene.shapes[0] as any).pos[0]
+  assert.ok(Math.abs(at(2) - 10) < 1e-6)                                         // reaches the sketch position
+  const speedIn = at(1.99) - at(1.98), speedOut = at(2.02) - at(2.01)
+  assert.ok(speedIn > 0.05 && speedOut > 0.05)                                    // no stop at x = 10
+  const stopped = [mk(0, { hold_s: 1 }), mk(10, { move_s: 2, hold_s: 1 })]
+  assert.ok((frameAt(stopped, 1.01).scene.shapes[0] as any).pos[0] < 0.01)       // with a pause it still starts slowly
 })

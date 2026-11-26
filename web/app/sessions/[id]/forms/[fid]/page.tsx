@@ -285,9 +285,10 @@ export default function FormPage({ params }: { params: Promise<{ id: string; fid
                           )}
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                             Pause danach
-                            <SizeInput testId="timing-hold" label="Pause in Sekunden" min={MIN_S} max={MAX_S} style={{ ...field, width: 64 }} value={holdOf(scene.timing)} onValue={v => patchScene(scene.id, { timing: { ...(scene.timing ?? {}), hold_s: v } })} />
+                            <SizeInput testId="timing-hold" label="Pause in Sekunden" min={0} max={MAX_S} style={{ ...field, width: 64 }} value={holdOf(scene.timing)} onValue={v => patchScene(scene.id, { timing: { ...(scene.timing ?? {}), hold_s: v } })} />
                             s
                           </span>
+                          <button data-testid="timing-flow" type="button" onClick={() => scenes.forEach((r, i) => patchScene(r.id, { timing: { move_s: 1.2, hold_s: i === scenes.length - 1 ? 1.5 : 0 } }))} style={{ fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 8, border: '1.5px solid #E4E6EE', background: '#fff', color: '#0f2972', cursor: 'pointer' }} title="Alle Skizzen ohne Pausen ineinander übergehen lassen">Alles fließend</button>
                           <span style={{ color: MUTED }}>Standard: {String(DEFAULT_MOVE_S).replace('.', ',')} s Bewegung, {String(DEFAULT_HOLD_S).replace('.', ',')} s Pause</span>
                         </div>
                       )}
