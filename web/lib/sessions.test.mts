@@ -49,3 +49,25 @@ test('sortSessions: newest date first, undated by creation day', () => {
   ]
   assert.deepEqual(sortSessions(l).map(s => s.id), ['2', '3', '1'])
 })
+
+import { newSection, unusedStarters, moveItem, reindex, parseMinutes, totalMinutes, STARTER_SECTIONS } from './sessions.ts'
+
+test('unusedStarters hides the ones already used, ignoring case', () => {
+  const s = [newSection('aufbau'), newSection('Mein eigener')]
+  const left = unusedStarters(s)
+  assert.ok(!left.includes('Aufbau')); assert.equal(left.length, STARTER_SECTIONS.length - 1)
+  assert.equal(unusedStarters([]).length, STARTER_SECTIONS.length)
+})
+
+test('moveItem and reindex', () => {
+  assert.deepEqual(moveItem(['a', 'b', 'c'], 0, 2), ['b', 'c', 'a'])
+  assert.deepEqual(moveItem(['a', 'b', 'c'], 2, 1), ['a', 'c', 'b'])
+  const same = ['a', 'b']; assert.equal(moveItem(same, 0, 5), same); assert.equal(moveItem(same, -1, 0), same)
+  const r = reindex([{ position: 5, n: 'x' }, { position: 1, n: 'y' }]); assert.deepEqual(r.map(x => x.position), [0, 1])
+})
+
+test('parseMinutes and totalMinutes', () => {
+  assert.equal(parseMinutes('15'), 15); assert.equal(parseMinutes('15 min'), 15); assert.equal(parseMinutes(''), null)
+  assert.equal(parseMinutes('0'), null); assert.equal(parseMinutes('999'), null)
+  assert.equal(totalMinutes([{ duration_min: 10 }, { duration_min: null }, { duration_min: 15 }]), 25)
+})

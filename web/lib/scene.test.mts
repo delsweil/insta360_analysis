@@ -1,0 +1,207 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import {
+  defaultBackground, viewBoxOf, symbolUnit, formatMetres, dimText, gridSizeText, clampFrameSize, snapPt, snapStep, clampPt,
+  makeShape, isMeaningful, moveShape, removeShape, duplicateShape, copyScene, emptyScene, hitTest, handlesOf, handleAt, handlePatch,
+  lineEndTarget, drawOrder, rotHandle, equipSize, updateShape, hist, hPush, hUndo, hRedo,
+  type SceneShape, type Scene,
+} from './scene.ts'
+import { dist, curvePoints, trimPolyline, resample, wobble, wavy, arrowHead, blobPath, decimate, pathLength, hashStr } from './sketch.ts'
+
+const bg = defaultBackground('free') // 20 x 30 m
+const player = (id: string, x: number, y: number): SceneShape => ({ id, type: 'player', pos: [x, y], team: 'a' })
+const line = (id: string, from: [number, number], to: [number, number], extra: Partial<SceneShape> = {}): SceneShape => ({ id, type: 'line', kind: 'pass', from, to, bend: 0, ...extra } as SceneShape)
+
+test('frames: sizes, view box margin, symbol unit', () => {
+  assert.deepEqual(defaultBackground('pitch'), { type: 'pitch', width_m: 105, height_m: 68 })
+  assert.deepEqual(defaultBackground('halfpitch'), { type: 'halfpitch', width_m: 68, height_m: 52.5 })
+  const v = viewBoxOf(bg)
+  assert.ok(v.x < 0 && v.w > bg.width_m && v.h > bg.height_m)
+  assert.ok(symbolUnit(defaultBackground('pitch')) > symbolUnit(bg))
+  assert.equal(clampFrameSize(500), 120); assert.equal(clampFrameSize(0), 3); assert.equal(clampFrameSize(NaN), 3); assert.equal(clampFrameSize(22.46), 22.5)
+})
+
+test('metres are formatted the German way', () => {
+  assert.equal(formatMetres(12), '12 m'); assert.equal(formatMetres(12.5), '12,5 m'); assert.equal(formatMetres(7.32), '7,3 m'); assert.equal(formatMetres(0.04), '0 m')
+  assert.equal(dimText({ id: 'd', type: 'dim', a: [0, 0], b: [3, 4] }), '5 m')
+  assert.equal(dimText({ id: 'd', type: 'dim', a: [0, 0], b: [3, 4], text: ' 4,5 m ' }), '4,5 m')
+  assert.equal(dimText({ id: 'd', type: 'dim', a: [0, 0], b: [3, 4], text: '   ' }), '5 m')
+  assert.equal(gridSizeText({ id: 'g', type: 'grid', a: [10, 20], b: [0, 0], showSize: true }), '10 × 20 m')
+})
+
+test('snapping and clamping', () => {
+  assert.deepEqual(snapPt([3.4, 7.6], 1), [3, 8]); assert.deepEqual(snapPt([12, 13], 5), [10, 15])
+  assert.equal(snapStep(bg), 1); assert.equal(snapStep(defaultBackground('pitch')), 5)
+  const c = clampPt([-100, 999], bg); assert.ok(c[0] > -5 && c[1] < 40)
+})
+
+test('making shapes and dropping accidental taps', () => {
+  const l = makeShape('pass', [1, 1])!; assert.equal(l.type, 'line'); assert.equal(isMeaningful(l, 0.5), false)
+  assert.equal(isMeaningful({ ...(l as object), to: [5, 1] } as SceneShape, 0.5), true)
+  assert.equal(isMeaningful(makeShape('player', [1, 1])!, 0.5), true)
+  assert.equal(isMeaningful(makeShape('text', [1, 1])!, 0.5), false)
+  assert.equal(makeShape('select', [0, 0]), null)
+  const g = makeShape('grid', [0, 0])!; assert.equal(isMeaningful({ ...(g as object), b: [4, 0] } as SceneShape, 0.5), false)
+})
+
+test('moving a player carries attached lines, moving a line detaches it', () => {
+  const s = [player('p1', 2, 2), player('p2', 10, 2), line('l1', [2, 2], [10, 2], { fromId: 'p1', toId: 'p2' })]
+  const m = moveShape(s, 'p1', 1, 3)
+  assert.deepEqual((m[0] as { pos: number[] }).pos, [3, 5])
+  const l = m[2] as Extract<SceneShape, { type: 'line' }>
+  assert.deepEqual(l.from, [3, 5]); assert.deepEqual(l.to, [10, 2]); assert.equal(l.fromId, 'p1')
+  const m2 = moveShape(s, 'l1', 1, 1)[2] as Extract<SceneShape, { type: 'line' }>
+  assert.deepEqual(m2.from, [3, 3]); assert.equal('fromId' in m2, false); assert.equal('toId' in m2, false)
+  assert.equal(moveShape(s, 'nope', 1, 1), s)
+})
+
+test('deleting a player detaches lines but keeps them', () => {
+  const s = [player('p1', 2, 2), player('p2', 10, 2), line('l1', [2, 2], [10, 2], { fromId: 'p1', toId: 'p2' })]
+  const r = removeShape(s, 'p1'); assert.equal(r.length, 2)
+  const l = r[1] as Extract<SceneShape, { type: 'line' }>
+  assert.equal('fromId' in l, false); assert.equal(l.toId, 'p2'); assert.deepEqual(l.from, [2, 2])
+})
+
+test('duplicate gets a new id, an offset, and no attachments', () => {
+  const l = line('l1', [2, 2], [10, 2], { fromId: 'p1' })
+  const d = duplicateShape(l, 1, 1) as Extract<SceneShape, { type: 'line' }>
+  assert.notEqual(d.id, 'l1'); assert.deepEqual(d.from, [3, 3]); assert.equal('fromId' in d, false)
+})
+
+test('copying a scene keeps the shape ids (same id = same player in the next step)', () => {
+  const sc: Scene = { ...emptyScene('free'), shapes: [player('p1', 1, 1)], caption: 'x' }
+  const c = copyScene(sc); assert.equal(c.shapes[0].id, 'p1'); assert.notEqual(c.shapes, sc.shapes)
+  ;(c.shapes[0] as { pos: number[] }).pos[0] = 9; assert.equal((sc.shapes[0] as { pos: number[] }).pos[0], 1)
+})
+
+test('hit-testing: topmost wins, grids only at the edge, touch slop helps', () => {
+  const u = symbolUnit(bg)
+  const s: SceneShape[] = [
+    { id: 'g', type: 'grid', a: [2, 2], b: [18, 28], showSize: true },
+    player('p', 10, 10),
+    { id: 'b', type: 'ball', pos: [10 + u * 1.1, 10] },
+  ]
+  assert.equal(hitTest(s, [10, 10], 0.3, bg), 'p')
+  assert.equal(hitTest(s, [10 + u * 1.1, 10], 0.1, bg), 'b') // the ball is a separate target at the player's edge
+  assert.equal(hitTest(s, [10, 20], 0.3, bg), null)            // inside the grid, not on an edge: nothing
+  assert.equal(hitTest(s, [2.1, 15], 0.3, bg), 'g')            // on the grid edge
+  assert.equal(hitTest(s, [10 - u - 0.5, 10], 0.3, bg), null)
+  assert.equal(hitTest(s, [10 - u - 0.5, 10], 1.5, bg), 'p')   // more slop (finger)
+})
+
+test('hit-testing lines, rotated goals and text', () => {
+  const s: SceneShape[] = [
+    line('l', [0, 0], [10, 0]),
+    { id: 'goal', type: 'equip', kind: 'goal', pos: [10, 20], angle: 90 } as SceneShape,
+    { id: 't', type: 'text', pos: [5, 25], text: '2 shift', size: 1 },
+  ]
+  assert.equal(hitTest(s, [5, 0.2], 0.4, bg), 'l'); assert.equal(hitTest(s, [5, 1.5], 0.4, bg), null)
+  // a goal turned 90 degrees is 2 m wide and 7.32 m tall
+  assert.equal(hitTest(s, [10, 20 + 3.4], 0.2, bg), 'goal'); assert.equal(hitTest(s, [10 + 3.4, 20], 0.2, bg), null)
+  assert.equal(hitTest(s, [5, 25], 0.2, bg), 't')
+})
+
+test('line handles: ends attach to a nearby player, bend is signed, tiny bends snap to straight', () => {
+  const ps = [player('p1', 2, 2), player('p2', 10, 2)]
+  const l = line('l', [5, 5], [8, 5]) as Extract<SceneShape, { type: 'line' }>
+  const all = [...ps, l]
+  const h = handlesOf(l, bg); assert.deepEqual(h.map(x => x.key), ['from', 'to', 'bend'])
+  assert.equal(handleAt(l, bg, [5.1, 5.1], 0.5), 'from')
+  const a = handlePatch(l, 'to', [10.3, 2.2], all, bg) as { to: number[]; toId?: string }
+  assert.equal(a.toId, 'p2'); assert.deepEqual(a.to, [10, 2])
+  const f = handlePatch(l, 'to', [15, 15], all, bg) as { to: number[]; toId?: string }
+  assert.equal(f.toId, undefined); assert.deepEqual(f.to, [15, 15])
+  const up = handlePatch(l, 'bend', [6.5, 8], all, bg) as { bend: number }, down = handlePatch(l, 'bend', [6.5, 2], all, bg) as { bend: number }
+  assert.ok(up.bend * down.bend < 0)
+  assert.equal((handlePatch(l, 'bend', [6.5, 5.02], all, bg) as { bend: number }).bend, 0)
+})
+
+test('an attached line end has its handle at the player\'s edge, so the player stays grabbable', () => {
+  const u = symbolUnit(bg)
+  const ps = [player('p1', 2, 2), player('p2', 12, 2)]
+  const l = line('l', [2, 2], [12, 2], { fromId: 'p1', toId: 'p2' })
+  const all = [...ps, l]
+  const withPlayers = handlesOf(l, bg, all), without = handlesOf(l, bg)
+  assert.ok(Math.abs(withPlayers[0].pos[0] - (2 + u * 1.25)) < 0.2 && Math.abs(withPlayers[1].pos[0] - (12 - u * 1.25)) < 0.2)
+  assert.deepEqual(without[0].pos, [2, 2])
+  assert.equal(handleAt(l, bg, [2, 2], 0.5, all), null)              // on the player's centre: no handle
+  assert.equal(handleAt(l, bg, [2 + u * 1.25, 2], 0.5, all), 'from') // at the arrow end: the handle
+})
+
+test('goal rotation handle snaps to 5 degrees', () => {
+  const g = { id: 'g', type: 'equip', kind: 'kleinfeldgoal', pos: [10, 10], angle: 0 } as SceneShape
+  assert.equal((handlePatch(g, 'rot', [20, 10], [g], bg) as { angle: number }).angle, 90)
+  assert.equal((handlePatch(g, 'rot', [10, 20], [g], bg) as { angle: number }).angle, 180)
+  assert.equal((handlePatch(g, 'rot', [10, 0], [g], bg) as { angle: number }).angle, 0)
+  assert.equal((handlePatch(g, 'rot', [0, 10], [g], bg) as { angle: number }).angle, 270)
+})
+
+test('the rotation handle swings to the other side when it would fall outside the picture', () => {
+  const g = { id: 'g', type: 'equip', kind: 'kleinfeldgoal', pos: [10, 1.2], angle: 0 } as Extract<SceneShape, { type: 'equip' }>
+  const r = rotHandle(g, bg)
+  assert.equal(r.flipped, true); assert.ok(r.pos[1] > g.pos[1])
+  assert.equal(rotHandle({ ...g, pos: [10, 15] }, bg).flipped, false)
+  // dragging the flipped handle to straight below the goal keeps the goal facing up
+  assert.equal((handlePatch(g, 'rot', [10, 9], [g], bg) as { angle: number }).angle, 0)
+  assert.equal((handlePatch(g, 'rot', [20, 1.2], [g], bg) as { angle: number }).angle, 270)
+})
+
+test('grid corner handles resize', () => {
+  const g = { id: 'g', type: 'grid', a: [2, 2], b: [10, 10], showSize: true } as SceneShape
+  assert.equal(handlesOf(g, bg).length, 4)
+  assert.deepEqual(handlePatch(g, 'b', [12, 14], [g], bg), { b: [12, 14] })
+  assert.deepEqual(handlePatch(g, 'ab', [1, 12], [g], bg), { a: [1, 2], b: [10, 12] })
+})
+
+test('dragging a new line end snaps to a player', () => {
+  const r = lineEndTarget([player('p', 10, 10)], [10.5, 10.5], bg); assert.equal(r.id, 'p'); assert.deepEqual(r.pos, [10, 10])
+  assert.equal(lineEndTarget([player('p', 10, 10)], [15, 15], bg).id, undefined)
+})
+
+test('goal sizes are real; draw order puts grids behind and text on top', () => {
+  const u = symbolUnit(defaultBackground('pitch'))
+  assert.equal(equipSize('goal', u).w, 7.32); assert.equal(equipSize('kleinfeldgoal', u).w, 5)
+  assert.ok(equipSize('minigoal', 0.6).w >= 1.2)
+  const s: SceneShape[] = [{ id: 't', type: 'text', pos: [0, 0], text: 'a', size: 1 }, player('p', 1, 1), { id: 'g', type: 'grid', a: [0, 0], b: [5, 5], showSize: false }]
+  assert.deepEqual(drawOrder(s).map(x => x.id), ['g', 'p', 't'])
+})
+
+test('updateShape removes cleared fields', () => {
+  const s = [line('l', [0, 0], [4, 0], { fromId: 'p1' })]
+  const u = updateShape(s, 'l', { fromId: undefined } as Partial<SceneShape>)[0]
+  assert.equal('fromId' in u, false)
+})
+
+test('history: push, undo, redo, new push drops the redo branch', () => {
+  let h = hist(1); h = hPush(h, 2); h = hPush(h, 3)
+  h = hUndo(h); assert.equal(h.present, 2); h = hUndo(h); assert.equal(h.present, 1); h = hUndo(h); assert.equal(h.present, 1)
+  h = hRedo(h); assert.equal(h.present, 2); h = hPush(h, 9); assert.equal(h.future.length, 0); assert.equal(hRedo(h).present, 9)
+})
+
+// sketch helpers
+test('sketch: curve bend moves the middle by exactly the bend, straight when 0', () => {
+  const p = curvePoints([0, 0], [10, 0], 2, 24); assert.ok(Math.abs(Math.abs(p[12][1]) - 2) < 1e-6)
+  const q = curvePoints([0, 0], [10, 0], 0, 8); assert.ok(q.every(pt => Math.abs(pt[1]) < 1e-9))
+})
+test('sketch: trim, resample and wobble keep the ends where they are', () => {
+  const t = trimPolyline([[0, 0], [10, 0]], 1, 2); assert.deepEqual(t[0], [1, 0]); assert.ok(Math.abs(t[t.length - 1][0] - 8) < 1e-9)
+  const tiny = trimPolyline([[0, 0], [1, 0]], 5, 5); assert.equal(tiny.length, 2)
+  const r = resample([[0, 0], [10, 0]], 2); assert.equal(r.length, 6); assert.deepEqual(r[r.length - 1], [10, 0])
+  const w = wobble([[0, 0], [20, 0]], 7, 0.3)
+  assert.deepEqual(w[0], [0, 0]); assert.ok(Math.abs(w[w.length - 1][0] - 20) < 1e-6 && Math.abs(w[w.length - 1][1]) < 1e-6)
+  assert.ok(w.some(p => Math.abs(p[1]) > 0.02) && w.every(p => Math.abs(p[1]) <= 0.3 + 1e-9))
+  assert.deepEqual(wobble([[0, 0], [20, 0]], 7, 0.3), w) // deterministic: no shimmer
+  assert.notDeepEqual(wobble([[0, 0], [20, 0]], 8, 0.3), w)
+  assert.deepEqual(wobble([[0, 0], [20, 0]], 7, 0), [[0, 0], [20, 0]])
+})
+test('sketch: wavy line oscillates around the path and ends on it', () => {
+  const w = wavy([[0, 0], [12, 0]], 0.4, 2)
+  assert.ok(Math.max(...w.map(p => p[1])) > 0.3 && Math.min(...w.map(p => p[1])) < -0.3)
+  assert.ok(Math.abs(w[0][1]) < 1e-6 && Math.abs(w[w.length - 1][1]) < 0.05)
+})
+test('sketch: arrow head, blob, decimate, hash', () => {
+  assert.match(arrowHead([0, 0], [10, 0], 1), /^M[\d. -]+L10 0L/)
+  assert.match(blobPath([5, 5], 1, 3, 0), /a1 1/); assert.ok(blobPath([5, 5], 1, 3, 0.1).endsWith('Z'))
+  assert.equal(decimate([[0, 0], [0.01, 0], [0.02, 0], [1, 0], [1.01, 0]], 0.5).length, 3)
+  assert.ok(hashStr('a') !== hashStr('b')); assert.ok(pathLength([[0, 0], [3, 4]]) === 5 && dist([0, 0], [3, 4]) === 5)
+})

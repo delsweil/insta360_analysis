@@ -71,3 +71,70 @@ export function sortSessions(list: TrainingSession[]): TrainingSession[] {
   const key = (s: TrainingSession) => s.session_date ?? s.created_at.slice(0, 10)
   return [...list].sort((a, b) => key(b).localeCompare(key(a)) || b.created_at.localeCompare(a.created_at))
 }
+
+// ── Forms (exercises and small-sided games), sections and scenes ───────────────
+
+import type { SceneBackground, SceneShape, Scene } from './scene.ts'
+
+export type FormKind = 'exercise' | 'spielform'
+export const FORM_KIND_LABELS: Record<FormKind, string> = { exercise: 'Übung', spielform: 'Spielform' }
+
+/** A titled block of text in a form. A form has as many as the coach wants, in any order. */
+export type Section = { id: string; title: string; text: string }
+
+export type SessionForm = {
+  id: string
+  session_id: string
+  position: number
+  kind: FormKind
+  title: string
+  duration_min: number | null
+  players: string
+  sections: Section[]
+  created_at: string
+  updated_at: string
+}
+
+export type FormSceneRow = {
+  id: string
+  form_id: string
+  position: number
+  background: SceneBackground
+  shapes: SceneShape[]
+  caption: string
+  created_at?: string
+  updated_at?: string
+}
+
+/** Titles offered as one-tap starters. Nothing forces them. */
+export const STARTER_SECTIONS = ['Warum', 'Idee', 'Aufbau', 'Ablauf', 'Fragen', 'Variationen']
+
+const sid = () => Math.random().toString(36).slice(2, 10)
+export function newSection(title = ''): Section { return { id: sid(), title, text: '' } }
+
+/** Starter titles not yet used in this form (case-insensitive). */
+export function unusedStarters(sections: Section[]): string[] {
+  const used = new Set(sections.map(s => s.title.trim().toLocaleLowerCase('de-DE')))
+  return STARTER_SECTIONS.filter(t => !used.has(t.toLocaleLowerCase('de-DE')))
+}
+
+export function moveItem<T>(arr: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || to < 0 || from >= arr.length || to >= arr.length) return arr
+  const out = arr.slice()
+  const [x] = out.splice(from, 1)
+  out.splice(to, 0, x)
+  return out
+}
+
+/** Renumber positions 0..n-1 in the current order. */
+export function reindex<T extends { position: number }>(arr: T[]): T[] { return arr.map((x, i) => (x.position === i ? x : { ...x, position: i })) }
+
+/** Parse a duration the coach typed: whole minutes between 1 and 240, otherwise none. */
+export function parseMinutes(input: string): number | null {
+  const n = parseInt(input.replace(/[^\d]/g, ''), 10)
+  return Number.isFinite(n) && n >= 1 && n <= 240 ? n : null
+}
+
+export function totalMinutes(forms: Pick<SessionForm, 'duration_min'>[]): number { return forms.reduce((a, f) => a + (f.duration_min ?? 0), 0) }
+
+export function sceneOf(r: FormSceneRow): Scene { return { background: r.background, shapes: r.shapes ?? [], caption: r.caption ?? '' } }

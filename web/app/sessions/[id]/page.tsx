@@ -6,7 +6,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase, getCurrentUserRole, isCoachOrAdmin } from '@/lib/supabase'
 import Topbar from '@/components/Topbar'
-import { parseTags, type TrainingSession } from '@/lib/sessions'
+import SceneCanvas from '@/components/SceneCanvas'
+import { defaultBackground } from '@/lib/scene'
+import { parseTags, moveItem, reindex, totalMinutes, sceneOf, FORM_KIND_LABELS, type TrainingSession, type SessionForm, type FormSceneRow, type FormKind } from '@/lib/sessions'
 
 const NAVY = '#0f2972'
 const MUTED = '#8A8F9E'
@@ -25,6 +27,9 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   const [saveMsg, setSaveMsg] = useState('')
   const [tagText, setTagText] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [forms, setForms] = useState<SessionForm[]>([])
+  const [firstScene, setFirstScene] = useState<Record<string, FormSceneRow>>({})
+  const [confirmForm, setConfirmForm] = useState<string | null>(null)
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -36,8 +41,18 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       setRole(r)
       if (isCoachOrAdmin(r)) {
         const { data } = await supabase.from('training_sessions').select('*').eq('id', id).maybeSingle()
-        if (data) { setSession(data as TrainingSession); setTagText((data as TrainingSession).tags.join(', ')) }
-        else setNotFound(true)
+        if (data) {
+          setSession(data as TrainingSession); setTagText((data as TrainingSession).tags.join(', '))
+          const { data: fs } = await supabase.from('session_forms').select('*').eq('session_id', id)
+          const list = ((fs ?? []) as SessionForm[]).sort((a, b) => a.position - b.position)
+          setForms(list)
+          if (list.length) {
+            const { data: sc } = await supabase.from('form_scenes').select('*').in('form_id', list.map(f => f.id))
+            const first: Record<string, FormSceneRow> = {}
+            for (const r of ((sc ?? []) as FormSceneRow[]).sort((a, b) => a.position - b.position)) if (!first[r.form_id]) first[r.form_id] = r
+            setFirstScene(first)
+          }
+        } else setNotFound(true)
       } else setNotFound(true)
       setLoading(false)
     }
@@ -56,6 +71,53 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     if (savedTimer.current) clearTimeout(savedTimer.current)
     savedTimer.current = setTimeout(() => setSave('idle'), 1800)
   }, [session])
+
+  async function writeFormPositions(list: SessionForm[]) {
+    for (const f of list) {
+      const { error } = await supabase.from('session_forms').update({ position: f.position }).eq('id', f.id)
+      if (error) { setSave('error'); setSaveMsg(error.message); return }
+    }
+  }
+
+  async function addForm(kind: FormKind) {
+    if (!session) return
+    const { data, error } = await supabase.from('session_forms').insert({ session_id: session.id, position: forms.length, kind, title: kind === 'spielform' ? 'Neue Spielform' : 'Neue Übung' }).select().single()
+    if (error || !data) { setSave('error'); setSaveMsg(error?.message ?? 'Konnte nicht angelegt werden.'); return }
+    const f = data as SessionForm
+    // a first, empty sketch so drawing can start right away
+    await supabase.from('form_scenes').insert({ form_id: f.id, position: 0, background: defaultBackground('free'), shapes: [], caption: '' })
+    router.push(`/sessions/${session.id}/forms/${f.id}`)
+  }
+
+  async function moveForm(i: number, to: number) {
+    if (to < 0 || to >= forms.length) return
+    const next = reindex(moveItem(forms, i, to))
+    setForms(next)
+    await writeFormPositions(next)
+  }
+
+  async function duplicateForm(f: SessionForm) {
+    if (!session) return
+    const i = forms.findIndex(x => x.id === f.id)
+    const { data, error } = await supabase.from('session_forms').insert({ session_id: session.id, position: i + 1, kind: f.kind, title: `${f.title} (Kopie)`, duration_min: f.duration_min, players: f.players, sections: f.sections }).select().single()
+    if (error || !data) { setSave('error'); setSaveMsg(error?.message ?? 'Konnte nicht kopiert werden.'); return }
+    const copy = data as SessionForm
+    const { data: sc } = await supabase.from('form_scenes').select('*').eq('form_id', f.id)
+    const rows = ((sc ?? []) as FormSceneRow[]).sort((a, b) => a.position - b.position)
+    for (const r of rows) await supabase.from('form_scenes').insert({ form_id: copy.id, position: r.position, background: r.background, shapes: r.shapes, caption: r.caption })
+    const next = reindex([...forms.slice(0, i + 1), copy, ...forms.slice(i + 1)])
+    setForms(next)
+    if (rows[0]) setFirstScene(m => ({ ...m, [copy.id]: { ...rows[0], id: 'copy-' + copy.id, form_id: copy.id } }))
+    await writeFormPositions(next.filter((_, k) => k > i + 1))
+  }
+
+  async function deleteForm(f: SessionForm) {
+    const { error } = await supabase.from('session_forms').delete().eq('id', f.id)
+    if (error) { setSave('error'); setSaveMsg(error.message); return }
+    const next = reindex(forms.filter(x => x.id !== f.id))
+    setForms(next); setConfirmForm(null)
+    await writeFormPositions(next.filter((_, k) => k >= forms.findIndex(x => x.id === f.id)))
+  }
 
   async function remove() {
     if (!session) return
@@ -169,8 +231,63 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
               </div>
             </div>
 
-            <div style={{ marginTop: 14, border: '1.5px dashed #cfd4e2', borderRadius: 12, padding: '28px 20px', textAlign: 'center', color: MUTED, fontSize: 13 }}>
-              Hier erscheinen die Formen dieser Einheit (Übungen und Spielformen). Das kommt im nächsten Schritt.
+            <div style={{ marginTop: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                <div style={label}>
+                  Formen{forms.length ? ` · ${forms.length}` : ''}{totalMinutes(forms) ? ` · ${totalMinutes(forms)} Min.` : ''}
+                </div>
+                {mine && (
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button data-testid="add-exercise" onClick={() => addForm('exercise')} style={{ fontSize: 12, fontWeight: 600, padding: '7px 14px', borderRadius: 8, border: 'none', background: NAVY, color: '#fff', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif' }}>+ Übung</button>
+                    <button data-testid="add-spielform" onClick={() => addForm('spielform')} style={{ fontSize: 12, fontWeight: 600, padding: '7px 14px', borderRadius: 8, border: 'none', background: NAVY, color: '#fff', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif' }}>+ Spielform</button>
+                  </div>
+                )}
+              </div>
+              {forms.length === 0 ? (
+                <div style={{ border: '1.5px dashed #cfd4e2', borderRadius: 12, padding: '28px 20px', textAlign: 'center', color: MUTED, fontSize: 13 }}>
+                  {mine ? 'Noch keine Formen. Füge eine Übung oder Spielform hinzu.' : 'Diese Einheit hat noch keine Formen.'}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {forms.map((f, i) => {
+                    const fs = firstScene[f.id]
+                    return (
+                      <div key={f.id}>
+                        <div data-testid="form-card" style={{ background: '#fff', border: '1px solid #E4E6EE', borderRadius: confirmForm === f.id ? '12px 12px 0 0' : 12, padding: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <div onClick={() => router.push(`/sessions/${session.id}/forms/${f.id}`)} style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0, cursor: 'pointer' }}>
+                            <div style={{ width: 92, flex: '0 0 92px', borderRadius: 8, overflow: 'hidden', border: '1px solid #eceef3', background: '#fbfbf8' }}>
+                              {fs ? <SceneCanvas scene={sceneOf(fs)} look="clean" testId="card-thumb" /> : <div style={{ height: 62 }} />}
+                            </div>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 17, color: NAVY, letterSpacing: '0.02em', lineHeight: 1.1 }}>{i + 1}. {f.title}</div>
+                              <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
+                                {FORM_KIND_LABELS[f.kind]}{f.duration_min ? ` · ${f.duration_min} Min.` : ''}{f.players ? ` · ${f.players}` : ''}
+                              </div>
+                            </div>
+                          </div>
+                          {mine && (
+                            <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+                              <button aria-label="Nach oben" disabled={i === 0} onClick={() => moveForm(i, i - 1)} style={{ fontSize: 14, color: MUTED, background: 'none', border: 'none', cursor: 'pointer', padding: '6px', opacity: i === 0 ? 0.35 : 1 }}>↑</button>
+                              <button aria-label="Nach unten" disabled={i === forms.length - 1} onClick={() => moveForm(i, i + 1)} style={{ fontSize: 14, color: MUTED, background: 'none', border: 'none', cursor: 'pointer', padding: '6px', opacity: i === forms.length - 1 ? 0.35 : 1 }}>↓</button>
+                              <button aria-label="Duplizieren" data-testid="form-duplicate" onClick={() => duplicateForm(f)} style={{ fontSize: 13, color: MUTED, background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}>⧉</button>
+                              <button aria-label="Löschen" data-testid="form-delete" onClick={() => setConfirmForm(confirmForm === f.id ? null : f.id)} style={{ fontSize: 14, color: MUTED, background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}>✕</button>
+                            </div>
+                          )}
+                        </div>
+                        {confirmForm === f.id && (
+                          <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderTop: 'none', borderRadius: '0 0 12px 12px', padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                            <span style={{ fontSize: 13, color: '#991b1b' }}>Form mit allen Skizzen löschen?</span>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <button onClick={() => setConfirmForm(null)} style={{ fontSize: 12, fontWeight: 600, padding: '5px 14px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fff', color: '#991b1b', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif' }}>Abbrechen</button>
+                              <button data-testid="form-delete-confirm" onClick={() => deleteForm(f)} style={{ fontSize: 12, fontWeight: 600, padding: '5px 14px', borderRadius: 6, border: 'none', background: '#ef4444', color: '#fff', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif' }}>Löschen</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
 
             {mine && (

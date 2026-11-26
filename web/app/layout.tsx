@@ -19,6 +19,16 @@ const dmSans = localFont({
   display: "swap",
 });
 
+// Handwriting for sketch labels (training scenes).
+const hand = localFont({
+  src: [
+    { path: "./fonts/caveat-latin-500-normal.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/caveat-latin-700-normal.woff2", weight: "700", style: "normal" },
+  ],
+  variable: "--font-hand",
+  display: "swap",
+});
+
 export const metadata: Metadata = {
   title: "ASN Pfeil Phönix — Spielanalyse",
   description: "Videoannotation und Spielanalyse für ASN Pfeil Phönix Nürnberg",
@@ -32,7 +42,7 @@ export default function RootLayout({
   return (
     <html
       lang="de"
-      className={`${bebasNeue.variable} ${dmSans.variable} h-full antialiased`}
+      className={`${bebasNeue.variable} ${dmSans.variable} ${hand.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-[#F8F8F6]">
         {children}
