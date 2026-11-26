@@ -2,11 +2,13 @@
 
 export const dynamic = 'force-dynamic'
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase, getCurrentUserRole, isCoachOrAdmin } from '@/lib/supabase'
 import Topbar from '@/components/Topbar'
-import SceneEditor from '@/components/SceneEditor'
+import SceneEditor, { SizeInput } from '@/components/SceneEditor'
+import SceneAnimator from '@/components/SceneAnimator'
+import { DEFAULT_HOLD_S, DEFAULT_MOVE_S, MIN_S, MAX_S, holdOf, moveOf, type Step } from '@/lib/anim'
 import SceneCanvas from '@/components/SceneCanvas'
 import { copyScene, defaultBackground, type Scene } from '@/lib/scene'
 import {
@@ -34,6 +36,7 @@ export default function FormPage({ params }: { params: Promise<{ id: string; fid
   const [duration, setDuration] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmScene, setConfirmScene] = useState(false)
+  const steps = useMemo<Step[]>(() => scenes.map(r => ({ scene: sceneOf(r), timing: r.timing })), [scenes])
 
   const pending = useRef<{ form: Partial<SessionForm>; scenes: Map<string, Partial<FormSceneRow>> }>({ form: {}, scenes: new Map() })
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -112,8 +115,9 @@ export default function FormPage({ params }: { params: Promise<{ id: string; fid
   const onSceneChange = (sceneId: string) => (sc: Scene) => patchScene(sceneId, { background: sc.background, shapes: sc.shapes })
 
   // ── scenes ──
-  async function insertScene(sc: Scene, position: number): Promise<FormSceneRow | null> {
-    const { data, error } = await supabase.from('form_scenes').insert({ form_id: fid, position, background: sc.background, shapes: sc.shapes, caption: sc.caption }).select().single()
+  async function insertScene(sc: Scene, position: number, timing?: FormSceneRow['timing']): Promise<FormSceneRow | null> {
+    // `timing` is only sent when there is some, so this keeps working before the timing column exists
+    const { data, error } = await supabase.from('form_scenes').insert({ form_id: fid, position, background: sc.background, shapes: sc.shapes, caption: sc.caption, ...(timing ? { timing } : {}) }).select().single()
     if (error || !data) { setSave('error'); setSaveMsg(error?.message ?? 'Konnte nicht angelegt werden.'); return null }
     return data as FormSceneRow
   }
@@ -135,7 +139,7 @@ export default function FormPage({ params }: { params: Promise<{ id: string; fid
     if (!cur) return
     await flush()
     const copy = copyScene(sceneOf(cur))
-    const row = await insertScene(copy, active + 1)
+    const row = await insertScene(copy, active + 1, cur.timing)
     if (!row) return
     const next = reindex([...scenes.slice(0, active + 1), row, ...scenes.slice(active + 1)])
     setScenes(next); setActive(active + 1)
@@ -269,8 +273,41 @@ export default function FormPage({ params }: { params: Promise<{ id: string; fid
                         <div style={label}>Beschriftung der Skizze</div>
                         <input data-testid="scene-caption" style={field} readOnly={!mine} placeholder="z. B. Aufbau, 4 v 2" value={scene.caption} onChange={e => patchScene(scene.id, { caption: e.target.value })} />
                       </div>
+                      {mine && scenes.length > 1 && (
+                        <div data-testid="timing-row" style={{ marginTop: 8, display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', fontSize: 12, color: '#4A4F5C' }}>
+                          <span style={label}>Animation</span>
+                          {active > 0 && (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                              Bewegung hierher
+                              <SizeInput testId="timing-move" label="Dauer der Bewegung in Sekunden" min={MIN_S} max={MAX_S} style={{ ...field, width: 64 }} value={moveOf(scene.timing)} onValue={v => patchScene(scene.id, { timing: { ...(scene.timing ?? {}), move_s: v } })} />
+                              s
+                            </span>
+                          )}
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                            Pause danach
+                            <SizeInput testId="timing-hold" label="Pause in Sekunden" min={MIN_S} max={MAX_S} style={{ ...field, width: 64 }} value={holdOf(scene.timing)} onValue={v => patchScene(scene.id, { timing: { ...(scene.timing ?? {}), hold_s: v } })} />
+                            s
+                          </span>
+                          <span style={{ color: MUTED }}>Standard: {String(DEFAULT_MOVE_S).replace('.', ',')} s Bewegung, {String(DEFAULT_HOLD_S).replace('.', ',')} s Pause</span>
+                        </div>
+                      )}
                     </>
                   )}
+                </>
+              )}
+            </div>
+
+            {/* animation */}
+            <div data-testid="animation-card" style={{ marginTop: 14, background: '#fff', border: '1px solid #E4E6EE', borderRadius: 12, padding: 14 }}>
+              <div style={{ ...label, marginBottom: 4 }}>Animation</div>
+              {scenes.length < 2 ? (
+                <div style={{ fontSize: 13, color: MUTED }}>
+                  {mine ? 'Zeichne mehrere Skizzen nacheinander („Als nächste kopieren“ und weiterzeichnen). Daraus entsteht die Animation: Alles, was in beiden Skizzen vorkommt, bewegt sich von der einen zur nächsten Position. Laufwege und Pässe, die du eingezeichnet hast, bestimmen den Weg.' : 'Diese Form hat nur eine Skizze.'}
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>Spielt die Skizzen der Reihe nach ab. Gleiche Figuren wandern von Skizze zu Skizze, eingezeichnete Läufe und Pässe geben den Weg vor.</div>
+                  <SceneAnimator steps={steps} />
                 </>
               )}
             </div>

@@ -104,6 +104,8 @@ export type FormSceneRow = {
   background: SceneBackground
   shapes: SceneShape[]
   caption: string
+  /** Seconds to move into this sketch and to pause on it when the form is played as an animation. */
+  timing?: { move_s?: number; hold_s?: number } | null
   created_at?: string
   updated_at?: string
 }
