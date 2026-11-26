@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   defaultBackground, viewBoxOf, symbolUnit, formatMetres, dimText, gridSizeText, clampFrameSize, snapPt, snapStep, clampPt,
   makeShape, isMeaningful, moveShape, removeShape, duplicateShape, copyScene, emptyScene, hitTest, handlesOf, handleAt, handlePatch,
-  lineEndTarget, drawOrder, moveShapes, duplicateShapes, removeShapes, colorShapes, scaleShapes, shapesInRect, shapeBox, rotPt, gridCorners, gridCentre, inGrid, gridResized, rotateShapes, gridSplits, gridLattice, gridCellText, addFieldCones, shapesInGrid, cloneShapes, fieldShape, sizeHandle, scaleOf, equipDims, isLight, rotHandle, equipSize, updateShape, hist, hPush, hUndo, hRedo,
+  lineEndTarget, drawOrder, moveShapes, duplicateShapes, removeShapes, colorShapes, scaleShapes, shapesInRect, shapeBox, rotPt, gridCorners, gridCentre, inGrid, gridResized, rotateShapes, gridSplits, gridLattice, gridCellText, addFieldCones, addConesForGrid, frameGrid, frameSplits, shapesInGrid, cloneShapes, fieldShape, sizeHandle, scaleOf, equipDims, isLight, rotHandle, equipSize, updateShape, hist, hPush, hUndo, hRedo,
   type SceneShape, type Scene,
 } from './scene.ts'
 import { dist, curvePoints, trimPolyline, resample, wobble, wavy, arrowHead, blobPath, decimate, pathLength, hashStr } from './sketch.ts'
@@ -372,4 +372,13 @@ test('cones keep their orientation when a group is turned; goals turn', () => {
   const out = rotateShapes(shapes, ['c', 'g'], 90, [0, 0])
   assert.equal((out[0] as { angle: number }).angle, 0); assert.ok(near((out[0] as { pos: number[] }).pos, [0, 10]))
   assert.equal((out[1] as { angle: number }).angle, 90)
+})
+
+test('the frame of a free field can be split and get corner cones like a drawn field', () => {
+  const bg2 = { ...defaultBackground('free'), cols: 2, rows: 3 } // 20 × 30
+  assert.deepEqual(frameSplits(bg2), { cols: 2, rows: 3 }); assert.deepEqual(frameSplits(defaultBackground('free')), { cols: 1, rows: 1 })
+  const r = addConesForGrid([], frameGrid(bg2), bg2, false)
+  const pos = r.shapes.map(s => (s as { pos: number[] }).pos)
+  assert.equal(pos.length, 4); for (const c of [[0, 0], [20, 0], [20, 30], [0, 30]]) assert.ok(pos.some(p => near(p, c)))
+  assert.equal(addConesForGrid([], frameGrid(bg2), bg2, true).added.length, 12)
 })

@@ -8,7 +8,7 @@ import SceneCanvas, { equipGlyph, INK, POLE_COLORS, type Look } from './SceneCan
 import {
   TEAMS, TEAM_COLORS, TEAM_NAMES, EQUIP_KINDS, EQUIP_LABELS, LINE_LABELS, BG_LABELS, defaultBackground, clampFrameSize,
   duplicateShapes, removeShapes, updateShape, colorShapes, scaleShapes, equipSize, symbolUnit, newId, hist, hPush, hUndo, hRedo,
-  COLOR_CHOICES, fieldShape, canColor, canScale, scaleOf, rotateShapes, shapesInGrid, shapeBox, unionBox, gridSize, gridResized, gridSplits, addFieldCones, cloneShapes, MAX_SPLIT,
+  COLOR_CHOICES, fieldShape, canColor, canScale, scaleOf, rotateShapes, shapesInGrid, shapeBox, unionBox, gridSize, gridResized, gridSplits, addFieldCones, addConesForGrid, frameGrid, frameSplits, cloneShapes, MAX_SPLIT,
   type Scene, type SceneShape, type Tool, type Team, type EquipKind, type BackgroundType, type Pt, type Hist, type LineKind,
 } from '@/lib/scene'
 
@@ -251,6 +251,27 @@ export default function SceneEditor({ scene, onChange, readOnly = false, placeab
         <button data-testid="delete-top" onClick={deleteSel} disabled={!ids.length} aria-label="Auswahl löschen" title="Auswahl löschen (Entf)" style={btn(false, { display: 'inline-flex', alignItems: 'center', opacity: ids.length ? 1 : 0.4, color: ids.length ? '#991b1b' : '#4A4F5C' })}><TrashIcon /></button>
         <button data-testid="fullscreen" onClick={() => setFull(!full)} style={btn(full)} title="Vollbild">{full ? 'Schließen' : 'Vollbild'}</button>
       </div>
+
+      {bgType === 'free' && (
+        <div data-testid="frame-tools" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+          <span style={small}>Feld teilen</span>
+          {(['cols', 'rows'] as const).map(key => {
+            const n = frameSplits(cur.background)[key]
+            return (
+              <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                <span style={{ fontSize: 12, color: '#4A4F5C' }}>{key === 'cols' ? 'Spalten' : 'Reihen'}</span>
+                <button data-testid={`fsplit-${key}-minus`} onClick={() => apply({ ...cur, background: { ...cur.background, [key]: Math.max(1, n - 1) } })} disabled={n <= 1} style={btn(false, { padding: '5px 10px', opacity: n <= 1 ? 0.4 : 1 })} aria-label={`Weniger ${key === 'cols' ? 'Spalten' : 'Reihen'}`}>−</button>
+                <span data-testid={`fsplit-${key}`} style={{ minWidth: 14, textAlign: 'center', fontSize: 13, fontWeight: 700, color: NAVY }}>{n}</span>
+                <button data-testid={`fsplit-${key}-plus`} onClick={() => apply({ ...cur, background: { ...cur.background, [key]: Math.min(MAX_SPLIT, n + 1) } })} disabled={n >= MAX_SPLIT} style={btn(false, { padding: '5px 10px', opacity: n >= MAX_SPLIT ? 0.4 : 1 })} aria-label={`Mehr ${key === 'cols' ? 'Spalten' : 'Reihen'}`}>+</button>
+              </span>
+            )
+          })}
+          <button data-testid="fcones-corners" onClick={() => { const r = addConesForGrid(cur.shapes, frameGrid(cur.background), cur.background, false); if (r.added.length) setShapes(r.shapes) }} style={btn(false)} title="Auf jede Ecke des Feldes ein Hütchen setzen">Hütchen an den Ecken</button>
+          {(frameSplits(cur.background).cols > 1 || frameSplits(cur.background).rows > 1) && (
+            <button data-testid="fcones-splits" onClick={() => { const r = addConesForGrid(cur.shapes, frameGrid(cur.background), cur.background, true); if (r.added.length) setShapes(r.shapes) }} style={btn(false)} title="Hütchen auch auf die Teilungslinien setzen">Hütchen an Ecken und Teilungen</button>
+          )}
+        </div>
+      )}
 
       {placeables && (
         <div data-testid="placeables" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>

@@ -9,7 +9,7 @@ import { curvePoints, dist, trimPolyline, type Pt } from './sketch.ts'
 export type { Pt }
 
 export type BackgroundType = 'pitch' | 'halfpitch' | 'free' | 'blank'
-export interface SceneBackground { type: BackgroundType; width_m: number; height_m: number }
+export interface SceneBackground { type: BackgroundType; width_m: number; height_m: number; /** A free field can be divided by cross lines. */ cols?: number; rows?: number }
 
 export type Team = 'a' | 'b' | 'c' | 'd'
 export const TEAM_COLORS: Record<Team, string> = { a: '#e94fae', b: '#49b05c', c: '#3b82e8', d: '#f5c542' }
@@ -51,6 +51,9 @@ export type Tool = 'select' | 'player' | 'ball' | 'equip' | 'pass' | 'return' | 
 // ── Frame ──────────────────────────────────────────────────────
 
 export const BG_LABELS: Record<BackgroundType, string> = { pitch: 'Vollfeld', halfpitch: 'Halbfeld', free: 'Feld (frei)', blank: 'Leer' }
+
+/** Columns and rows a free field is divided into (1 = not divided). */
+export function frameSplits(bg: SceneBackground): { cols: number; rows: number } { return gridSplits(frameGrid(bg)) }
 
 export function defaultBackground(type: BackgroundType): SceneBackground {
   if (type === 'pitch') return { type, width_m: 105, height_m: 68 }
@@ -164,6 +167,15 @@ export function gridLattice(g: Grid, splits: boolean): Pt[] {
 export function addFieldCones(shapes: SceneShape[], gridId: string, bg: SceneBackground, splits: boolean): { shapes: SceneShape[]; added: string[] } {
   const g = shapes.find(s => s.id === gridId)
   if (!g || g.type !== 'grid') return { shapes, added: [] }
+  return addConesForGrid(shapes, g, bg, splits)
+}
+
+/** The frame of a free field as if it were a drawn field, so splitting and corner cones work the same for both. */
+export function frameGrid(bg: SceneBackground): Extract<SceneShape, { type: 'grid' }> {
+  return { id: 'frame', type: 'grid', a: [0, 0], b: [bg.width_m, bg.height_m], showSize: false, cols: bg.cols, rows: bg.rows }
+}
+
+export function addConesForGrid(shapes: SceneShape[], g: Extract<SceneShape, { type: 'grid' }>, bg: SceneBackground, splits: boolean): { shapes: SceneShape[]; added: string[] } {
   const u = symbolUnit(bg), have = shapes.filter(s => s.type === 'equip' && s.kind === 'cone') as Extract<SceneShape, { type: 'equip' }>[]
   const made: SceneShape[] = []
   for (const q of gridLattice(g, splits)) {

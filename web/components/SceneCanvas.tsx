@@ -11,7 +11,7 @@
 
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
-  TEAM_COLORS, equipSize, ballRadius, symbolUnit, viewBoxOf, drawOrder, dimText, gridSizeText, gridCellText, gridSplits, textHeight,
+  TEAM_COLORS, equipSize, ballRadius, symbolUnit, viewBoxOf, drawOrder, dimText, frameSplits, gridSizeText, gridCellText, gridSplits, textHeight,
   makeShape, isMeaningful, moveShapes, rotateShapes, gridCentre, gridCorners, updateShape, shapesInRect, shapeBox, unionBox, scaleOf, equipDims, playerRadius, isLight, hitTest, handleAt, handlesOf, handlePatch, lineEndTarget, snapPt, snapStep, clampPt,
   type Scene, type SceneShape, type SceneBackground, type Tool, type Team, type EquipKind, type Pt,
 } from '@/lib/scene'
@@ -78,11 +78,19 @@ const PITCH_D =
   'M16.5 26.69A9.15 9.15 0 0 1 16.5 41.31 M88.5 41.31A9.15 9.15 0 0 1 88.5 26.69 ' +
   'M0 30.34H-2V37.66H0 M105 30.34H107V37.66H105 M10.8 34a.2.2 0 1 0 .4 0a.2.2 0 1 0-.4 0 M93.8 34a.2.2 0 1 0 .4 0a.2.2 0 1 0-.4 0 M52.3 34a.2.2 0 1 0 .4 0a.2.2 0 1 0-.4 0'
 
+function frameSplitPath(bg: SceneBackground, sp: { cols: number; rows: number }): string {
+  const d: string[] = []
+  for (let i = 1; i < sp.cols; i++) { const x = (bg.width_m * i) / sp.cols; d.push(`M${x} 0V${bg.height_m}`) }
+  for (let j = 1; j < sp.rows; j++) { const y = (bg.height_m * j) / sp.rows; d.push(`M0 ${y}H${bg.width_m}`) }
+  return d.join('')
+}
+
 const Background = memo(function Background({ bg, k, look, plain }: { bg: SceneBackground; k: number; look: Look; plain: boolean }) {
   const id = useId().replace(/:/g, '')
   const v = viewBoxOf(bg)
   const step = snapStep(bg)
   const seed = hashStr(bg.type + bg.width_m + bg.height_m)
+  const sp = frameSplits(bg)
   return (
     <g>
       <defs>
@@ -101,9 +109,12 @@ const Background = memo(function Background({ bg, k, look, plain }: { bg: SceneB
       )}
       {bg.type === 'free' && (
         <g>
+          {(sp.cols > 1 || sp.rows > 1) && (
+            <path data-testid="frame-splits" d={frameSplitPath(bg, sp)} fill="none" stroke={INK} strokeWidth={2 * k} strokeDasharray={`${10 * k} ${9 * k}`} strokeLinecap="round" opacity={0.85} />
+          )}
           <path d={boxPath([0, 0], [bg.width_m, bg.height_m], seed, 0)} fill="none" stroke={INK} strokeWidth={2.6 * k} strokeDasharray={`${16 * k} ${10 * k}`} strokeLinecap="round" />
-          <text x={bg.width_m / 2} y={-8 * k} textAnchor="middle" fontSize={15 * k} fill={DIM} style={{ fontFamily: look === 'sketch' ? HAND : SANS }} fontWeight={600}>{`${String(bg.width_m).replace('.', ',')} m`}</text>
-          <text transform={`translate(${-8 * k} ${bg.height_m / 2}) rotate(-90)`} textAnchor="middle" fontSize={15 * k} fill={DIM} style={{ fontFamily: look === 'sketch' ? HAND : SANS }} fontWeight={600}>{`${String(bg.height_m).replace('.', ',')} m`}</text>
+          <text x={bg.width_m / 2} y={-22 * k} textAnchor="middle" fontSize={15 * k} fill={DIM} style={{ fontFamily: look === 'sketch' ? HAND : SANS }} fontWeight={600}>{`${String(bg.width_m).replace('.', ',')} m${sp.cols > 1 ? `  ·  je ${String(Math.round((bg.width_m / sp.cols) * 10) / 10).replace('.', ',')} m` : ''}`}</text>
+          <text transform={`translate(${-22 * k} ${bg.height_m / 2}) rotate(-90)`} textAnchor="middle" fontSize={15 * k} fill={DIM} style={{ fontFamily: look === 'sketch' ? HAND : SANS }} fontWeight={600}>{`${String(bg.height_m).replace('.', ',')} m${sp.rows > 1 ? `  ·  je ${String(Math.round((bg.height_m / sp.rows) * 10) / 10).replace('.', ',')} m` : ''}`}</text>
         </g>
       )}
     </g>
