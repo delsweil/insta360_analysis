@@ -12,7 +12,7 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   TEAM_COLORS, equipSize, ballRadius, symbolUnit, viewBoxOf, drawOrder, dimText, frameSplits, gridSizeText, gridCellText, gridSplits, textHeight,
-  makeShape, isMeaningful, moveShapes, rotateShapes, gridCentre, gridCorners, updateShape, shapesInRect, shapeBox, unionBox, scaleOf, equipDims, playerRadius, isLight, hitTest, handleAt, handlesOf, handlePatch, lineEndTarget, snapPt, snapStep, clampPt,
+  makeShape, isMeaningful, moveShapes, settleBalls, rotateShapes, gridCentre, gridCorners, updateShape, shapesInRect, shapeBox, unionBox, scaleOf, equipDims, playerRadius, isLight, hitTest, handleAt, handlesOf, handlePatch, lineEndTarget, snapPt, snapStep, clampPt,
   type Scene, type SceneShape, type SceneBackground, type Tool, type Team, type EquipKind, type Pt,
 } from '@/lib/scene'
 import { arrowHead, blobPath, boxPath, curvePoints, decimate, hashStr, polyPath, smoothPath, trimPolyline, wavy, wobble, dist } from '@/lib/sketch'
@@ -226,6 +226,10 @@ export default function SceneCanvas(props: Props) {
       if (!s || !isMeaningful(s, 10 * kTouch)) { onSelect?.([]); return }
       onCommit?.(cur)
       onSelect?.([s.id])
+      return
+    }
+    if (d.kind === 'move' && (d.moved || d.created)) {
+      onCommit?.(settleBalls(cur, d.ids, bg))
       return
     }
     if ((d.kind === 'move' && (d.moved || d.created)) || (d.kind === 'handle' && d.moved) || (d.kind === 'grot' && d.moved)) onCommit?.(cur)
@@ -482,7 +486,7 @@ export default function SceneCanvas(props: Props) {
       <Background bg={bg} k={k} look={look} plain={plain} />
       {selectedShapes.map(s => <g key={`h${s.id}`}>{halo(s)}</g>)}
       {groupBox && <rect data-testid="group-box" x={groupBox.x0 - 6 * k} y={groupBox.y0 - 6 * k} width={groupBox.x1 - groupBox.x0 + 12 * k} height={groupBox.y1 - groupBox.y0 + 12 * k} rx={6 * k} fill="none" stroke={HALO} strokeWidth={2 * k} strokeDasharray={`${8 * k} ${6 * k}`} />}
-      {ordered.map(renderShape)}
+      {ordered.map(s => (s.alpha !== undefined && s.alpha < 1 ? <g key={s.id} opacity={Math.max(0, s.alpha)}>{renderShape(s)}</g> : renderShape(s)))}
       {selected && handlesOf(selected, bg, shapes).map(h => (
         <g key={h.key} data-handle={h.key}>
           <circle cx={h.pos[0]} cy={h.pos[1]} r={7 * k} fill="#fff" stroke={HALO} strokeWidth={2.2 * k} />

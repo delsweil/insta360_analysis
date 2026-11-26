@@ -32,9 +32,10 @@ export const LINE_LABELS: Record<LineKind, string> = { pass: 'Pass', return: 'RÃ
 
 export type Animated = { t0?: number; t1?: number; kf?: { t: number; v: unknown }[] }
 
-export type SceneShape = { id: string } & Animated & (
+/** `alpha` is only set while an animation fades a shape in or out; it is never saved. */
+export type SceneShape = { id: string; alpha?: number } & Animated & (
   | { type: 'player'; pos: Pt; team: Team; num?: string; color?: string; scale?: number }
-  | { type: 'ball'; pos: Pt; scale?: number }
+  | { type: 'ball'; pos: Pt; scale?: number; /** The player who has the ball at his feet: it travels with him. */ carriedBy?: string }
   | { type: 'equip'; kind: EquipKind; pos: Pt; angle: number; color?: string; num?: string; scale?: number }
   | { type: 'line'; kind: LineKind; from: Pt; to: Pt; bend: number; fromId?: string; toId?: string; color?: string }
   | { type: 'dim'; a: Pt; b: Pt; text?: string; color?: string }
@@ -204,7 +205,8 @@ export function rotateShapes(shapes: SceneShape[], ids: string[], deg: number, c
   return shapes.map(s => {
     if (!set.has(s.id)) return s
     switch (s.type) {
-      case 'player': case 'ball': case 'text': return withPatch(s, { pos: r(s.pos) } as Partial<SceneShape>)
+      case 'ball': return withPatch(s, { pos: r(s.pos), ...(s.carriedBy && !set.has(s.carriedBy) ? { carriedBy: undefined } : {}) } as Partial<SceneShape>)
+      case 'player': case 'text': return withPatch(s, { pos: r(s.pos) } as Partial<SceneShape>)
       case 'equip': return withPatch(s, { pos: r(s.pos), ...(TURNS_WITH_GROUP.includes(s.kind) ? { angle: (((s.angle + deg) % 360) + 360) % 360 } : {}) } as Partial<SceneShape>)
       case 'line': return withPatch(s, { from: r(s.from), to: r(s.to) } as Partial<SceneShape>)
       case 'dim': return withPatch(s, { a: r(s.a), b: r(s.b) } as Partial<SceneShape>)
@@ -315,6 +317,7 @@ export function duplicateShape(s: SceneShape, dx: number, dy: number): SceneShap
   const moved = movePatch(s, dx, dy)
   const c = { ...s, ...moved, id: newId() } as SceneShape
   if (c.type === 'line') { delete c.fromId; delete c.toId }
+  if (c.type === 'ball') delete c.carriedBy
   return c
 }
 
@@ -330,6 +333,7 @@ export function duplicateShapes(shapes: SceneShape[], ids: string[], dx: number,
   }
   const out = copies.map(c => {
     const orig = shapes.find(x => map.get(x.id) === c.id)
+    if (orig && orig.type === 'ball' && c.type === 'ball' && orig.carriedBy && map.has(orig.carriedBy)) return { ...c, carriedBy: map.get(orig.carriedBy) }
     if (orig && orig.type === 'line' && c.type === 'line') {
       const r = { ...c } as typeof c
       if (orig.fromId && map.has(orig.fromId)) r.fromId = map.get(orig.fromId)
@@ -404,12 +408,14 @@ export function moveShapes(shapes: SceneShape[], ids: string[], dx: number, dy: 
   return shapes.map(s => {
     if (set.has(s.id)) {
       const patch = movePatch(s, dx, dy) as Record<string, unknown>
+      if (s.type === 'ball' && s.carriedBy && movedPlayers.has(s.carriedBy)) patch.carriedBy = s.carriedBy
       if (s.type === 'line') {
         if (s.fromId && movedPlayers.has(s.fromId)) patch.fromId = s.fromId
         if (s.toId && movedPlayers.has(s.toId)) patch.toId = s.toId
       }
       return withPatch(s, patch as Partial<SceneShape>)
     }
+    if (s.type === 'ball' && s.carriedBy && movedPlayers.has(s.carriedBy)) return withPatch(s, { pos: sh(s.pos, dx, dy) } as Partial<SceneShape>)
     if (s.type === 'line') {
       const patch: Record<string, Pt> = {}
       if (s.fromId && movedPlayers.has(s.fromId)) patch.from = sh(s.from, dx, dy)
@@ -428,10 +434,28 @@ export function moveShape(shapes: SceneShape[], id: string, dx: number, dy: numb
 /** Remove a shape. Lines that were attached to a deleted player keep their points but lose the attachment. */
 export function removeShape(shapes: SceneShape[], id: string): SceneShape[] {
   return shapes.filter(s => s.id !== id).map(s => {
+    if (s.type === 'ball' && s.carriedBy === id) return withPatch(s, { carriedBy: undefined } as Partial<SceneShape>)
     if (s.type === 'line' && (s.fromId === id || s.toId === id)) {
       return withPatch(s, { fromId: s.fromId === id ? undefined : s.fromId, toId: s.toId === id ? undefined : s.toId } as Partial<SceneShape>)
     }
     return s
+  })
+}
+
+/** After a ball was placed or dragged: it belongs to the player standing right at it, otherwise to nobody.
+ *  A ball that moves together with its carrier keeps him. */
+export function settleBalls(shapes: SceneShape[], ids: string[], bg: SceneBackground): SceneShape[] {
+  const u = symbolUnit(bg), set = new Set(ids)
+  return shapes.map(s => {
+    if (s.type !== 'ball' || !set.has(s.id)) return s
+    if (s.carriedBy && set.has(s.carriedBy)) return s
+    let best: string | undefined, bd = u * 1.7 * 1 + 1e-9
+    for (const q of shapes) {
+      if (q.type !== 'player') continue
+      const d = dist(q.pos, s.pos) - (q.scale ?? 1) * u * 0.3
+      if (d <= bd) { best = q.id; bd = d }
+    }
+    return withPatch(s, { carriedBy: best } as Partial<SceneShape>)
   })
 }
 

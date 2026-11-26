@@ -68,7 +68,7 @@ function subscribeClip(cb: () => void) {
 }
 
 /** A number field that lets you clear and retype freely: it only applies a value once it is a valid size, and tidies the text on blur. */
-function SizeInput({ value, onValue, label, testId, style, min = 3, max = Infinity }: { value: number; onValue: (v: number) => void; label: string; testId: string; style: React.CSSProperties; min?: number; max?: number }) {
+export function SizeInput({ value, onValue, label, testId, style, min = 3, max = Infinity }: { value: number; onValue: (v: number) => void; label: string; testId: string; style: React.CSSProperties; min?: number; max?: number }) {
   const shown = String(value).replace('.', ',')
   const [text, setText] = useState(shown)
   const [focus, setFocus] = useState(false)
@@ -429,6 +429,12 @@ export default function SceneEditor({ scene, onChange, readOnly = false, placeab
             </>
           )}
           {many && <span style={{ ...small, color: NAVY }}>{picked.length} Objekte gewählt</span>}
+          {selected?.type === 'ball' && (
+            <span data-testid="ball-carry" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+              <span style={small}>{selected.carriedBy ? 'Ball wird geführt und läuft mit.' : 'Ball dicht an einen Spieler ziehen: er führt ihn dann mit.'}</span>
+              {selected.carriedBy && <button data-testid="ball-release" onClick={() => patchSel({ carriedBy: undefined } as Partial<SceneShape>)} style={btn(false)}>Lösen</button>}
+            </span>
+          )}
           {colorTargets.length > 0 && (
             <span data-testid="color-row" style={{ display: 'inline-flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={small}>Farbe</span>

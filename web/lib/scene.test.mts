@@ -382,3 +382,22 @@ test('the frame of a free field can be split and get corner cones like a drawn f
   assert.equal(pos.length, 4); for (const c of [[0, 0], [20, 0], [20, 30], [0, 30]]) assert.ok(pos.some(p => near(p, c)))
   assert.equal(addConesForGrid([], frameGrid(bg2), bg2, true).added.length, 12)
 })
+
+test('ball carry: settle, follow, detach', async () => {
+  const S = await import('./scene.ts')
+  const bg: any = { type: 'half', width_m: 68, height_m: 52 }
+  const P: any = { id: 'p1', type: 'player', pos: [10, 10], team: 'a' }
+  const B: any = { id: 'b1', type: 'ball', pos: [10.6, 10.2] }
+  const far: any = { id: 'b2', type: 'ball', pos: [30, 30] }
+  const st = S.settleBalls([P, B, far], ['b1', 'b2'], bg)
+  assert.equal((st[1] as any).carriedBy, 'p1')
+  assert.equal((st[2] as any).carriedBy, undefined)
+  const mv = S.moveShapes(st, ['p1'], 5, 0)
+  assert.deepEqual((mv[1] as any).pos, [15.6, 10.2])
+  const rm = S.removeShape(st, 'p1')
+  assert.equal((rm.find((x: any) => x.id === 'b1') as any).carriedBy, undefined)
+  const d = S.duplicateShapes(st, ['p1', 'b1'], 1, 1)
+  const nb = d.shapes.find((x: any) => d.newIds.includes(x.id) && x.type === 'ball') as any
+  const np = d.shapes.find((x: any) => d.newIds.includes(x.id) && x.type === 'player') as any
+  assert.equal(nb.carriedBy, np.id)
+})
