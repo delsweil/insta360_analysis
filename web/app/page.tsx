@@ -90,18 +90,32 @@ export default function HomePage() {
             </div>
           </div>
           {canDelete && (
-            <button
-              onClick={() => router.push('/add-game')}
-              style={{
-                fontSize: 12, fontWeight: 600,
-                padding: '7px 16px', borderRadius: 8,
-                border: 'none', background: '#0f2972',
-                color: '#fff', cursor: 'pointer',
-                fontFamily: 'DM Sans, sans-serif',
-              }}
-            >
-              + Spiel hinzufügen
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => router.push('/sessions')}
+                style={{
+                  fontSize: 12, fontWeight: 600,
+                  padding: '7px 16px', borderRadius: 8,
+                  border: '1px solid #0f2972', background: '#fff',
+                  color: '#0f2972', cursor: 'pointer',
+                  fontFamily: 'DM Sans, sans-serif',
+                }}
+              >
+                Trainingseinheiten
+              </button>
+              <button
+                onClick={() => router.push('/add-game')}
+                style={{
+                  fontSize: 12, fontWeight: 600,
+                  padding: '7px 16px', borderRadius: 8,
+                  border: 'none', background: '#0f2972',
+                  color: '#fff', cursor: 'pointer',
+                  fontFamily: 'DM Sans, sans-serif',
+                }}
+              >
+                + Spiel hinzufügen
+              </button>
+            </div>
           )}
         </div>
 
