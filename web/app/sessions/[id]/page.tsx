@@ -142,9 +142,16 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     <div style={{ minHeight: '100vh', background: '#F8F8F6', fontFamily: 'DM Sans, sans-serif' }}>
       <Topbar role={role} email={user?.email} onSignOut={handleSignOut} backHref="/sessions" />
       <div style={{ padding: 20, maxWidth: 900, margin: '0 auto' }}>
-        <button onClick={() => router.push('/sessions')} style={{ fontSize: 12, fontWeight: 600, color: NAVY, background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginBottom: 12, fontFamily: 'DM Sans, sans-serif' }}>
-          ← Trainingseinheiten
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 }}>
+          <button onClick={() => router.push('/sessions')} style={{ fontSize: 12, fontWeight: 600, color: NAVY, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'DM Sans, sans-serif' }}>
+            ← Trainingseinheiten
+          </button>
+          {session && (
+            <button data-testid="pdf-session" onClick={() => window.open(`/sessions/${session.id}/print`, '_blank')} style={{ fontSize: 12, fontWeight: 600, color: NAVY, background: '#fff', border: '1.5px solid #E4E6EE', borderRadius: 8, cursor: 'pointer', padding: '7px 12px', fontFamily: 'DM Sans, sans-serif' }}>
+              PDF der Einheit
+            </button>
+          )}
+        </div>
 
         {notFound || !session ? (
           <div style={{ background: '#fff', border: '1px solid #E4E6EE', borderRadius: 12, padding: '40px 20px', textAlign: 'center', color: MUTED, fontSize: 14 }}>
@@ -269,6 +276,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
                             <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
                               <button aria-label="Nach oben" disabled={i === 0} onClick={() => moveForm(i, i - 1)} style={{ fontSize: 14, color: MUTED, background: 'none', border: 'none', cursor: 'pointer', padding: '6px', opacity: i === 0 ? 0.35 : 1 }}>↑</button>
                               <button aria-label="Nach unten" disabled={i === forms.length - 1} onClick={() => moveForm(i, i + 1)} style={{ fontSize: 14, color: MUTED, background: 'none', border: 'none', cursor: 'pointer', padding: '6px', opacity: i === forms.length - 1 ? 0.35 : 1 }}>↓</button>
+                              <button aria-label="PDF dieser Form" title="PDF dieser Form" data-testid="form-pdf" onClick={() => window.open(`/sessions/${id}/print?form=${f.id}`, '_blank')} style={{ fontSize: 11, fontWeight: 700, color: MUTED, background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}>PDF</button>
                               <button aria-label="Duplizieren" data-testid="form-duplicate" onClick={() => duplicateForm(f)} style={{ fontSize: 13, color: MUTED, background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}>⧉</button>
                               <button aria-label="Löschen" data-testid="form-delete" onClick={() => setConfirmForm(confirmForm === f.id ? null : f.id)} style={{ fontSize: 14, color: MUTED, background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}>✕</button>
                             </div>

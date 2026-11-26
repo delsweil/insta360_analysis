@@ -189,9 +189,16 @@ export default function FormPage({ params }: { params: Promise<{ id: string; fid
     <div style={{ minHeight: '100vh', background: '#F8F8F6', fontFamily: 'DM Sans, sans-serif' }}>
       <Topbar role={role} email={user?.email} onSignOut={handleSignOut} backHref="/sessions" />
       <div style={{ padding: 16, maxWidth: 1000, margin: '0 auto' }}>
-        <button onClick={() => router.push(`/sessions/${sessionId}`)} style={{ fontSize: 12, fontWeight: 600, color: NAVY, background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginBottom: 10, fontFamily: 'DM Sans, sans-serif' }}>
-          ← {session?.title ?? 'Einheit'}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8 }}>
+          <button onClick={() => router.push(`/sessions/${sessionId}`)} style={{ fontSize: 12, fontWeight: 600, color: NAVY, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'DM Sans, sans-serif' }}>
+            ← {session?.title ?? 'Einheit'}
+          </button>
+          {form && (
+            <button data-testid="pdf-form" onClick={() => window.open(`/sessions/${sessionId}/print?form=${form.id}`, '_blank')} style={{ fontSize: 12, fontWeight: 600, color: NAVY, background: '#fff', border: '1.5px solid #E4E6EE', borderRadius: 8, cursor: 'pointer', padding: '7px 12px', fontFamily: 'DM Sans, sans-serif' }}>
+              PDF dieser Form
+            </button>
+          )}
+        </div>
 
         {notFound || !form ? (
           <div style={{ background: '#fff', border: '1px solid #E4E6EE', borderRadius: 12, padding: '40px 20px', textAlign: 'center', color: MUTED, fontSize: 14 }}>Diese Form gibt es nicht, oder du darfst sie nicht sehen.</div>
