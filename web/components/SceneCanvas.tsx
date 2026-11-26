@@ -11,7 +11,7 @@
 
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
-  TEAM_COLORS, equipSize, ballRadius, symbolUnit, viewBoxOf, drawOrder, dimText, gridSizeText, textHeight,
+  TEAM_COLORS, equipSize, ballRadius, symbolUnit, viewBoxOf, drawOrder, dimText, gridSizeText, gridCellText, gridSplits, textHeight,
   makeShape, isMeaningful, moveShapes, rotateShapes, gridCentre, gridCorners, updateShape, shapesInRect, shapeBox, unionBox, scaleOf, equipDims, playerRadius, isLight, hitTest, handleAt, handlesOf, handlePatch, lineEndTarget, snapPt, snapStep, clampPt,
   type Scene, type SceneShape, type SceneBackground, type Tool, type Team, type EquipKind, type Pt,
 } from '@/lib/scene'
@@ -408,14 +408,23 @@ export default function SceneCanvas(props: Props) {
         )
       }
       case 'grid': {
-        const bx = shapeBox(s, bg), c = gridCentre(s)
+        const bx = shapeBox(s, bg), c = gridCentre(s), sp = gridSplits(s)
+        const splitPath = (g: typeof s) => {
+          const x0 = Math.min(g.a[0], g.b[0]), x1 = Math.max(g.a[0], g.b[0]), y0 = Math.min(g.a[1], g.b[1]), y1 = Math.max(g.a[1], g.b[1]), d: string[] = []
+          for (let i = 1; i < sp.cols; i++) { const x = x0 + ((x1 - x0) * i) / sp.cols; d.push(`M${x} ${y0}V${y1}`) }
+          for (let j = 1; j < sp.rows; j++) { const y = y0 + ((y1 - y0) * j) / sp.rows; d.push(`M${x0} ${y}H${x1}`) }
+          return d.join('')
+        }
         return (
           <g key={s.id} data-shape-id={s.id} data-type="grid">
             <g transform={s.angle ? `rotate(${s.angle} ${c[0]} ${c[1]})` : undefined}>
               <path d={boxPath(s.a, s.b, seed, amp)} fill="none" stroke={s.color ?? INK} strokeWidth={sw} strokeDasharray={`${16 * k} ${10 * k}`} strokeLinecap="round" />
+              {(sp.cols > 1 || sp.rows > 1) && (
+                <path data-testid="grid-splits" d={splitPath(s)} fill="none" stroke={s.color ?? INK} strokeWidth={sw * 0.75} strokeDasharray={`${10 * k} ${9 * k}`} strokeLinecap="round" opacity={0.85} />
+              )}
             </g>
-            {s.label?.trim() ? <text x={(bx.x0 + bx.x1) / 2} y={bx.y0 - 9 * k} textAnchor="middle" fontSize={20 * k} fontWeight={700} fill={s.color ?? INK} style={{ fontFamily: font }}>{s.label}</text> : null}
-            {s.showSize ? <text x={(bx.x0 + bx.x1) / 2} y={bx.y1 + 18 * k} textAnchor="middle" fontSize={15 * k} fontWeight={600} fill={s.color ?? DIM} style={{ fontFamily: font }}>{gridSizeText(s)}</text> : null}
+            {s.label?.trim() ? <text x={(bx.x0 + bx.x1) / 2} y={bx.y0 - 20 * k} textAnchor="middle" fontSize={20 * k} fontWeight={700} fill={s.color ?? INK} style={{ fontFamily: font }}>{s.label}</text> : null}
+            {s.showSize ? <text x={(bx.x0 + bx.x1) / 2} y={bx.y1 + 28 * k} textAnchor="middle" fontSize={15 * k} fontWeight={600} fill={s.color ?? DIM} style={{ fontFamily: font }}>{gridSizeText(s)}{gridCellText(s) ? `  ·  ${gridCellText(s)}` : ''}</text> : null}
           </g>
         )
       }

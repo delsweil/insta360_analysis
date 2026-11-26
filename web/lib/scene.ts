@@ -38,7 +38,7 @@ export type SceneShape = { id: string } & Animated & (
   | { type: 'equip'; kind: EquipKind; pos: Pt; angle: number; color?: string; num?: string; scale?: number }
   | { type: 'line'; kind: LineKind; from: Pt; to: Pt; bend: number; fromId?: string; toId?: string; color?: string }
   | { type: 'dim'; a: Pt; b: Pt; text?: string; color?: string }
-  | { type: 'grid'; a: Pt; b: Pt; label?: string; showSize: boolean; color?: string; angle?: number }
+  | { type: 'grid'; a: Pt; b: Pt; label?: string; showSize: boolean; color?: string; angle?: number; cols?: number; rows?: number }
   | { type: 'pen'; points: Pt[]; color: string }
   | { type: 'text'; pos: Pt; text: string; size: number; color?: string }
 )
@@ -102,6 +102,12 @@ export function dimText(s: Extract<SceneShape, { type: 'dim' }>): string {
   const t = s.text?.trim()
   return t ? t : formatMetres(dist(s.a, s.b))
 }
+export function gridCellText(s: Extract<SceneShape, { type: 'grid' }>): string {
+  const { cols, rows } = gridSplits(s)
+  if (cols === 1 && rows === 1) return ''
+  const w = Math.round((Math.abs(s.b[0] - s.a[0]) / cols) * 10) / 10, h = Math.round((Math.abs(s.b[1] - s.a[1]) / rows) * 10) / 10
+  return `je ${de(w)} × ${de(h)} m`
+}
 export function gridSizeText(s: Extract<SceneShape, { type: 'grid' }>): string {
   const w = Math.round(Math.abs(s.b[0] - s.a[0]) * 10) / 10, h = Math.round(Math.abs(s.b[1] - s.a[1]) * 10) / 10
   return `${de(w)} × ${de(h)} m`
@@ -133,6 +139,41 @@ export function inGrid(g: Grid, p: Pt, pad = 0): boolean {
   const q = g.angle ? rotPt(p, gridCentre(g), -g.angle) : p
   return q[0] >= Math.min(g.a[0], g.b[0]) - pad && q[0] <= Math.max(g.a[0], g.b[0]) + pad && q[1] >= Math.min(g.a[1], g.b[1]) - pad && q[1] <= Math.max(g.a[1], g.b[1]) + pad
 }
+export const MAX_SPLIT = 8
+const clampSplit = (n: number | undefined) => Math.min(MAX_SPLIT, Math.max(1, Math.round(n ?? 1)))
+/** How many columns and rows a field is divided into by its cross lines (1 = not divided). */
+export function gridSplits(g: Grid): { cols: number; rows: number } { return { cols: clampSplit(g.cols), rows: clampSplit(g.rows) } }
+/** Size of one part of a divided field, metres. */
+export function gridCellSize(g: Grid): { w: number; h: number } {
+  const { w, h } = gridSize(g), { cols, rows } = gridSplits(g)
+  return { w: w / cols, h: h / rows }
+}
+/** The points where cones belong: the four corners, or with `splits` every crossing of the dividing lines and their ends on the edge. In the picture (turned with the field). */
+export function gridLattice(g: Grid, splits: boolean): Pt[] {
+  const c = gridCentre(g), ang = g.angle ?? 0
+  const x0 = Math.min(g.a[0], g.b[0]), x1 = Math.max(g.a[0], g.b[0]), y0 = Math.min(g.a[1], g.b[1]), y1 = Math.max(g.a[1], g.b[1])
+  const { cols, rows } = splits ? gridSplits(g) : { cols: 1, rows: 1 }
+  const out: Pt[] = []
+  for (let i = 0; i <= cols; i++) for (let j = 0; j <= rows; j++) {
+    const q: Pt = [x0 + ((x1 - x0) * i) / cols, y0 + ((y1 - y0) * j) / rows]
+    out.push(ang ? rotPt(q, c, ang) : q)
+  }
+  return out
+}
+/** Put a cone on each corner of a field (and on the dividing lines if asked). Spots that already have a cone are left alone. */
+export function addFieldCones(shapes: SceneShape[], gridId: string, bg: SceneBackground, splits: boolean): { shapes: SceneShape[]; added: string[] } {
+  const g = shapes.find(s => s.id === gridId)
+  if (!g || g.type !== 'grid') return { shapes, added: [] }
+  const u = symbolUnit(bg), have = shapes.filter(s => s.type === 'equip' && s.kind === 'cone') as Extract<SceneShape, { type: 'equip' }>[]
+  const made: SceneShape[] = []
+  for (const q of gridLattice(g, splits)) {
+    if (have.some(c => dist(c.pos, q) < u * 0.5) || made.some(c => (c as { pos: Pt }).pos && dist((c as { pos: Pt }).pos, q) < u * 0.5)) continue
+    const r = (v: number) => Math.round(v * 100) / 100
+    made.push({ id: newId(), type: 'equip', kind: 'cone', pos: [r(q[0]), r(q[1])], angle: 0 })
+  }
+  return { shapes: [...shapes, ...made], added: made.map(m => m.id) }
+}
+
 /** Same centre and angle, new size (metres). */
 export function gridResized(g: Grid, w: number, h: number): Partial<SceneShape> {
   const c = gridCentre(g)
@@ -142,6 +183,9 @@ export function gridNew(g: Grid, c: Pt, w: number, h: number, angle = g.angle ??
   return { a: [c[0] - w / 2, c[1] - h / 2], b: [c[0] + w / 2, c[1] + h / 2], angle: ((angle % 360) + 360) % 360 || undefined } as Partial<SceneShape>
 }
 
+/** Equipment that has a front or a long side turns with a group; round or pointed-in-all-directions pieces (cones, poles, rings) only change place. */
+const TURNS_WITH_GROUP: EquipKind[] = ['hurdle', 'rebounder', 'minigoal', 'kleinfeldgoal', 'goal']
+
 /** Turn shapes by `deg` (clockwise on screen) around `centre`. Equipment and fields turn too; players, the ball and text only change place. */
 export function rotateShapes(shapes: SceneShape[], ids: string[], deg: number, centre: Pt): SceneShape[] {
   const set = new Set(ids), r = (q: Pt) => rotPt(q, centre, deg)
@@ -149,7 +193,7 @@ export function rotateShapes(shapes: SceneShape[], ids: string[], deg: number, c
     if (!set.has(s.id)) return s
     switch (s.type) {
       case 'player': case 'ball': case 'text': return withPatch(s, { pos: r(s.pos) } as Partial<SceneShape>)
-      case 'equip': return withPatch(s, { pos: r(s.pos), angle: (((s.angle + deg) % 360) + 360) % 360 } as Partial<SceneShape>)
+      case 'equip': return withPatch(s, { pos: r(s.pos), ...(TURNS_WITH_GROUP.includes(s.kind) ? { angle: (((s.angle + deg) % 360) + 360) % 360 } : {}) } as Partial<SceneShape>)
       case 'line': return withPatch(s, { from: r(s.from), to: r(s.to) } as Partial<SceneShape>)
       case 'dim': return withPatch(s, { a: r(s.a), b: r(s.b) } as Partial<SceneShape>)
       case 'pen': return withPatch(s, { points: s.points.map(r) } as Partial<SceneShape>)
@@ -170,7 +214,7 @@ export function shapesInGrid(shapes: SceneShape[], gridId: string, bg: SceneBack
   for (const s of shapes) {
     if (s.id === gridId) continue
     const b = shapeBox(s, bg)
-    if (inGrid(g, [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2])) out.push(s.id)
+    if (inGrid(g, [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2], symbolUnit(bg) * 0.5)) out.push(s.id) // a little slack: cones on the corners belong to the field
   }
   return out
 }

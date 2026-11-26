@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   defaultBackground, viewBoxOf, symbolUnit, formatMetres, dimText, gridSizeText, clampFrameSize, snapPt, snapStep, clampPt,
   makeShape, isMeaningful, moveShape, removeShape, duplicateShape, copyScene, emptyScene, hitTest, handlesOf, handleAt, handlePatch,
-  lineEndTarget, drawOrder, moveShapes, duplicateShapes, removeShapes, colorShapes, scaleShapes, shapesInRect, shapeBox, rotPt, gridCorners, gridCentre, inGrid, gridResized, rotateShapes, shapesInGrid, cloneShapes, fieldShape, sizeHandle, scaleOf, equipDims, isLight, rotHandle, equipSize, updateShape, hist, hPush, hUndo, hRedo,
+  lineEndTarget, drawOrder, moveShapes, duplicateShapes, removeShapes, colorShapes, scaleShapes, shapesInRect, shapeBox, rotPt, gridCorners, gridCentre, inGrid, gridResized, rotateShapes, gridSplits, gridLattice, gridCellText, addFieldCones, shapesInGrid, cloneShapes, fieldShape, sizeHandle, scaleOf, equipDims, isLight, rotHandle, equipSize, updateShape, hist, hPush, hUndo, hRedo,
   type SceneShape, type Scene,
 } from './scene.ts'
 import { dist, curvePoints, trimPolyline, resample, wobble, wavy, arrowHead, blobPath, decimate, pathLength, hashStr } from './sketch.ts'
@@ -334,4 +334,42 @@ test('Feldaufbau: a form becomes a labelled field of its own size inside the fra
   assert.equal(f.label, '1 · Over the River'); assert.ok(Math.abs(Math.abs(f.b[0] - f.a[0]) - 20) < 1e-9 && Math.abs(Math.abs(f.b[1] - f.a[1]) - 30) < 1e-9)
   const g = fieldShape(pitch, 'x', 20, 30, 1) as Extract<SceneShape, { type: 'grid' }>
   assert.notDeepEqual(g.a, f.a) // the next one is nudged
+})
+
+// split fields and corner cones
+test('a field can be divided by cross lines; its parts have their own size', () => {
+  const g = grid('g', [0, 0], [20, 15]) as Extract<SceneShape, { type: 'grid' }>
+  assert.deepEqual(gridSplits(g), { cols: 1, rows: 1 }); assert.equal(gridCellText(g), '')
+  const d = { ...g, cols: 2, rows: 3 } as typeof g
+  assert.deepEqual(gridSplits(d), { cols: 2, rows: 3 }); assert.equal(gridCellText(d), 'je 10 × 5 m')
+  assert.deepEqual(gridSplits({ ...g, cols: 99, rows: 0 } as typeof g), { cols: 8, rows: 1 })
+  assert.equal(gridCellText({ ...g, cols: 3 } as typeof g), 'je 6,7 × 15 m')
+})
+test('cones go on the corners, and on the dividing lines if asked, also when the field is turned', () => {
+  const g = { ...grid('g', [0, 0], [20, 10]), cols: 2, rows: 2 } as Extract<SceneShape, { type: 'grid' }>
+  assert.equal(gridLattice(g, false).length, 4); assert.equal(gridLattice(g, true).length, 9)
+  const r = addFieldCones([g], 'g', bg, false)
+  assert.equal(r.added.length, 4)
+  assert.ok(r.shapes.filter(s => s.type === 'equip').every(s => (s as { kind: string }).kind === 'cone'))
+  const pos = r.shapes.filter(s => s.type === 'equip').map(s => (s as { pos: number[] }).pos)
+  for (const c of [[0, 0], [20, 0], [20, 10], [0, 10]]) assert.ok(pos.some(p => near(p, c)))
+  const again = addFieldCones(r.shapes, 'g', bg, false); assert.equal(again.added.length, 0) // nothing doubled
+  const more = addFieldCones(r.shapes, 'g', bg, true); assert.equal(more.added.length, 5) // only the 5 new spots
+  const turned = { ...g, angle: 90 } as typeof g
+  const lat = gridLattice(turned, false)
+  assert.ok(lat.some(p => near(p, rotPt([0, 0], [10, 5], 90))))
+  assert.deepEqual(addFieldCones([player('p', 1, 1)], 'nope', bg, false).added, [])
+})
+
+test('cones placed on a field\'s corners count as part of its content', () => {
+  const g = { ...grid('g', [3, 3], [17, 13], 37), cols: 2 } as SceneShape
+  const r = addFieldCones([g], 'g', bg, false)
+  assert.equal(shapesInGrid(r.shapes, 'g', bg).length, 5)
+})
+
+test('cones keep their orientation when a group is turned; goals turn', () => {
+  const shapes: SceneShape[] = [{ id: 'c', type: 'equip', kind: 'cone', pos: [10, 0], angle: 0 }, { id: 'g', type: 'equip', kind: 'goal', pos: [0, 10], angle: 0 }]
+  const out = rotateShapes(shapes, ['c', 'g'], 90, [0, 0])
+  assert.equal((out[0] as { angle: number }).angle, 0); assert.ok(near((out[0] as { pos: number[] }).pos, [0, 10]))
+  assert.equal((out[1] as { angle: number }).angle, 90)
 })

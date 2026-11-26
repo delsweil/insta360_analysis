@@ -8,7 +8,7 @@ import SceneCanvas, { equipGlyph, INK, POLE_COLORS, type Look } from './SceneCan
 import {
   TEAMS, TEAM_COLORS, TEAM_NAMES, EQUIP_KINDS, EQUIP_LABELS, LINE_LABELS, BG_LABELS, defaultBackground, clampFrameSize,
   duplicateShapes, removeShapes, updateShape, colorShapes, scaleShapes, equipSize, symbolUnit, newId, hist, hPush, hUndo, hRedo,
-  COLOR_CHOICES, fieldShape, canColor, canScale, scaleOf, rotateShapes, shapesInGrid, shapeBox, unionBox, gridSize, gridResized, cloneShapes,
+  COLOR_CHOICES, fieldShape, canColor, canScale, scaleOf, rotateShapes, shapesInGrid, shapeBox, unionBox, gridSize, gridResized, gridSplits, addFieldCones, cloneShapes, MAX_SPLIT,
   type Scene, type SceneShape, type Tool, type Team, type EquipKind, type BackgroundType, type Pt, type Hist, type LineKind,
 } from '@/lib/scene'
 
@@ -379,6 +379,24 @@ export default function SceneEditor({ scene, onChange, readOnly = false, placeab
                 <SizeInput testId="grid-angle" label="Drehung in Grad" min={0} max={360} style={{ ...input, width: 56 }} value={Math.round(selected.angle ?? 0)} onValue={v => patchSel({ angle: v % 360 || undefined } as Partial<SceneShape>, 'gridangle')} />
                 <span style={{ fontSize: 12, color: MUTED }}>°</span>
               </span>
+              <span data-testid="grid-split" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <span style={small}>Teilen</span>
+                {(['cols', 'rows'] as const).map(key => {
+                  const n = gridSplits(selected)[key]
+                  return (
+                    <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                      <span style={{ fontSize: 12, color: '#4A4F5C' }}>{key === 'cols' ? 'Spalten' : 'Reihen'}</span>
+                      <button data-testid={`split-${key}-minus`} onClick={() => patchSel({ [key]: Math.max(1, n - 1) || undefined } as Partial<SceneShape>)} disabled={n <= 1} style={btn(false, { padding: '5px 10px', opacity: n <= 1 ? 0.4 : 1 })} aria-label={`Weniger ${key === 'cols' ? 'Spalten' : 'Reihen'}`}>−</button>
+                      <span data-testid={`split-${key}`} style={{ minWidth: 14, textAlign: 'center', fontSize: 13, fontWeight: 700, color: NAVY }}>{n}</span>
+                      <button data-testid={`split-${key}-plus`} onClick={() => patchSel({ [key]: Math.min(MAX_SPLIT, n + 1) } as Partial<SceneShape>)} disabled={n >= MAX_SPLIT} style={btn(false, { padding: '5px 10px', opacity: n >= MAX_SPLIT ? 0.4 : 1 })} aria-label={`Mehr ${key === 'cols' ? 'Spalten' : 'Reihen'}`}>+</button>
+                    </span>
+                  )
+                })}
+              </span>
+              <button data-testid="cones-corners" onClick={() => { const r = addFieldCones(cur.shapes, selected.id, cur.background, false); if (r.added.length) setShapes(r.shapes) }} style={btn(false)} title="Auf jede Ecke des Feldes ein Hütchen setzen">Hütchen an den Ecken</button>
+              {(gridSplits(selected).cols > 1 || gridSplits(selected).rows > 1) && (
+                <button data-testid="cones-splits" onClick={() => { const r = addFieldCones(cur.shapes, selected.id, cur.background, true); if (r.added.length) setShapes(r.shapes) }} style={btn(false)} title="Hütchen auch auf die Teilungslinien setzen">Hütchen an Ecken und Teilungen</button>
+              )}
               <button data-testid="grid-select-content" onClick={() => setSelectedIds(shapesInGrid(cur.shapes, selected.id, cur.background))} style={btn(false)} title="Das Feld und alles darin auswählen, um es gemeinsam zu drehen, zu verschieben oder zu kopieren">Inhalt wählen</button>
             </>
           )}
