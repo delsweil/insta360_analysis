@@ -78,7 +78,7 @@ const PITCH_D =
   'M16.5 26.69A9.15 9.15 0 0 1 16.5 41.31 M88.5 41.31A9.15 9.15 0 0 1 88.5 26.69 ' +
   'M0 30.34H-2V37.66H0 M105 30.34H107V37.66H105 M10.8 34a.2.2 0 1 0 .4 0a.2.2 0 1 0-.4 0 M93.8 34a.2.2 0 1 0 .4 0a.2.2 0 1 0-.4 0 M52.3 34a.2.2 0 1 0 .4 0a.2.2 0 1 0-.4 0'
 
-const Background = memo(function Background({ bg, k, look }: { bg: SceneBackground; k: number; look: Look }) {
+const Background = memo(function Background({ bg, k, look, plain }: { bg: SceneBackground; k: number; look: Look; plain: boolean }) {
   const id = useId().replace(/:/g, '')
   const v = viewBoxOf(bg)
   const step = snapStep(bg)
@@ -91,8 +91,8 @@ const Background = memo(function Background({ bg, k, look }: { bg: SceneBackgrou
         </pattern>
         <clipPath id={`clip${id}`}><rect x={-3} y={0} width={55.5} height={68} /></clipPath>
       </defs>
-      <rect x={v.x} y={v.y} width={v.w} height={v.h} fill={PAPER} />
-      <rect x={v.x} y={v.y} width={v.w} height={v.h} fill={`url(#dots${id})`} />
+      <rect x={v.x} y={v.y} width={v.w} height={v.h} fill={plain ? '#ffffff' : PAPER} />
+      {!plain && <rect x={v.x} y={v.y} width={v.w} height={v.h} fill={`url(#dots${id})`} />}
       {bg.type === 'pitch' && <path d={PITCH_D} fill="none" stroke={LINE_GREY} strokeWidth={2 * k} strokeLinejoin="round" />}
       {bg.type === 'halfpitch' && (
         <g transform="translate(68 0) rotate(90)">
@@ -120,6 +120,8 @@ interface Props {
   team?: Team
   equip?: EquipKind
   poleColor?: string
+  /** No dot grid and a white page: for print. */
+  plain?: boolean
   snap?: boolean
   selectedIds?: string[]
   onSelect?: (ids: string[]) => void
@@ -141,7 +143,7 @@ type Drag =
 const NONE: string[] = []
 
 export default function SceneCanvas(props: Props) {
-  const { scene, look = 'sketch', editable = false, tool = 'select', team = 'a', equip = 'cone', poleColor, snap = false, selectedIds = NONE, onSelect, onCommit, onRequestText, className, style, testId } = props
+  const { scene, look = 'sketch', editable = false, tool = 'select', team = 'a', equip = 'cone', poleColor, plain = false, snap = false, selectedIds = NONE, onSelect, onCommit, onRequestText, className, style, testId } = props
   const bg = scene.background
   const vb = viewBoxOf(bg)
   const u = symbolUnit(bg)
@@ -154,7 +156,7 @@ export default function SceneCanvas(props: Props) {
   const pointerId = useRef<number | null>(null)
   // k = metres per drawn pixel. Read-only miniatures scale their strokes and labels down with the picture; the editor never does.
   const kTouch = 1 / ppm
-  const k = (editable ? 1 : Math.min(1, Math.max(0.3, (vb.w * ppm) / 520))) / ppm
+  const k = (editable || plain ? 1 : Math.min(1, Math.max(0.3, (vb.w * ppm) / 520))) / ppm
   const sketch = look === 'sketch'
   const amp = sketch ? 1.5 * k : 0
 
@@ -428,7 +430,7 @@ export default function SceneCanvas(props: Props) {
       onPointerUp={onPointerUp}
       onPointerCancel={() => finish(false)}
     >
-      <Background bg={bg} k={k} look={look} />
+      <Background bg={bg} k={k} look={look} plain={plain} />
       {selectedShapes.map(s => <g key={`h${s.id}`}>{halo(s)}</g>)}
       {groupBox && <rect data-testid="group-box" x={groupBox.x0 - 6 * k} y={groupBox.y0 - 6 * k} width={groupBox.x1 - groupBox.x0 + 12 * k} height={groupBox.y1 - groupBox.y0 + 12 * k} rx={6 * k} fill="none" stroke={HALO} strokeWidth={2 * k} strokeDasharray={`${8 * k} ${6 * k}`} />}
       {ordered.map(renderShape)}
