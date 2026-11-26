@@ -3,11 +3,12 @@
 // The sketch editor: tool bar, selection panel, undo/redo, background and size, and the canvas.
 // It owns the editing history; the parent gets every committed state through onChange and saves it. Give it a `key` per scene.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import SceneCanvas, { equipGlyph, INK, POLE_COLORS, type Look } from './SceneCanvas'
 import {
   TEAMS, TEAM_COLORS, TEAM_NAMES, EQUIP_KINDS, EQUIP_LABELS, LINE_LABELS, BG_LABELS, defaultBackground, clampFrameSize,
-  duplicateShape, removeShape, updateShape, equipSize, symbolUnit, newId, hist, hPush, hUndo, hRedo,
+  duplicateShapes, removeShapes, updateShape, colorShapes, scaleShapes, equipSize, symbolUnit, newId, hist, hPush, hUndo, hRedo,
+  COLOR_CHOICES, canColor, canScale, scaleOf,
   type Scene, type SceneShape, type Tool, type Team, type EquipKind, type BackgroundType, type Pt, type Hist, type LineKind,
 } from '@/lib/scene'
 
@@ -15,7 +16,7 @@ const NAVY = '#0f2972'
 const MUTED = '#8A8F9E'
 
 const TOOLS: { id: Tool; label: string; hint: string }[] = [
-  { id: 'select', label: 'Auswahl', hint: 'Tippe eine Figur an, um sie zu verschieben. Runde Griffe ändern Länge, Bogen und Drehung.' },
+  { id: 'select', label: 'Auswahl', hint: 'Figur antippen und ziehen. Auf leeren Platz tippen und einen Rahmen aufziehen wählt mehrere aus (Umschalt/Strg + Klick fügt hinzu). Runde Griffe ändern Länge, Bogen, Drehung und Größe. Löschen: Papierkorb oder Entf.' },
   { id: 'player', label: 'Spieler', hint: 'Tippen setzt einen Spieler, gedrückt halten und ziehen positioniert ihn.' },
   { id: 'ball', label: 'Ball', hint: 'Tippen setzt den Ball.' },
   { id: 'equip', label: 'Material', hint: 'Material unten wählen, dann tippen.' },
@@ -57,6 +58,34 @@ function EquipIcon({ kind, color }: { kind: EquipKind; color?: string }) {
   )
 }
 
+/** A number field that lets you clear and retype freely: it only applies a value once it is a valid size, and tidies the text on blur. */
+function SizeInput({ value, onValue, label, testId, style }: { value: number; onValue: (v: number) => void; label: string; testId: string; style: React.CSSProperties }) {
+  const shown = String(value).replace('.', ',')
+  const [text, setText] = useState(shown)
+  const [focus, setFocus] = useState(false)
+  return (
+    <input
+      data-testid={testId}
+      aria-label={label}
+      inputMode="decimal"
+      value={focus ? text : shown}
+      style={style}
+      onFocus={e => { setText(shown); setFocus(true); e.currentTarget.select() }}
+      onBlur={() => setFocus(false)}
+      onKeyDown={e => { if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur() }}
+      onChange={e => {
+        const t = e.target.value.replace(/[^0-9.,]/g, '')
+        setText(t)
+        const n = parseFloat(t.replace(',', '.'))
+        if (Number.isFinite(n) && n >= 3) onValue(n)
+      }}
+    />
+  )
+}
+
+const TrashIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
+const CopyIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></svg>
+
 interface Props {
   scene: Scene
   onChange: (s: Scene) => void
@@ -71,7 +100,7 @@ export default function SceneEditor({ scene, onChange, readOnly = false }: Props
   const [poleColor, setPoleColor] = useState(POLE_COLORS[0])
   const [look, setLook] = useState<Look>('sketch')
   const [snap, setSnap] = useState(false)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [pendingText, setPendingText] = useState<Pt | null>(null)
   const [textValue, setTextValue] = useState('')
   const [full, setFull] = useState(false)
@@ -91,23 +120,31 @@ export default function SceneEditor({ scene, onChange, readOnly = false }: Props
 
   const setShapes = useCallback((shapes: SceneShape[], key?: string) => apply({ ...cur, shapes }, key), [apply, cur])
 
-  const undo = useCallback(() => { const n = hUndo(h); if (n !== h) { setH(n); emit(n.present) } setSelectedId(null) }, [h, emit])
-  const redo = useCallback(() => { const n = hRedo(h); if (n !== h) { setH(n); emit(n.present) } setSelectedId(null) }, [h, emit])
+  const undo = useCallback(() => { const n = hUndo(h); if (n !== h) { setH(n); emit(n.present) } setSelectedIds([]) }, [h, emit])
+  const redo = useCallback(() => { const n = hRedo(h); if (n !== h) { setH(n); emit(n.present) } setSelectedIds([]) }, [h, emit])
 
-  const selected = cur.shapes.find(s => s.id === selectedId)
+  const ids = useMemo(() => selectedIds.filter(id => cur.shapes.some(s => s.id === id)), [selectedIds, cur.shapes])
+  const picked = useMemo(() => cur.shapes.filter(s => ids.includes(s.id)), [cur.shapes, ids])
+  const selected = picked.length === 1 ? picked[0] : undefined
+  const many = picked.length > 1
 
   const patchSel = useCallback((patch: Partial<SceneShape>, key?: string) => {
-    if (!selectedId) return
-    setShapes(updateShape(cur.shapes, selectedId, patch), key)
-  }, [cur.shapes, selectedId, setShapes])
-
-  const deleteSel = useCallback(() => { if (selectedId) { setShapes(removeShape(cur.shapes, selectedId)); setSelectedId(null) } }, [cur.shapes, selectedId, setShapes])
-  const duplicateSel = useCallback(() => {
     if (!selected) return
+    setShapes(updateShape(cur.shapes, selected.id, patch), key)
+  }, [cur.shapes, selected, setShapes])
+
+  const deleteSel = useCallback(() => { if (ids.length) { setShapes(removeShapes(cur.shapes, ids)); setSelectedIds([]) } }, [cur.shapes, ids, setShapes])
+  const duplicateSel = useCallback(() => {
+    if (!ids.length) return
     const o = symbolUnit(cur.background) * 1.6
-    const d = duplicateShape(selected, o, o)
-    setShapes([...cur.shapes, d]); setSelectedId(d.id)
-  }, [selected, cur, setShapes])
+    const r = duplicateShapes(cur.shapes, ids, o, o)
+    setShapes(r.shapes); setSelectedIds(r.newIds)
+  }, [ids, cur, setShapes])
+  const recolor = (color: string | undefined) => setShapes(colorShapes(cur.shapes, ids, color))
+  const resize = (f: number) => setShapes(scaleShapes(cur.shapes, ids, f))
+  const colorTargets = picked.filter(canColor)
+  const scaleTargets = picked.filter(canScale)
+  const commonColor = colorTargets.length && colorTargets.every(s => ('color' in s ? s.color : undefined) === ('color' in colorTargets[0] ? colorTargets[0].color : undefined)) ? ('color' in colorTargets[0] ? colorTargets[0].color : undefined) : undefined
 
   useEffect(() => {
     if (readOnly) return
@@ -118,18 +155,19 @@ export default function SceneEditor({ scene, onChange, readOnly = false }: Props
       if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo() }
       else if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo() }
       else if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSel() }
-      else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) { e.preventDefault(); deleteSel() }
-      else if (e.key === 'Escape') { setSelectedId(null); setPendingText(null); setTool('select'); setFull(false) }
+      else if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); setTool('select'); setSelectedIds(cur.shapes.map(s => s.id)) }
+      else if ((e.key === 'Delete' || e.key === 'Backspace') && ids.length) { e.preventDefault(); deleteSel() }
+      else if (e.key === 'Escape') { setSelectedIds([]); setPendingText(null); setTool('select'); setFull(false) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [readOnly, undo, redo, duplicateSel, deleteSel, selectedId])
+  }, [readOnly, undo, redo, duplicateSel, deleteSel, ids.length, cur.shapes])
 
   function addText() {
     const t = textValue.trim()
     if (pendingText && t) {
       const s: SceneShape = { id: newId(), type: 'text', pos: pendingText, text: t, size: 1 }
-      setShapes([...cur.shapes, s]); setSelectedId(s.id)
+      setShapes([...cur.shapes, s]); setSelectedIds([s.id])
     }
     setPendingText(null); setTextValue('')
   }
@@ -165,9 +203,9 @@ export default function SceneEditor({ scene, onChange, readOnly = false }: Props
         ))}
         {(bgType === 'free' || bgType === 'blank') && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <input data-testid="bg-w" aria-label="Breite in Metern" type="number" step="0.5" min={3} max={120} style={{ ...input, width: 64 }} value={cur.background.width_m} onChange={e => setSize('width_m', parseFloat(e.target.value))} />
+            <SizeInput testId="bg-w" label="Breite in Metern" style={{ ...input, width: 64 }} value={cur.background.width_m} onValue={v => setSize('width_m', v)} />
             <span style={{ fontSize: 12, color: MUTED }}>×</span>
-            <input data-testid="bg-h" aria-label="Höhe in Metern" type="number" step="0.5" min={3} max={120} style={{ ...input, width: 64 }} value={cur.background.height_m} onChange={e => setSize('height_m', parseFloat(e.target.value))} />
+            <SizeInput testId="bg-h" label="Höhe in Metern" style={{ ...input, width: 64 }} value={cur.background.height_m} onValue={v => setSize('height_m', v)} />
             <span style={{ fontSize: 12, color: MUTED }}>m</span>
           </span>
         )}
@@ -176,13 +214,14 @@ export default function SceneEditor({ scene, onChange, readOnly = false }: Props
         <button data-testid="snap" onClick={() => setSnap(!snap)} style={btn(snap)} title="Auf ganze Meter einrasten">Raster</button>
         <button data-testid="undo" onClick={undo} disabled={!h.past.length} style={btn(false, { opacity: h.past.length ? 1 : 0.4 })} title="Rückgängig (Strg+Z)">↶</button>
         <button data-testid="redo" onClick={redo} disabled={!h.future.length} style={btn(false, { opacity: h.future.length ? 1 : 0.4 })} title="Wiederholen">↷</button>
+        <button data-testid="delete-top" onClick={deleteSel} disabled={!ids.length} aria-label="Auswahl löschen" title="Auswahl löschen (Entf)" style={btn(false, { display: 'inline-flex', alignItems: 'center', opacity: ids.length ? 1 : 0.4, color: ids.length ? '#991b1b' : '#4A4F5C' })}><TrashIcon /></button>
         <button data-testid="fullscreen" onClick={() => setFull(!full)} style={btn(full)} title="Vollbild">{full ? 'Schließen' : 'Vollbild'}</button>
       </div>
 
       {/* tools */}
       <div data-testid="toolbar" style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4, marginBottom: 6 }}>
         {TOOLS.map(t => (
-          <button key={t.id} data-testid={`tool-${t.id}`} onClick={() => { setTool(t.id); if (t.id !== 'select') setSelectedId(null) }} style={btn(tool === t.id, { display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 1, padding: '5px 9px', minWidth: 56 })}>
+          <button key={t.id} data-testid={`tool-${t.id}`} onClick={() => { setTool(t.id); if (t.id !== 'select') setSelectedIds([]) }} style={btn(tool === t.id, { display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 1, padding: '5px 9px', minWidth: 56 })}>
             <ToolIcon id={t.id} />
             <span style={{ fontSize: 10.5 }}>{t.label}</span>
           </button>
@@ -226,7 +265,14 @@ export default function SceneEditor({ scene, onChange, readOnly = false }: Props
       )}
 
       {/* canvas */}
-      <div style={{ border: '1px solid #E4E6EE', borderRadius: 12, overflow: 'hidden', background: '#fbfbf8', flex: full ? 1 : undefined, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 0 }}>
+      <div style={{ position: 'relative', border: '1px solid #E4E6EE', borderRadius: 12, overflow: 'hidden', background: '#fbfbf8', flex: full ? 1 : undefined, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 0 }}>
+        {ids.length > 0 && tool === 'select' && (
+          <div data-testid="quick-actions" style={{ position: 'absolute', top: 8, right: 8, zIndex: 2, display: 'flex', gap: 6, alignItems: 'center', background: 'rgba(255,255,255,0.94)', border: '1px solid #E4E6EE', borderRadius: 10, padding: 4, boxShadow: '0 2px 8px rgba(15,41,114,0.12)' }}>
+            {many && <span style={{ fontSize: 12, fontWeight: 600, color: NAVY, padding: '0 6px' }}>{picked.length} gewählt</span>}
+            <button data-testid="quick-duplicate" onClick={duplicateSel} aria-label="Duplizieren" title="Duplizieren (Strg+D)" style={btn(false, { padding: 0, width: 40, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' })}><CopyIcon /></button>
+            <button data-testid="quick-delete" onClick={deleteSel} aria-label="Löschen" title="Löschen (Entf)" style={btn(false, { padding: 0, width: 40, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#991b1b', borderColor: '#fca5a5' })}><TrashIcon /></button>
+          </div>
+        )}
         <SceneCanvas
           scene={cur}
           look={look}
@@ -236,8 +282,8 @@ export default function SceneEditor({ scene, onChange, readOnly = false }: Props
           equip={equip}
           poleColor={poleColor}
           snap={snap}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
+          selectedIds={ids}
+          onSelect={setSelectedIds}
           onCommit={shapes => setShapes(shapes)}
           onRequestText={pos => { setPendingText(pos); setTextValue('') }}
           style={full ? { maxHeight: 'calc(100dvh - 250px)' } : { maxHeight: 'max(340px, calc(100dvh - 360px))' }}
@@ -245,52 +291,69 @@ export default function SceneEditor({ scene, onChange, readOnly = false }: Props
       </div>
 
       {/* selection panel */}
-      {selected && tool === 'select' && (
+      {picked.length > 0 && tool === 'select' && (
         <div data-testid="selection-panel" style={{ marginTop: 8, background: '#fff', border: '1px solid #E4E6EE', borderRadius: 12, padding: 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-          {selected.type === 'player' && (
+          {selected?.type === 'player' && (
             <>
-              {TEAMS.map(t => <button key={t} aria-label={TEAM_NAMES[t]} onClick={() => patchSel({ team: t } as Partial<SceneShape>)} style={{ width: 32, height: 32, borderRadius: 99, background: TEAM_COLORS[t], border: `2.5px solid ${selected.team === t ? NAVY : '#cfd4e2'}`, cursor: 'pointer' }} />)}
+              {TEAMS.map(t => <button key={t} aria-label={TEAM_NAMES[t]} onClick={() => patchSel({ team: t, color: undefined } as Partial<SceneShape>)} style={{ width: 32, height: 32, borderRadius: 99, background: TEAM_COLORS[t], border: `2.5px solid ${!selected.color && selected.team === t ? NAVY : '#cfd4e2'}`, cursor: 'pointer' }} />)}
               <input data-testid="num" placeholder="Nr." maxLength={3} value={selected.num ?? ''} onChange={e => patchSel({ num: e.target.value || undefined } as Partial<SceneShape>, 'num')} style={{ ...input, width: 64 }} />
             </>
           )}
-          {selected.type === 'equip' && (
+          {selected?.type === 'equip' && (
             <>
               <span style={small}>{EQUIP_LABELS[selected.kind]}</span>
               <button onClick={() => patchSel({ angle: (selected.angle + 345) % 360 } as Partial<SceneShape>)} style={btn(false)}>⟲ 15°</button>
               <button onClick={() => patchSel({ angle: (selected.angle + 15) % 360 } as Partial<SceneShape>)} style={btn(false)}>⟳ 15°</button>
               {selected.kind === 'colorpole' && (
-                <>
-                  {POLE_COLORS.map(c => <button key={c} aria-label={`Farbe ${c}`} onClick={() => patchSel({ color: c } as Partial<SceneShape>)} style={{ width: 28, height: 28, borderRadius: 99, background: c, border: `2.5px solid ${(selected.color ?? POLE_COLORS[0]) === c ? NAVY : '#cfd4e2'}`, cursor: 'pointer' }} />)}
-                  <input placeholder="Nr." maxLength={2} value={selected.num ?? ''} onChange={e => patchSel({ num: e.target.value || undefined } as Partial<SceneShape>, 'num')} style={{ ...input, width: 60 }} />
-                </>
+                <input placeholder="Nr." maxLength={2} value={selected.num ?? ''} onChange={e => patchSel({ num: e.target.value || undefined } as Partial<SceneShape>, 'num')} style={{ ...input, width: 60 }} />
               )}
             </>
           )}
-          {selected.type === 'line' && (
+          {selected?.type === 'line' && (
             <>
               {(['pass', 'return', 'move'] as LineKind[]).map(k => <button key={k} data-testid={`linekind-${k}`} onClick={() => patchSel({ kind: k } as Partial<SceneShape>)} style={btn(selected.kind === k)}>{LINE_LABELS[k]}</button>)}
               <button onClick={() => patchSel({ from: selected.to, to: selected.from, fromId: selected.toId, toId: selected.fromId, bend: -selected.bend } as Partial<SceneShape>)} style={btn(false)}>Richtung tauschen</button>
               {selected.bend !== 0 && <button onClick={() => patchSel({ bend: 0 } as Partial<SceneShape>)} style={btn(false)}>Gerade</button>}
             </>
           )}
-          {selected.type === 'dim' && (
+          {selected?.type === 'dim' && (
             <input data-testid="dim-text" placeholder="Text (leer = gemessene Länge)" value={selected.text ?? ''} onChange={e => patchSel({ text: e.target.value || undefined } as Partial<SceneShape>, 'dim')} style={{ ...input, flex: 1, minWidth: 180 }} />
           )}
-          {selected.type === 'grid' && (
+          {selected?.type === 'grid' && (
             <>
               <input data-testid="grid-label" placeholder="Beschriftung, z. B. Feld A" value={selected.label ?? ''} onChange={e => patchSel({ label: e.target.value || undefined } as Partial<SceneShape>, 'grid')} style={{ ...input, flex: 1, minWidth: 160 }} />
               <button onClick={() => patchSel({ showSize: !selected.showSize } as Partial<SceneShape>)} style={btn(selected.showSize)}>Größe anzeigen</button>
             </>
           )}
-          {selected.type === 'text' && (
+          {selected?.type === 'text' && (
             <>
               <input data-testid="text-edit" value={selected.text} onChange={e => patchSel({ text: e.target.value } as Partial<SceneShape>, 'text')} style={{ ...input, flex: 1, minWidth: 160 }} />
               <button onClick={() => patchSel({ size: Math.max(0.6, +(selected.size - 0.2).toFixed(1)) } as Partial<SceneShape>)} style={btn(false)}>A−</button>
               <button onClick={() => patchSel({ size: Math.min(3, +(selected.size + 0.2).toFixed(1)) } as Partial<SceneShape>)} style={btn(false)}>A+</button>
             </>
           )}
+          {many && <span style={{ ...small, color: NAVY }}>{picked.length} Objekte gewählt</span>}
+          {colorTargets.length > 0 && (
+            <span data-testid="color-row" style={{ display: 'inline-flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={small}>Farbe</span>
+              {COLOR_CHOICES.map(c => (
+                <button key={c.color} data-testid={`color-${c.color.slice(1)}`} aria-label={c.name} title={c.name} onClick={() => recolor(c.color)}
+                  style={{ width: 26, height: 26, borderRadius: 99, background: c.color, border: `2.5px solid ${commonColor === c.color ? '#e8780a' : '#cfd4e2'}`, cursor: 'pointer', padding: 0 }} />
+              ))}
+              <button data-testid="color-reset" onClick={() => recolor(undefined)} style={btn(false, { minHeight: 30, padding: '3px 8px', fontSize: 11 })} title="Standardfarbe">Standard</button>
+            </span>
+          )}
+          {scaleTargets.length > 0 && selected?.type !== 'text' && (
+            <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>
+              <span style={small}>Größe</span>
+              <button data-testid="size-down" onClick={() => resize(1 / 1.25)} style={btn(false)} aria-label="Kleiner">−</button>
+              <button data-testid="size-up" onClick={() => resize(1.25)} style={btn(false)} aria-label="Größer">+</button>
+              {selected && scaleOf(selected) !== 1 && <button data-testid="size-reset" onClick={() => setShapes(scaleShapes(cur.shapes, ids, 1 / scaleOf(selected)))} style={btn(false, { fontSize: 11 })}>{Math.round(scaleOf(selected) * 100)} % · zurücksetzen</button>}
+            </span>
+          )}
           <span style={{ flex: 1 }} />
-          {selected.type !== 'pen' && <button data-testid="duplicate" onClick={duplicateSel} style={btn(false)}>Duplizieren</button>}
+          {many && <button onClick={() => setSelectedIds([])} style={btn(false)}>Auswahl aufheben</button>}
+          <button data-testid="duplicate" onClick={duplicateSel} style={btn(false)}>Duplizieren</button>
           <button data-testid="delete" onClick={deleteSel} style={btn(false, { color: '#991b1b', borderColor: '#fca5a5' })}>Löschen</button>
         </div>
       )}

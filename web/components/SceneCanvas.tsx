@@ -5,13 +5,14 @@
 //   place tools (player, ball, material)  press = place, keep dragging to position, release = done
 //   line tools, distance, field           press at the start, drag, release at the end (a plain tap makes nothing)
 //   pen                                   press and draw
-//   select                                press a shape to select and drag it; drag a round handle of the selected shape to change it
+//   select                                press a shape to select and drag it; drag a round handle of the selected shape to change it;
+//                                         press on empty space and drag to draw a selection rectangle; Shift/Ctrl-click adds or removes a shape
 // Lines attach to the players at their ends, so moving a player carries its passes along.
 
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   TEAM_COLORS, equipSize, ballRadius, symbolUnit, viewBoxOf, drawOrder, dimText, gridSizeText, textHeight,
-  makeShape, isMeaningful, moveShape, updateShape, hitTest, handleAt, handlesOf, handlePatch, lineEndTarget, snapPt, snapStep, clampPt,
+  makeShape, isMeaningful, moveShapes, updateShape, shapesInRect, shapeBox, unionBox, scaleOf, equipDims, playerRadius, isLight, hitTest, handleAt, handlesOf, handlePatch, lineEndTarget, snapPt, snapStep, clampPt,
   type Scene, type SceneShape, type SceneBackground, type Tool, type Team, type EquipKind, type Pt,
 } from '@/lib/scene'
 import { arrowHead, blobPath, boxPath, curvePoints, decimate, hashStr, polyPath, smoothPath, trimPolyline, wavy, wobble, dist } from '@/lib/sketch'
@@ -35,24 +36,24 @@ export function equipGlyph(kind: EquipKind, u: number, k: number, opts: { color?
   const common = { stroke: INK, strokeWidth: sw, strokeLinejoin: 'round' as const, strokeLinecap: 'round' as const }
   switch (kind) {
     case 'cone':
-      return <path d={`M0 ${-w / 2}L${w / 2} ${w / 2}L${-w / 2} ${w / 2}Z`} fill="#f59e0b" {...common} />
+      return <path d={`M0 ${-w / 2}L${w / 2} ${w / 2}L${-w / 2} ${w / 2}Z`} fill={opts.color ?? '#f59e0b'} {...common} />
     case 'colorpole':
       return (
         <g>
           <circle r={w / 2} fill={opts.color ?? '#f5c542'} {...common} />
-          {opts.num ? <text y={0} textAnchor="middle" dominantBaseline="central" fontSize={w * 0.8} fontWeight={700} fill={opts.color === '#ffffff' || opts.color === '#f5c542' || !opts.color ? INK : '#fff'} style={{ fontFamily: SANS }}>{opts.num}</text> : null}
+          {opts.num ? <text y={0} textAnchor="middle" dominantBaseline="central" fontSize={w * 0.8} fontWeight={700} fill={!opts.color || isLight(opts.color) ? INK : '#fff'} style={{ fontFamily: SANS }}>{opts.num}</text> : null}
         </g>
       )
     case 'pole':
-      return <g><circle r={w / 2} fill="#fff" {...common} /><circle r={w * 0.12} fill={INK} /></g>
+      return <g><circle r={w / 2} fill={opts.color ?? '#fff'} {...common} /><circle r={w * 0.12} fill={INK} /></g>
     case 'hurdle':
-      return <g {...common} fill="none"><path d={`M${-w / 2} 0H${w / 2}`} strokeWidth={sw * 1.3} /><path d={`M${-w / 2} ${-d}V${d}M${w / 2} ${-d}V${d}`} /></g>
+      return <g {...common} stroke={opts.color ?? INK} fill="none"><path d={`M${-w / 2} 0H${w / 2}`} strokeWidth={sw * 1.3} /><path d={`M${-w / 2} ${-d}V${d}M${w / 2} ${-d}V${d}`} /></g>
     case 'ring':
-      return <circle r={w / 2} fill="none" {...common} strokeWidth={sw * 1.5} />
+      return <circle r={w / 2} fill="none" {...common} stroke={opts.color ?? INK} strokeWidth={sw * 1.5} />
     case 'rebounder': {
       const hatch: string[] = []
       for (let i = -2; i <= 2; i++) hatch.push(`M${(i * w) / 5 - d / 2} ${d / 2}L${(i * w) / 5 + d / 2} ${-d / 2}`)
-      return <g><rect x={-w / 2} y={-d / 2} width={w} height={d} fill="#fff" {...common} /><path d={hatch.join('')} stroke={INK} strokeWidth={sw * 0.6} clipPath="none" opacity={0.5} fill="none" /></g>
+      return <g><rect x={-w / 2} y={-d / 2} width={w} height={d} fill={opts.color ?? '#fff'} {...common} /><path d={hatch.join('')} stroke={INK} strokeWidth={sw * 0.6} clipPath="none" opacity={0.5} fill="none" /></g>
     }
     case 'minigoal': case 'kleinfeldgoal': case 'goal': {
       const net: string[] = []
@@ -62,7 +63,7 @@ export function equipGlyph(kind: EquipKind, u: number, k: number, opts: { color?
         <g>
           <rect x={-w / 2} y={-d / 2} width={w} height={d} fill="#e9edf8" opacity={0.7} />
           <path d={net.join('')} stroke={LINE_GREY} strokeWidth={1 * k} fill="none" />
-          <path d={`M${-w / 2} ${-d / 2}V${d / 2}H${w / 2}V${-d / 2}`} fill="none" {...common} strokeWidth={sw * 1.4} />
+          <path d={`M${-w / 2} ${-d / 2}V${d / 2}H${w / 2}V${-d / 2}`} fill="none" {...common} stroke={opts.color ?? INK} strokeWidth={sw * 1.4} />
         </g>
       )
     }
@@ -120,8 +121,8 @@ interface Props {
   equip?: EquipKind
   poleColor?: string
   snap?: boolean
-  selectedId?: string | null
-  onSelect?: (id: string | null) => void
+  selectedIds?: string[]
+  onSelect?: (ids: string[]) => void
   /** Called once when a gesture ends with a change. */
   onCommit?: (shapes: SceneShape[]) => void
   /** The text tool was tapped: the editor asks for the text and adds the shape. */
@@ -132,19 +133,24 @@ interface Props {
 }
 
 type Drag =
-  | { kind: 'move'; id: string; start: Pt; before: SceneShape[]; created: boolean; moved: boolean }
+  | { kind: 'move'; ids: string[]; anchorId: string; start: Pt; before: SceneShape[]; created: boolean; moved: boolean }
+  | { kind: 'marquee'; start: Pt; add: string[]; moved: boolean }
   | { kind: 'handle'; id: string; key: string; before: SceneShape[]; moved: boolean }
   | { kind: 'create'; id: string; before: SceneShape[]; tool: Tool }
 
+const NONE: string[] = []
+
 export default function SceneCanvas(props: Props) {
-  const { scene, look = 'sketch', editable = false, tool = 'select', team = 'a', equip = 'cone', poleColor, snap = false, selectedId = null, onSelect, onCommit, onRequestText, className, style, testId } = props
+  const { scene, look = 'sketch', editable = false, tool = 'select', team = 'a', equip = 'cone', poleColor, snap = false, selectedIds = NONE, onSelect, onCommit, onRequestText, className, style, testId } = props
   const bg = scene.background
   const vb = viewBoxOf(bg)
   const u = symbolUnit(bg)
   const svgRef = useRef<SVGSVGElement>(null)
   const [ppm, setPpm] = useState(10)
   const [draft, setDraft] = useState<SceneShape[] | null>(null)
+  const [marquee, setMarquee] = useState<{ a: Pt; b: Pt } | null>(null)
   const dragRef = useRef<Drag | null>(null)
+  const marqueeRef = useRef<{ a: Pt; b: Pt } | null>(null)
   const pointerId = useRef<number | null>(null)
   // k = metres per drawn pixel. Read-only miniatures scale their strokes and labels down with the picture; the editor never does.
   const kTouch = 1 / ppm
@@ -178,14 +184,24 @@ export default function SceneCanvas(props: Props) {
     dragRef.current = null
     pointerId.current = null
     if (!d) return
+    if (d.kind === 'marquee') {
+      const m = marqueeRef.current
+      marqueeRef.current = null
+      setMarquee(null)
+      if (commit && d.moved && m) {
+        const inside = shapesInRect(scene.shapes, m.a, m.b, bg)
+        onSelect?.([...new Set([...d.add, ...inside])])
+      }
+      return
+    }
     const cur = override ?? draft
     setDraft(null)
     if (!commit || !cur) return
     if (d.kind === 'create') {
       const s = cur.find(x => x.id === d.id)
-      if (!s || !isMeaningful(s, 10 * kTouch)) { onSelect?.(null); return }
+      if (!s || !isMeaningful(s, 10 * kTouch)) { onSelect?.([]); return }
       onCommit?.(cur)
-      onSelect?.(s.id)
+      onSelect?.([s.id])
       return
     }
     if ((d.kind === 'move' && (d.moved || d.created)) || (d.kind === 'handle' && d.moved)) onCommit?.(cur)
@@ -203,7 +219,7 @@ export default function SceneCanvas(props: Props) {
     const base = scene.shapes
 
     if (tool === 'select') {
-      const sel = selectedId ? base.find(s => s.id === selectedId) : undefined
+      const sel = selectedIds.length === 1 ? base.find(x => x.id === selectedIds[0]) : undefined
       if (sel) {
         const key = handleAt(sel, bg, p, tol * 1.2, base)
         if (key) {
@@ -212,11 +228,18 @@ export default function SceneCanvas(props: Props) {
         }
       }
       const id = hitTest(base, p, tol, bg)
-      onSelect?.(id)
+      const extend = e.shiftKey || e.ctrlKey || e.metaKey
+      if (id && extend) { onSelect?.(selectedIds.includes(id) ? selectedIds.filter(x => x !== id) : [...selectedIds, id]); return }
       if (id) {
-        dragRef.current = { kind: 'move', id, start: p, before: base, created: false, moved: false }
-        pointerId.current = e.pointerId; svgRef.current?.setPointerCapture(e.pointerId)
+        const ids = selectedIds.includes(id) ? selectedIds : [id]
+        if (ids !== selectedIds) onSelect?.(ids)
+        dragRef.current = { kind: 'move', ids, anchorId: id, start: p, before: base, created: false, moved: false }
+      } else {
+        const add = extend ? selectedIds : []
+        if (!extend) onSelect?.([])
+        dragRef.current = { kind: 'marquee', start: p, add, moved: false }
       }
+      pointerId.current = e.pointerId; svgRef.current?.setPointerCapture(e.pointerId)
       return
     }
     if (tool === 'text') { onRequestText?.(sp); return }
@@ -224,8 +247,8 @@ export default function SceneCanvas(props: Props) {
     if (tool === 'player' || tool === 'ball' || tool === 'equip') {
       const s = makeShape(tool, sp, { team, equip, color: equip === 'colorpole' ? poleColor : undefined })
       if (!s) return
-      setDraft([...base, s]); onSelect?.(s.id)
-      dragRef.current = { kind: 'move', id: s.id, start: p, before: [...base, s], created: true, moved: false }
+      setDraft([...base, s]); onSelect?.([s.id])
+      dragRef.current = { kind: 'move', ids: [s.id], anchorId: s.id, start: p, before: [...base, s], created: true, moved: false }
       pointerId.current = e.pointerId; svgRef.current?.setPointerCapture(e.pointerId); return
     }
 
@@ -233,7 +256,7 @@ export default function SceneCanvas(props: Props) {
     const s = makeShape(tool, sp)
     if (!s) return
     if (s.type === 'line') { const t = lineEndTarget(base, p, bg); s.from = t.pos; s.to = t.pos; if (t.id) s.fromId = t.id }
-    setDraft([...base, s]); onSelect?.(null)
+    setDraft([...base, s]); onSelect?.([])
     dragRef.current = { kind: 'create', id: s.id, before: base, tool }
     pointerId.current = e.pointerId; svgRef.current?.setPointerCapture(e.pointerId)
   }
@@ -243,16 +266,23 @@ export default function SceneCanvas(props: Props) {
     if (!d || e.pointerId !== pointerId.current) return
     const p = clampPt(toWorld(e), bg)
     const step = snap ? snapStep(bg) : undefined
+    if (d.kind === 'marquee') {
+      if (!d.moved && Math.hypot(p[0] - d.start[0], p[1] - d.start[1]) < 6 * kTouch) return
+      d.moved = true
+      const m = { a: d.start, b: p }
+      marqueeRef.current = m; setMarquee(m)
+      return
+    }
     if (d.kind === 'move') {
       let dx = p[0] - d.start[0], dy = p[1] - d.start[1]
       if (!d.moved && Math.hypot(dx, dy) < 4 * kTouch && !d.created) return
-      const s = d.before.find(x => x.id === d.id)!
+      const s = d.before.find(x => x.id === d.anchorId)!
       if (step) {
         const anchor: Pt = 'pos' in s ? s.pos : 'a' in s ? s.a : 'from' in s ? s.from : s.points[0]
         const t = snapPt([anchor[0] + dx, anchor[1] + dy], step); dx = t[0] - anchor[0]; dy = t[1] - anchor[1]
       }
       d.moved = true
-      setDraft(moveShape(d.before, d.id, dx, dy))
+      setDraft(moveShapes(d.before, d.ids, dx, dy))
     } else if (d.kind === 'handle') {
       const s = d.before.find(x => x.id === d.id)!
       const patch = handlePatch(s, d.key, p, d.before, bg, step)
@@ -294,16 +324,17 @@ export default function SceneCanvas(props: Props) {
     const seed = hashStr(s.id)
     switch (s.type) {
       case 'player': {
-        const r = u * 0.9
+        const r = playerRadius(u, s.scale)
+        const fillC = s.color ?? TEAM_COLORS[s.team]
         return (
           <g key={s.id} data-shape-id={s.id} data-type="player">
-            <path d={blobPath(s.pos, r, seed, sketch ? 0.11 : 0)} fill={TEAM_COLORS[s.team]} stroke={INK} strokeWidth={sw} strokeLinejoin="round" />
-            {s.num ? <text x={s.pos[0]} y={s.pos[1]} textAnchor="middle" dominantBaseline="central" fontSize={r * 1.15} fontWeight={700} fill={s.team === 'd' ? INK : '#fff'} style={{ fontFamily: font }}>{s.num}</text> : null}
+            <path d={blobPath(s.pos, r, seed, sketch ? 0.11 : 0)} fill={fillC} stroke={INK} strokeWidth={sw} strokeLinejoin="round" />
+            {s.num ? <text x={s.pos[0]} y={s.pos[1]} textAnchor="middle" dominantBaseline="central" fontSize={r * 1.15} fontWeight={700} fill={isLight(fillC) ? INK : '#fff'} style={{ fontFamily: font }}>{s.num}</text> : null}
           </g>
         )
       }
       case 'ball': {
-        const r = ballRadius(u)
+        const r = ballRadius(u) * (s.scale ?? 1)
         return (
           <g key={s.id} data-shape-id={s.id} data-type="ball" transform={`translate(${s.pos[0]} ${s.pos[1]})`}>
             <circle r={r} fill="#fff" stroke={INK} strokeWidth={sw * 0.9} />
@@ -312,11 +343,11 @@ export default function SceneCanvas(props: Props) {
         )
       }
       case 'equip':
-        return <g key={s.id} data-shape-id={s.id} data-type="equip" data-kind={s.kind} transform={`translate(${s.pos[0]} ${s.pos[1]}) rotate(${s.angle})`}>{equipGlyph(s.kind, u, k, { color: s.color, num: s.num, look })}</g>
+        return <g key={s.id} data-shape-id={s.id} data-type="equip" data-kind={s.kind} transform={`translate(${s.pos[0]} ${s.pos[1]}) rotate(${s.angle})`}><g transform={`scale(${s.scale ?? 1})`}>{equipGlyph(s.kind, u, k / (s.scale ?? 1), { color: s.color, num: s.num, look })}</g></g>
       case 'line': {
         let pts = curvePoints(s.from, s.to, s.bend, 28)
-        const a = s.fromId && players.has(s.fromId) ? u * 1.25 : 0
-        const b = s.toId && players.has(s.toId) ? u * 1.25 + 4 * k : 4 * k
+        const a = s.fromId && players.has(s.fromId) ? u * 1.25 * scaleOf(players.get(s.fromId)!) : 0
+        const b = s.toId && players.has(s.toId) ? u * 1.25 * scaleOf(players.get(s.toId)!) + 4 * k : 4 * k
         pts = trimPolyline(pts, a, b)
         const head = 15 * k
         let body = pts
@@ -325,7 +356,7 @@ export default function SceneCanvas(props: Props) {
         const tip = body[body.length - 1]
         const from = body[Math.max(0, body.length - 1 - (s.kind === 'move' ? 6 : 3))]
         return (
-          <g key={s.id} data-shape-id={s.id} data-type="line" data-kind={s.kind} fill="none" stroke={INK} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
+          <g key={s.id} data-shape-id={s.id} data-type="line" data-kind={s.kind} fill="none" stroke={s.color ?? INK} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
             <path d={polyPath(body)} strokeDasharray={s.kind === 'return' ? `${11 * k} ${8 * k}` : undefined} />
             <path d={arrowHead(from, tip, head, seed, sketch ? 2 * k : 0)} />
           </g>
@@ -340,11 +371,11 @@ export default function SceneCanvas(props: Props) {
         const off = 8 * k + Math.abs(nx) * txt.length * 4.6 * k + Math.abs(ny) * 8 * k
         const t = 7 * k, mid: Pt = [(s.a[0] + s.b[0]) / 2 + nx * off, (s.a[1] + s.b[1]) / 2 + ny * off]
         return (
-          <g key={s.id} data-shape-id={s.id} data-type="dim" stroke={DIM} strokeWidth={1.8 * k} fill="none" strokeLinecap="round">
+          <g key={s.id} data-shape-id={s.id} data-type="dim" stroke={s.color ?? DIM} strokeWidth={1.8 * k} fill="none" strokeLinecap="round">
             <path d={`M${s.a[0]} ${s.a[1]}L${s.b[0]} ${s.b[1]}`} />
             <path d={`M${s.a[0] + nx * t} ${s.a[1] + ny * t}L${s.a[0] - nx * t} ${s.a[1] - ny * t}M${s.b[0] + nx * t} ${s.b[1] + ny * t}L${s.b[0] - nx * t} ${s.b[1] - ny * t}`} />
             <path d={arrowHead(s.b, s.a, 9 * k) + arrowHead(s.a, s.b, 9 * k)} />
-            <text x={mid[0]} y={mid[1]} textAnchor="middle" dominantBaseline="central" fontSize={16 * k} fontWeight={700} fill={DIM} stroke={PAPER} strokeWidth={4 * k} paintOrder="stroke" style={{ fontFamily: font }}>{txt}</text>
+            <text x={mid[0]} y={mid[1]} textAnchor="middle" dominantBaseline="central" fontSize={16 * k} fontWeight={700} fill={s.color ?? DIM} stroke={PAPER} strokeWidth={4 * k} paintOrder="stroke" style={{ fontFamily: font }}>{txt}</text>
           </g>
         )
       }
@@ -352,25 +383,25 @@ export default function SceneCanvas(props: Props) {
         const x0 = Math.min(s.a[0], s.b[0]), x1 = Math.max(s.a[0], s.b[0]), y1 = Math.max(s.a[1], s.b[1]), y0 = Math.min(s.a[1], s.b[1])
         return (
           <g key={s.id} data-shape-id={s.id} data-type="grid">
-            <path d={boxPath(s.a, s.b, seed, amp)} fill="none" stroke={INK} strokeWidth={sw} strokeDasharray={`${16 * k} ${10 * k}`} strokeLinecap="round" />
-            {s.label?.trim() ? <text x={(x0 + x1) / 2} y={y0 - 9 * k} textAnchor="middle" fontSize={20 * k} fontWeight={700} fill={INK} style={{ fontFamily: font }}>{s.label}</text> : null}
-            {s.showSize ? <text x={(x0 + x1) / 2} y={y1 + 18 * k} textAnchor="middle" fontSize={15 * k} fontWeight={600} fill={DIM} style={{ fontFamily: font }}>{gridSizeText(s)}</text> : null}
+            <path d={boxPath(s.a, s.b, seed, amp)} fill="none" stroke={s.color ?? INK} strokeWidth={sw} strokeDasharray={`${16 * k} ${10 * k}`} strokeLinecap="round" />
+            {s.label?.trim() ? <text x={(x0 + x1) / 2} y={y0 - 9 * k} textAnchor="middle" fontSize={20 * k} fontWeight={700} fill={s.color ?? INK} style={{ fontFamily: font }}>{s.label}</text> : null}
+            {s.showSize ? <text x={(x0 + x1) / 2} y={y1 + 18 * k} textAnchor="middle" fontSize={15 * k} fontWeight={600} fill={s.color ?? DIM} style={{ fontFamily: font }}>{gridSizeText(s)}</text> : null}
           </g>
         )
       }
       case 'pen':
         return <path key={s.id} data-shape-id={s.id} data-type="pen" d={smoothPath(s.points)} fill="none" stroke={s.color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" />
       case 'text':
-        return <text key={s.id} data-shape-id={s.id} data-type="text" x={s.pos[0]} y={s.pos[1]} textAnchor="middle" dominantBaseline="central" fontSize={textHeight(s.size, u) * (sketch ? 1.1 : 0.95)} fontWeight={700} fill={INK} stroke={PAPER} strokeWidth={3 * k} paintOrder="stroke" style={{ fontFamily: font }}>{s.text}</text>
+        return <text key={s.id} data-shape-id={s.id} data-type="text" x={s.pos[0]} y={s.pos[1]} textAnchor="middle" dominantBaseline="central" fontSize={textHeight(s.size, u) * (sketch ? 1.1 : 0.95)} fontWeight={700} fill={s.color ?? INK} stroke={PAPER} strokeWidth={3 * k} paintOrder="stroke" style={{ fontFamily: font }}>{s.text}</text>
     }
   }
 
   function halo(s: SceneShape) {
     const stroke = { fill: 'none', stroke: HALO, strokeOpacity: 0.45, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
     switch (s.type) {
-      case 'player': return <circle cx={s.pos[0]} cy={s.pos[1]} r={u * 1.25} {...stroke} strokeWidth={4 * k} />
-      case 'ball': return <circle cx={s.pos[0]} cy={s.pos[1]} r={ballRadius(u) + 5 * k} {...stroke} strokeWidth={4 * k} />
-      case 'equip': { const z = equipSize(s.kind, u), pad = 5 * k; return <rect x={-z.w / 2 - pad} y={-z.d / 2 - pad} width={z.w + 2 * pad} height={z.d + 2 * pad} rx={pad} transform={`translate(${s.pos[0]} ${s.pos[1]}) rotate(${s.angle})`} {...stroke} strokeWidth={3 * k} strokeDasharray={`${6 * k} ${5 * k}`} /> }
+      case 'player': return <circle cx={s.pos[0]} cy={s.pos[1]} r={playerRadius(u, s.scale) * 1.4} {...stroke} strokeWidth={4 * k} />
+      case 'ball': return <circle cx={s.pos[0]} cy={s.pos[1]} r={ballRadius(u) * (s.scale ?? 1) + 5 * k} {...stroke} strokeWidth={4 * k} />
+      case 'equip': { const z = equipDims(s, u), pad = 5 * k; return <rect x={-z.w / 2 - pad} y={-z.d / 2 - pad} width={z.w + 2 * pad} height={z.d + 2 * pad} rx={pad} transform={`translate(${s.pos[0]} ${s.pos[1]}) rotate(${s.angle})`} {...stroke} strokeWidth={3 * k} strokeDasharray={`${6 * k} ${5 * k}`} /> }
       case 'line': return <path d={polyPath(curvePoints(s.from, s.to, s.bend, 28))} {...stroke} strokeWidth={11 * k} />
       case 'dim': return <path d={`M${s.a[0]} ${s.a[1]}L${s.b[0]} ${s.b[1]}`} {...stroke} strokeWidth={11 * k} />
       case 'pen': return <path d={smoothPath(s.points)} {...stroke} strokeWidth={11 * k} />
@@ -379,7 +410,9 @@ export default function SceneCanvas(props: Props) {
     }
   }
 
-  const selected = editable && selectedId ? shapes.find(s => s.id === selectedId) : undefined
+  const selectedShapes = editable ? shapes.filter(s => selectedIds.includes(s.id)) : []
+  const selected = selectedShapes.length === 1 ? selectedShapes[0] : undefined
+  const groupBox = selectedShapes.length > 1 ? unionBox(selectedShapes.map(s => shapeBox(s, bg))) : null
   const ordered = drawOrder(shapes)
   const cursor = !editable ? 'default' : tool === 'select' ? 'default' : 'crosshair'
 
@@ -396,14 +429,17 @@ export default function SceneCanvas(props: Props) {
       onPointerCancel={() => finish(false)}
     >
       <Background bg={bg} k={k} look={look} />
-      {selected && halo(selected)}
+      {selectedShapes.map(s => <g key={`h${s.id}`}>{halo(s)}</g>)}
+      {groupBox && <rect data-testid="group-box" x={groupBox.x0 - 6 * k} y={groupBox.y0 - 6 * k} width={groupBox.x1 - groupBox.x0 + 12 * k} height={groupBox.y1 - groupBox.y0 + 12 * k} rx={6 * k} fill="none" stroke={HALO} strokeWidth={2 * k} strokeDasharray={`${8 * k} ${6 * k}`} />}
       {ordered.map(renderShape)}
       {selected && handlesOf(selected, bg, shapes).map(h => (
         <g key={h.key} data-handle={h.key}>
           <circle cx={h.pos[0]} cy={h.pos[1]} r={7 * k} fill="#fff" stroke={HALO} strokeWidth={2.2 * k} />
+          {h.key === 'size' ? <path d={`M${h.pos[0] - 3 * k} ${h.pos[1] + 3 * k}L${h.pos[0] + 3 * k} ${h.pos[1] - 3 * k}M${h.pos[0] + 3 * k} ${h.pos[1] - 1 * k}V${h.pos[1] - 3 * k}H${h.pos[0] + 1 * k}M${h.pos[0] - 3 * k} ${h.pos[1] + 1 * k}V${h.pos[1] + 3 * k}H${h.pos[0] - 1 * k}`} fill="none" stroke={HALO} strokeWidth={1.6 * k} /> : null}
           {h.key === 'rot' ? <path d={`M${h.pos[0] - 3 * k} ${h.pos[1]}a${3 * k} ${3 * k} 0 1 1 ${3 * k} ${3 * k}`} fill="none" stroke={HALO} strokeWidth={1.6 * k} /> : null}
         </g>
       ))}
+      {marquee && <rect data-testid="marquee" x={Math.min(marquee.a[0], marquee.b[0])} y={Math.min(marquee.a[1], marquee.b[1])} width={Math.abs(marquee.b[0] - marquee.a[0])} height={Math.abs(marquee.b[1] - marquee.a[1])} fill={HALO} fillOpacity={0.08} stroke={HALO} strokeWidth={1.6 * k} strokeDasharray={`${7 * k} ${5 * k}`} />}
     </svg>
   )
 }

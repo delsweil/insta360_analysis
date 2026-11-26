@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   defaultBackground, viewBoxOf, symbolUnit, formatMetres, dimText, gridSizeText, clampFrameSize, snapPt, snapStep, clampPt,
   makeShape, isMeaningful, moveShape, removeShape, duplicateShape, copyScene, emptyScene, hitTest, handlesOf, handleAt, handlePatch,
-  lineEndTarget, drawOrder, rotHandle, equipSize, updateShape, hist, hPush, hUndo, hRedo,
+  lineEndTarget, drawOrder, moveShapes, duplicateShapes, removeShapes, colorShapes, scaleShapes, shapesInRect, shapeBox, sizeHandle, scaleOf, equipDims, isLight, rotHandle, equipSize, updateShape, hist, hPush, hUndo, hRedo,
   type SceneShape, type Scene,
 } from './scene.ts'
 import { dist, curvePoints, trimPolyline, resample, wobble, wavy, arrowHead, blobPath, decimate, pathLength, hashStr } from './sketch.ts'
@@ -205,3 +205,62 @@ test('sketch: arrow head, blob, decimate, hash', () => {
   assert.equal(decimate([[0, 0], [0.01, 0], [0.02, 0], [1, 0], [1.01, 0]], 0.5).length, 3)
   assert.ok(hashStr('a') !== hashStr('b')); assert.ok(pathLength([[0, 0], [3, 4]]) === 5 && dist([0, 0], [3, 4]) === 5)
 })
+
+// group operations, colour, size, rectangle selection
+test('group move keeps attached lines on players that move with them, lets go of the rest', () => {
+  const shapes = [player('p1', 2, 2), player('p2', 10, 2), player('p3', 15, 15), line('l1', [2, 2], [10, 2], { fromId: 'p1', toId: 'p2' }), line('l2', [10, 2], [15, 15], { fromId: 'p2', toId: 'p3' })]
+  const out = moveShapes(shapes, ['p1', 'p2', 'l1'], 1, 1)
+  const l1 = out.find(s => s.id === 'l1') as Extract<SceneShape, { type: 'line' }>
+  assert.deepEqual(l1.from, [3, 3]); assert.deepEqual(l1.to, [11, 3]); assert.equal(l1.fromId, 'p1'); assert.equal(l1.toId, 'p2')
+  const l2 = out.find(s => s.id === 'l2') as Extract<SceneShape, { type: 'line' }>
+  assert.deepEqual(l2.from, [11, 3]); assert.deepEqual(l2.to, [15, 15]) // unselected line follows only its moved end
+  const lone = moveShapes(shapes, ['l1'], 1, 0) // a selected line alone detaches
+  assert.equal((lone.find(s => s.id === 'l1') as Extract<SceneShape, { type: 'line' }>).fromId, undefined)
+})
+test('duplicating a group remaps attachments inside the group and drops the others', () => {
+  const shapes = [player('p1', 2, 2), player('p2', 10, 2), line('l1', [2, 2], [10, 2], { fromId: 'p1', toId: 'p2' })]
+  const r = duplicateShapes(shapes, ['p1', 'l1'], 1, 1)
+  assert.equal(r.shapes.length, 5); assert.equal(r.newIds.length, 2)
+  const nl = r.shapes.find(s => s.id === r.newIds[1]) as Extract<SceneShape, { type: 'line' }>
+  assert.equal(nl.fromId, r.newIds[0]); assert.equal(nl.toId, undefined)
+  assert.ok(new Set(r.shapes.map(s => s.id)).size === 5)
+})
+test('removeShapes deletes several and detaches lines', () => {
+  const shapes = [player('p1', 2, 2), player('p2', 10, 2), line('l1', [2, 2], [10, 2], { fromId: 'p1', toId: 'p2' })]
+  const out = removeShapes(shapes, ['p1', 'p2'])
+  assert.equal(out.length, 1); assert.equal((out[0] as Extract<SceneShape, { type: 'line' }>).fromId, undefined)
+})
+test('colour and scale apply to the right shapes', () => {
+  const shapes: SceneShape[] = [player('p', 1, 1), { id: 'b', type: 'ball', pos: [2, 2] }, line('l', [0, 0], [5, 5]), { id: 'g', type: 'equip', kind: 'goal', pos: [10, 10], angle: 0 }, { id: 't', type: 'text', pos: [3, 3], text: 'x', size: 1 }]
+  const c = colorShapes(shapes, ['p', 'b', 'l', 'g'], '#ef4444')
+  assert.equal((c[0] as { color?: string }).color, '#ef4444'); assert.equal('color' in c[1], false); assert.equal((c[2] as { color?: string }).color, '#ef4444'); assert.equal((c[3] as { color?: string }).color, '#ef4444')
+  assert.equal('color' in colorShapes(c, ['p'], undefined)[0], false)
+  const z = scaleShapes(shapes, ['p', 'b', 'g', 't', 'l'], 2)
+  assert.equal(scaleOf(z[0]), 2); assert.equal(scaleOf(z[1]), 2); assert.equal(scaleOf(z[3]), 2); assert.equal((z[4] as { size: number }).size, 2)
+  assert.deepEqual(z[2], shapes[2]) // lines are not scaled
+  assert.equal(scaleOf(scaleShapes(shapes, ['p'], 100)[0]), 4); assert.equal(scaleOf(scaleShapes(shapes, ['p'], 0.001)[0]), 0.4)
+  const eq = z[3] as Extract<SceneShape, { type: 'equip' }>
+  assert.ok(Math.abs(equipDims(eq, symbolUnit(bg)).w - 7.32 * 2) < 1e-9)
+})
+test('scaled symbols are easier to hit and the size handle follows them', () => {
+  const small: SceneShape = player('p', 10, 10)
+  const big: SceneShape = { ...player('p', 10, 10), scale: 2 } as SceneShape
+  const u = symbolUnit(bg), p: [number, number] = [10 + u * 1.7, 10]
+  assert.equal(hitTest([small], p, 0.01, bg), null); assert.equal(hitTest([big], p, 0.01, bg), 'p')
+  const h0 = sizeHandle(small as Extract<SceneShape, { type: 'player' }>, bg), h1 = sizeHandle(big as Extract<SceneShape, { type: 'player' }>, bg)
+  assert.ok(dist(h1, [10, 10]) > dist(h0, [10, 10]))
+  // dragging the handle out to twice the distance doubles the size, back in shrinks it
+  const patch = handlePatch(small, 'size', [10 + (u * 0.9 * 2 + u * 0.5), 10], [small], bg) as { scale: number }
+  assert.ok(Math.abs(patch.scale - 2) <= 0.05)
+  assert.equal((handlePatch(small, 'size', [10, 10], [small], bg) as { scale: number }).scale, 0.4)
+  assert.ok(handlesOf(small, bg).some(h => h.key === 'size'))
+})
+test('rectangle selection takes what lies completely inside', () => {
+  const shapes: SceneShape[] = [player('a', 3, 3), player('b', 8, 8), player('c', 18, 25), { id: 'g', type: 'grid', a: [1, 1], b: [12, 12], showSize: true }, line('l', [4, 4], [9, 9])]
+  assert.deepEqual(shapesInRect(shapes, [0, 0], [10, 10], bg).sort(), ['a', 'b', 'l'])
+  assert.deepEqual(shapesInRect(shapes, [10, 10], [0, 0], bg).sort(), ['a', 'b', 'l']) // any corner order
+  assert.deepEqual(shapesInRect(shapes, [0, 0], [13, 13], bg).sort(), ['a', 'b', 'g', 'l'])
+  assert.deepEqual(shapesInRect(shapes, [3, 3], [4, 4], bg), []) // a player only partly inside is not taken
+  const b = shapeBox(player('x', 5, 5), bg); assert.ok(b.x0 < 5 && b.x1 > 5)
+})
+test('light colours get dark text', () => { assert.ok(isLight('#ffffff') && isLight('#f5c542')); assert.ok(!isLight('#1b2a6b') && !isLight('#ef4444')) })

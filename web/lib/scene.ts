@@ -33,14 +33,14 @@ export const LINE_LABELS: Record<LineKind, string> = { pass: 'Pass', return: 'R�
 export type Animated = { t0?: number; t1?: number; kf?: { t: number; v: unknown }[] }
 
 export type SceneShape = { id: string } & Animated & (
-  | { type: 'player'; pos: Pt; team: Team; num?: string }
-  | { type: 'ball'; pos: Pt }
-  | { type: 'equip'; kind: EquipKind; pos: Pt; angle: number; color?: string; num?: string }
-  | { type: 'line'; kind: LineKind; from: Pt; to: Pt; bend: number; fromId?: string; toId?: string }
-  | { type: 'dim'; a: Pt; b: Pt; text?: string }
-  | { type: 'grid'; a: Pt; b: Pt; label?: string; showSize: boolean }
+  | { type: 'player'; pos: Pt; team: Team; num?: string; color?: string; scale?: number }
+  | { type: 'ball'; pos: Pt; scale?: number }
+  | { type: 'equip'; kind: EquipKind; pos: Pt; angle: number; color?: string; num?: string; scale?: number }
+  | { type: 'line'; kind: LineKind; from: Pt; to: Pt; bend: number; fromId?: string; toId?: string; color?: string }
+  | { type: 'dim'; a: Pt; b: Pt; text?: string; color?: string }
+  | { type: 'grid'; a: Pt; b: Pt; label?: string; showSize: boolean; color?: string }
   | { type: 'pen'; points: Pt[]; color: string }
-  | { type: 'text'; pos: Pt; text: string; size: number }
+  | { type: 'text'; pos: Pt; text: string; size: number; color?: string }
 )
 export type ShapeType = SceneShape['type']
 
@@ -124,6 +124,36 @@ export function equipSize(kind: EquipKind, u: number): { w: number; d: number } 
   }
 }
 export function ballRadius(u: number): number { return u * 0.38 }
+
+export const MIN_SCALE = 0.4
+export const MAX_SCALE = 4
+/** Symbols (players, ball, equipment) can be made bigger or smaller; 1 is the standard size. */
+export function scaleOf(s: SceneShape): number {
+  return s.type === 'player' || s.type === 'ball' || s.type === 'equip' ? s.scale ?? 1 : 1
+}
+export const clampScale = (v: number) => Math.round(Math.min(MAX_SCALE, Math.max(MIN_SCALE, v)) * 100) / 100
+export const playerRadius = (u: number, scale = 1) => u * 0.9 * scale
+/** Width and depth of a piece of equipment including its own scale. */
+export function equipDims(s: Extract<SceneShape, { type: 'equip' }>, u: number): { w: number; d: number } {
+  const z = equipSize(s.kind, u), sc = s.scale ?? 1
+  return { w: z.w * sc, d: z.d * sc }
+}
+
+// ── Colours ────────────────────────────────────────────────────
+
+export const COLOR_CHOICES: { color: string; name: string }[] = [
+  { color: '#1b2a6b', name: 'Dunkelblau' }, { color: '#111827', name: 'Schwarz' }, { color: '#ef4444', name: 'Rot' },
+  { color: '#f59e0b', name: 'Orange' }, { color: '#f5c542', name: 'Gelb' }, { color: '#49b05c', name: 'Grün' },
+  { color: '#3b82e8', name: 'Blau' }, { color: '#e94fae', name: 'Pink' }, { color: '#8a8f9e', name: 'Grau' }, { color: '#ffffff', name: 'Weiß' },
+]
+export function isLight(hex: string): boolean {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex)
+  if (!m) return false
+  const n = parseInt(m[1], 16), r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255
+  return 0.299 * r + 0.587 * g + 0.114 * b > 170
+}
+export const canColor = (s: SceneShape) => s.type !== 'ball'
+export const canScale = (s: SceneShape) => s.type === 'player' || s.type === 'ball' || s.type === 'equip' || s.type === 'text'
 export function textHeight(size: number, u: number): number { return u * 0.95 * size }
 
 // ── Making shapes ──────────────────────────────────────────────
@@ -164,6 +194,54 @@ export function duplicateShape(s: SceneShape, dx: number, dy: number): SceneShap
   return c
 }
 
+/** Duplicate several shapes at once. Lines keep their attachment only to players that are duplicated with them. */
+export function duplicateShapes(shapes: SceneShape[], ids: string[], dx: number, dy: number): { shapes: SceneShape[]; newIds: string[] } {
+  const set = new Set(ids), map = new Map<string, string>()
+  const copies: SceneShape[] = []
+  for (const s of shapes) {
+    if (!set.has(s.id)) continue
+    const c = duplicateShape(s, dx, dy)
+    map.set(s.id, c.id)
+    copies.push(c)
+  }
+  const out = copies.map(c => {
+    const orig = shapes.find(x => map.get(x.id) === c.id)
+    if (orig && orig.type === 'line' && c.type === 'line') {
+      const r = { ...c } as typeof c
+      if (orig.fromId && map.has(orig.fromId)) r.fromId = map.get(orig.fromId)
+      if (orig.toId && map.has(orig.toId)) r.toId = map.get(orig.toId)
+      return r
+    }
+    return c
+  })
+  return { shapes: [...shapes, ...out], newIds: out.map(c => c.id) }
+}
+
+export function removeShapes(shapes: SceneShape[], ids: string[]): SceneShape[] {
+  return ids.reduce((acc, id) => removeShape(acc, id), shapes)
+}
+
+/** Set (or with undefined, reset) the colour of the given shapes. The ball has no colour. */
+export function colorShapes(shapes: SceneShape[], ids: string[], color: string | undefined): SceneShape[] {
+  const set = new Set(ids)
+  return shapes.map(s => {
+    if (!set.has(s.id) || !canColor(s)) return s
+    if (s.type === 'pen') return withPatch(s, { color: color ?? '#1b2a6b' } as Partial<SceneShape>)
+    return withPatch(s, { color } as Partial<SceneShape>)
+  })
+}
+
+/** Make symbols (and text) bigger or smaller by a factor. Lines, distances and fields are resized by their end handles instead. */
+export function scaleShapes(shapes: SceneShape[], ids: string[], factor: number): SceneShape[] {
+  const set = new Set(ids)
+  return shapes.map(s => {
+    if (!set.has(s.id)) return s
+    if (s.type === 'player' || s.type === 'ball' || s.type === 'equip') return withPatch(s, { scale: clampScale((s.scale ?? 1) * factor) } as Partial<SceneShape>)
+    if (s.type === 'text') return withPatch(s, { size: Math.min(3, Math.max(0.6, Math.round(s.size * factor * 10) / 10)) } as Partial<SceneShape>)
+    return s
+  })
+}
+
 export function copyScene(s: Scene): Scene { return JSON.parse(JSON.stringify(s)) as Scene }
 
 // ── Moving and editing ─────────────────────────────────────────
@@ -189,20 +267,33 @@ export function updateShape(shapes: SceneShape[], id: string, patch: Partial<Sce
   return shapes.map(s => (s.id === id ? withPatch(s, patch) : s))
 }
 
-/** Move a shape. Moving a player also carries the ends of every pass or run line attached to that player. */
-export function moveShape(shapes: SceneShape[], id: string, dx: number, dy: number): SceneShape[] {
-  const target = shapes.find(s => s.id === id)
-  if (!target) return shapes
+/** Move several shapes together. Lines that are not selected but are attached to a moved player follow it; a selected line
+ *  stays attached to the players that move with it and lets go of the others. */
+export function moveShapes(shapes: SceneShape[], ids: string[], dx: number, dy: number): SceneShape[] {
+  const set = new Set(ids)
+  const movedPlayers = new Set(shapes.filter(s => s.type === 'player' && set.has(s.id)).map(s => s.id))
   return shapes.map(s => {
-    if (s.id === id) return withPatch(s, movePatch(s, dx, dy))
-    if (target.type === 'player' && s.type === 'line') {
+    if (set.has(s.id)) {
+      const patch = movePatch(s, dx, dy) as Record<string, unknown>
+      if (s.type === 'line') {
+        if (s.fromId && movedPlayers.has(s.fromId)) patch.fromId = s.fromId
+        if (s.toId && movedPlayers.has(s.toId)) patch.toId = s.toId
+      }
+      return withPatch(s, patch as Partial<SceneShape>)
+    }
+    if (s.type === 'line') {
       const patch: Record<string, Pt> = {}
-      if (s.fromId === id) patch.from = sh(s.from, dx, dy)
-      if (s.toId === id) patch.to = sh(s.to, dx, dy)
+      if (s.fromId && movedPlayers.has(s.fromId)) patch.from = sh(s.from, dx, dy)
+      if (s.toId && movedPlayers.has(s.toId)) patch.to = sh(s.to, dx, dy)
       if (Object.keys(patch).length) return withPatch(s, patch as unknown as Partial<SceneShape>)
     }
     return s
   })
+}
+
+/** Move a shape. Moving a player also carries the ends of every pass or run line attached to that player. */
+export function moveShape(shapes: SceneShape[], id: string, dx: number, dy: number): SceneShape[] {
+  return shapes.some(s => s.id === id) ? moveShapes(shapes, [id], dx, dy) : shapes
 }
 
 /** Remove a shape. Lines that were attached to a deleted player keep their points but lose the attachment. */
@@ -261,9 +352,9 @@ export function hitTest(shapes: SceneShape[], p: Pt, tol: number, bg: SceneBackg
     const s = order[i]
     let hit = false
     switch (s.type) {
-      case 'player': hit = dist(s.pos, p) <= u + tol * 0.9; break
-      case 'ball': hit = dist(s.pos, p) <= ballRadius(u) + tol; break
-      case 'equip': { const z = equipSize(s.kind, u); hit = inRotRect(p, s.pos, z.w, z.d, s.angle, tol * 0.6); break }
+      case 'player': hit = dist(s.pos, p) <= u * (s.scale ?? 1) + tol * 0.9; break
+      case 'ball': hit = dist(s.pos, p) <= ballRadius(u) * (s.scale ?? 1) + tol; break
+      case 'equip': { const z = equipDims(s, u); hit = inRotRect(p, s.pos, z.w, z.d, s.angle, tol * 0.6); break }
       case 'line': hit = distToPolyline(p, curvePoints(s.from, s.to, s.bend)) <= tol; break
       case 'dim': hit = distToPolyline(p, [s.a, s.b]) <= tol; break
       case 'pen': hit = distToPolyline(p, s.points.length > 1 ? s.points : [s.points[0], s.points[0]]) <= tol; break
@@ -296,21 +387,35 @@ export function handlesOf(s: SceneShape, bg: SceneBackground, shapes?: SceneShap
       const nx = -(s.to[1] - s.from[1]) / L, ny = (s.to[0] - s.from[0]) / L
       const m: Pt = [(s.from[0] + s.to[0]) / 2 + nx * s.bend, (s.from[1] + s.to[1]) / 2 + ny * s.bend]
       // an end that is attached to a player is drawn trimmed at the player's edge; its handle sits there, so the player itself stays grabbable
-      const attached = (id?: string) => !!id && !!shapes?.some(x => x.id === id && x.type === 'player')
-      const t = trimPolyline(curvePoints(s.from, s.to, s.bend, 28), attached(s.fromId) ? u * 1.25 : 0, attached(s.toId) ? u * 1.25 : 0)
+      const trim = (id?: string) => { const x = id ? shapes?.find(q => q.id === id && q.type === 'player') : undefined; return x ? u * 1.25 * scaleOf(x) : 0 }
+      const t = trimPolyline(curvePoints(s.from, s.to, s.bend, 28), trim(s.fromId), trim(s.toId))
       return [{ key: 'from', pos: t[0] }, { key: 'to', pos: t[t.length - 1] }, { key: 'bend', pos: m }]
     }
     case 'dim': return [{ key: 'a', pos: s.a }, { key: 'b', pos: s.b }]
     case 'grid': return [{ key: 'a', pos: s.a }, { key: 'b', pos: s.b }, { key: 'ab', pos: [s.a[0], s.b[1]] }, { key: 'ba', pos: [s.b[0], s.a[1]] }]
-    case 'equip': return [{ key: 'rot', pos: rotHandle(s, bg).pos }]
+    case 'equip': return [{ key: 'rot', pos: rotHandle(s, bg).pos }, { key: 'size', pos: sizeHandle(s, bg) }]
+    case 'player': case 'ball': return [{ key: 'size', pos: sizeHandle(s, bg) }]
     default: return []
   }
+}
+
+/** Extent (half-diagonal, metres) of a symbol at scale 1, used to place and read the size handle. */
+function baseExtent(s: Extract<SceneShape, { type: 'player' | 'ball' | 'equip' }>, u: number): number {
+  if (s.type === 'player') return playerRadius(u)
+  if (s.type === 'ball') return ballRadius(u)
+  const z = equipSize(s.kind, u)
+  return Math.hypot(z.w, z.d) / 2
+}
+/** The size handle sits diagonally below-right of the symbol; dragging it further out makes the symbol bigger. */
+export function sizeHandle(s: Extract<SceneShape, { type: 'player' | 'ball' | 'equip' }>, bg: SceneBackground): Pt {
+  const u = symbolUnit(bg), r = baseExtent(s, u) * (s.scale ?? 1) + u * 0.5
+  return [s.pos[0] + r * Math.SQRT1_2, s.pos[1] + r * Math.SQRT1_2]
 }
 
 /** Where the rotation handle of a piece of equipment sits. It normally hangs off the front (the top at angle 0);
  *  near the edge of the picture it swings to the other side so it can always be grabbed. */
 export function rotHandle(s: Extract<SceneShape, { type: 'equip' }>, bg: SceneBackground): { pos: Pt; flipped: boolean } {
-  const u = symbolUnit(bg), z = equipSize(s.kind, u), r = Math.max(z.w, z.d) / 2 + u * 1.3
+  const u = symbolUnit(bg), z = equipDims(s, u), r = Math.max(z.w, z.d) / 2 + u * 1.3
   const v = viewBoxOf(bg), pad = u * 0.4
   const at = (deg: number): Pt => { const a = (deg * Math.PI) / 180; return [s.pos[0] + Math.sin(a) * r, s.pos[1] - Math.cos(a) * r] }
   const inside = (p: Pt) => p[0] >= v.x + pad && p[0] <= v.x + v.w - pad && p[1] >= v.y + pad && p[1] <= v.y + v.h - pad
@@ -350,6 +455,11 @@ export function handlePatch(s: SceneShape, key: string, p: Pt, shapes: SceneShap
     if (key === 'ab') return { a: [q[0], s.a[1]], b: [s.b[0], q[1]] } as Partial<SceneShape>
     if (key === 'ba') return { a: [s.a[0], q[1]], b: [q[0], s.b[1]] } as Partial<SceneShape>
   }
+  if ((s.type === 'player' || s.type === 'ball' || s.type === 'equip') && key === 'size') {
+    const base = baseExtent(s, u)
+    const sc = clampScale(Math.round(((dist(s.pos, p) - u * 0.5) / base) * 20) / 20)
+    return { scale: sc } as Partial<SceneShape>
+  }
   if (s.type === 'equip' && key === 'rot') {
     let deg = (Math.atan2(p[0] - s.pos[0], -(p[1] - s.pos[1])) * 180) / Math.PI
     if (rotHandle(s, bg).flipped) deg -= 180
@@ -363,6 +473,41 @@ export function handlePatch(s: SceneShape, key: string, p: Pt, shapes: SceneShap
 export function lineEndTarget(shapes: SceneShape[], p: Pt, bg: SceneBackground, exceptId?: string): { pos: Pt; id?: string } {
   const near = playerNear(shapes, p, symbolUnit(bg) * 1.7, exceptId)
   return near ? { pos: near.pos, id: near.id } : { pos: p }
+}
+
+// ── Boxes and rectangle selection ──────────────────────────────
+
+export interface Box { x0: number; y0: number; x1: number; y1: number }
+
+/** The smallest box around a shape (metres). */
+export function shapeBox(s: SceneShape, bg: SceneBackground): Box {
+  const u = symbolUnit(bg)
+  const around = (c: Pt, r: number): Box => ({ x0: c[0] - r, y0: c[1] - r, x1: c[0] + r, y1: c[1] + r })
+  const ofPts = (pts: Pt[]): Box => ({ x0: Math.min(...pts.map(q => q[0])), y0: Math.min(...pts.map(q => q[1])), x1: Math.max(...pts.map(q => q[0])), y1: Math.max(...pts.map(q => q[1])) })
+  switch (s.type) {
+    case 'player': return around(s.pos, playerRadius(u, s.scale))
+    case 'ball': return around(s.pos, ballRadius(u) * (s.scale ?? 1))
+    case 'equip': {
+      const z = equipDims(s, u), a = (s.angle * Math.PI) / 180, c = Math.abs(Math.cos(a)), n = Math.abs(Math.sin(a))
+      return { x0: s.pos[0] - (z.w * c + z.d * n) / 2, x1: s.pos[0] + (z.w * c + z.d * n) / 2, y0: s.pos[1] - (z.w * n + z.d * c) / 2, y1: s.pos[1] + (z.w * n + z.d * c) / 2 }
+    }
+    case 'line': return ofPts(curvePoints(s.from, s.to, s.bend, 16))
+    case 'dim': return ofPts([s.a, s.b])
+    case 'grid': return ofPts([s.a, s.b])
+    case 'pen': return ofPts(s.points)
+    case 'text': { const h = textHeight(s.size, u), w = Math.max(1, s.text.length) * h * 0.55; return { x0: s.pos[0] - w / 2, x1: s.pos[0] + w / 2, y0: s.pos[1] - h / 2, y1: s.pos[1] + h / 2 } }
+  }
+}
+
+export function unionBox(boxes: Box[]): Box | null {
+  if (!boxes.length) return null
+  return { x0: Math.min(...boxes.map(b => b.x0)), y0: Math.min(...boxes.map(b => b.y0)), x1: Math.max(...boxes.map(b => b.x1)), y1: Math.max(...boxes.map(b => b.y1)) }
+}
+
+/** Ids of everything that lies completely inside the rectangle spanned by a and b. */
+export function shapesInRect(shapes: SceneShape[], a: Pt, b: Pt, bg: SceneBackground): string[] {
+  const x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]), y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1])
+  return shapes.filter(s => { const q = shapeBox(s, bg); return q.x0 >= x0 && q.x1 <= x1 && q.y0 >= y0 && q.y1 <= y1 }).map(s => s.id)
 }
 
 // ── Undo and redo ──────────────────────────────────────────────
