@@ -54,11 +54,13 @@ export function canExportMp4(): boolean {
   return typeof window !== 'undefined' && 'VideoEncoder' in window
 }
 
-export async function exportAnimation(steps: Step[], format: ExportFormat, onProgress: (p: number) => void, signal?: { cancelled: boolean }): Promise<Blob> {
+export async function exportAnimation(steps: Step[], format: ExportFormat, onProgress: (p: number) => void, signal?: { cancelled: boolean }, speed = 1): Promise<Blob> {
   const pl = plan(steps)
   const { w, h } = exportSize(steps, LONGEST[format])
   const fps = FPS[format]
-  const frames = Math.max(1, Math.ceil(pl.total * fps) + 1)
+  // the file plays at the speed the coach is watching at: 2× halves its length, ½× doubles it
+  const rate = speed > 0 ? speed : 1
+  const frames = Math.max(1, Math.ceil((pl.total / rate) * fps) + 1)
   const css = await fontCss()
   const canvas = document.createElement('canvas')
   canvas.width = w; canvas.height = h
@@ -75,7 +77,7 @@ export async function exportAnimation(steps: Step[], format: ExportFormat, onPro
 
   for (let i = 0; i < frames; i++) {
     if (signal?.cancelled) throw new Error('abgebrochen')
-    const t = Math.min(pl.total, i / fps)
+    const t = Math.min(pl.total, (i / fps) * rate)
     const url = URL.createObjectURL(new Blob([svgOf(frameAt(steps, t).scene, w, h, css)], { type: 'image/svg+xml' }))
     try {
       const im = await loadImage(url)

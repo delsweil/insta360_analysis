@@ -56,7 +56,7 @@ export default function SceneAnimator({ steps }: { steps: Step[] }) {
     setPlaying(false); setExportErr(''); cancel.current = { cancelled: false }
     setBusy({ format, p: 0 })
     try {
-      const blob = await exportAnimation(steps, format, p => setBusy({ format, p }), cancel.current)
+      const blob = await exportAnimation(steps, format, p => setBusy({ format, p }), cancel.current, speed)
       const file = new File([blob], `animation.${format}`, { type: blob.type })
       const a = document.createElement('a')
       a.href = URL.createObjectURL(file); a.download = file.name; document.body.appendChild(a); a.click(); a.remove()
@@ -108,7 +108,7 @@ export default function SceneAnimator({ steps }: { steps: Step[] }) {
           </>
         ) : (
           <>
-            <span style={{ fontSize: 12, color: MUTED }}>Speichern als</span>
+            <span style={{ fontSize: 12, color: MUTED }}>Speichern als (Tempo {speed === 0.5 ? '½' : speed}×)</span>
             {canExportMp4() && <button data-testid="export-mp4" onClick={() => runExport('mp4')} style={btn()} title="Video für WhatsApp, Vereinsheim-Bildschirm usw.">Video (MP4)</button>}
             <button data-testid="export-gif" onClick={() => runExport('gif')} style={btn()} title="Animiertes Bild, funktioniert überall">GIF</button>
           </>
