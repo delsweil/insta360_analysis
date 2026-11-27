@@ -8,6 +8,8 @@ import { supabase, getCurrentUserRole, isCoachOrAdmin } from '@/lib/supabase'
 import Topbar from '@/components/Topbar'
 import SceneCanvas from '@/components/SceneCanvas'
 import SceneEditor from '@/components/SceneEditor'
+import ConceptPicker, { ConceptChips } from '@/components/ConceptPicker'
+import { normalizeConceptIds, conceptById } from '@/lib/gameModel'
 import { defaultBackground, emptyScene, type BackgroundType, type Scene } from '@/lib/scene'
 import { parseTags, moveItem, reindex, totalMinutes, sceneOf, formFootprint, FORM_KIND_LABELS, type TrainingSession, type SessionForm, type FormSceneRow, type FormKind } from '@/lib/sessions'
 
@@ -236,6 +238,23 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
               </div>
 
               <div>
+                <div style={label}>Schwerpunkt im Spielmodell</div>
+                <ConceptPicker testId="session-concepts" value={session.concepts ?? []} readOnly={!mine} onChange={ids => { setSession({ ...session, concepts: ids }); patch({ concepts: ids }) }} />
+                {(() => {
+                  const covered = normalizeConceptIds(forms.flatMap(f => f.concepts ?? []))
+                  const focus = normalizeConceptIds(session.concepts ?? [])
+                  const open = focus.filter(i => !covered.includes(i))
+                  if (!focus.length && !covered.length) return null
+                  return (
+                    <div data-testid="coverage" style={{ marginTop: 8, fontSize: 12, color: '#4A4F5C', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {covered.length > 0 && <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}><span>Abgedeckt durch die Formen:</span><ConceptChips ids={covered} /></div>}
+                      {open.length > 0 && forms.length > 0 && <div style={{ color: '#92400e' }}>Noch ohne passende Form: {open.map(i => conceptById(i)!.name).join(', ')}</div>}
+                    </div>
+                  )
+                })()}
+              </div>
+
+              <div>
                 <div style={label}>Tags</div>
                 <input
                   data-testid="tags" style={field} readOnly={!mine} placeholder="z. B. U13, Pressing, Spielform (mit Komma trennen)"
@@ -324,6 +343,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button data-testid="add-exercise" onClick={() => addForm('exercise')} style={{ fontSize: 12, fontWeight: 600, padding: '7px 14px', borderRadius: 8, border: 'none', background: NAVY, color: '#fff', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif' }}>+ Übung</button>
                     <button data-testid="add-spielform" onClick={() => addForm('spielform')} style={{ fontSize: 12, fontWeight: 600, padding: '7px 14px', borderRadius: 8, border: 'none', background: NAVY, color: '#fff', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif' }}>+ Spielform</button>
+                    <button data-testid="from-library" onClick={() => router.push(`/library?session=${id}${(session.concepts ?? [])[0] ? `&concept=${(session.concepts ?? [])[0]}` : ''}`)} style={{ fontSize: 12, fontWeight: 600, padding: '7px 14px', borderRadius: 8, border: `1.5px solid ${NAVY}`, background: '#fff', color: NAVY, cursor: 'pointer', fontFamily: 'DM Sans, sans-serif' }}>Aus Bibliothek</button>
                   </div>
                 )}
               </div>
@@ -347,6 +367,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
                               <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
                                 {FORM_KIND_LABELS[f.kind]}{f.duration_min ? ` · ${f.duration_min} Min.` : ''}{f.players ? ` · ${f.players}` : ''}
                               </div>
+                              {(f.concepts ?? []).length > 0 && <div style={{ marginTop: 4 }}><ConceptChips ids={f.concepts ?? []} /></div>}
                             </div>
                           </div>
                           {mine && (

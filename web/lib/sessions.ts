@@ -9,6 +9,8 @@ export type TrainingSession = {
   focus: string
   visibility: SessionVisibility
   tags: string[]
+  /** Focus of the session: game-model ids (lib/gameModel.ts). */
+  concepts?: string[]
   /** Feldaufbau: one sketch that shows where each form stands on the pitch. */
   layout?: Scene | null
   created_by: string
@@ -93,9 +95,18 @@ export type SessionForm = {
   duration_min: number | null
   players: string
   sections: Section[]
+  /** Game-model ids; the first is the main concept. */
+  concepts?: string[]
+  library_status?: LibraryStatus
+  /** The admin's comment when a proposal was returned. */
+  library_note?: string
+  /** The library form this one was copied from. */
+  library_source?: string | null
   created_at: string
   updated_at: string
 }
+
+export type LibraryStatus = 'private' | 'proposed' | 'library' | 'archived'
 
 export type FormSceneRow = {
   id: string

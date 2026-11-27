@@ -99,6 +99,7 @@ export default function SessionsPage() {
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button onClick={() => router.push('/')} style={{ ...pill(false), borderRadius: 8 }}>← Spiele</button>
+            {isCoach && <button data-testid="to-library" onClick={() => router.push('/library')} style={{ ...pill(false), borderRadius: 8 }}>Bibliothek</button>}
             {isCoach && (
               <button
                 data-testid="new-session"

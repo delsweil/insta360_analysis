@@ -4,16 +4,18 @@ export const dynamic = 'force-dynamic'
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase, getCurrentUserRole, isCoachOrAdmin } from '@/lib/supabase'
+import { supabase, getCurrentUserRole, isCoachOrAdmin, isAdmin } from '@/lib/supabase'
 import Topbar from '@/components/Topbar'
 import SceneEditor, { SizeInput } from '@/components/SceneEditor'
 import SceneAnimator from '@/components/SceneAnimator'
 import { DEFAULT_HOLD_S, DEFAULT_MOVE_S, MIN_S, MAX_S, holdOf, moveOf, type Step } from '@/lib/anim'
 import SceneCanvas from '@/components/SceneCanvas'
+import ConceptPicker from '@/components/ConceptPicker'
+import { STATUS_LABELS, completeness, copyOfForm, copyOfScene, missing } from '@/lib/library'
 import { copyScene, defaultBackground, type Scene } from '@/lib/scene'
 import {
   FORM_KIND_LABELS, moveItem, newSection, parseMinutes, reindex, sceneOf, unusedStarters,
-  type FormKind, type FormSceneRow, type Section, type SessionForm, type TrainingSession,
+  type FormKind, type FormSceneRow, type LibraryStatus, type Section, type SessionForm, type TrainingSession,
 } from '@/lib/sessions'
 
 const NAVY = '#0f2972'
@@ -42,7 +44,12 @@ export default function FormPage({ params }: { params: Promise<{ id: string; fid
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const mine = !!session && session.created_by === user?.id
+  const owner = !!session && session.created_by === user?.id
+  const status: LibraryStatus = form?.library_status ?? 'private'
+  const admin = isAdmin(role)
+  // the author edits while the form is a draft; admins edit what is in the review/library process
+  const mine = owner ? status === 'private' : admin && status !== 'private'
+  const [returnNote, setReturnNote] = useState('')
 
   useEffect(() => {
     async function load() {
@@ -176,6 +183,27 @@ export default function FormPage({ params }: { params: Promise<{ id: string; fid
     router.push(`/sessions/${sessionId}`)
   }
 
+  async function setLibraryStatus(next: LibraryStatus, note?: string) {
+    await flush()
+    const patch: Partial<SessionForm> = { library_status: next }
+    if (note !== undefined) patch.library_note = note
+    const { error } = await supabase.from('session_forms').update(patch).eq('id', fid)
+    if (error) { setSave('error'); setSaveMsg(error.message); return }
+    setForm(f => (f ? { ...f, ...patch } : f)); setReturnNote('')
+  }
+
+  /** A library form is frozen: the author works on a copy in the same session. */
+  async function newVersion() {
+    if (!form) return
+    await flush()
+    const { data: sib } = await supabase.from('session_forms').select('position').eq('session_id', sessionId)
+    const pos = ((sib ?? []) as { position: number }[]).reduce((m, r) => Math.max(m, r.position), -1) + 1
+    const { data: nf, error } = await supabase.from('session_forms').insert({ ...copyOfForm(form, sessionId, pos), title: `${form.title} (neue Version)` }).select().single()
+    if (error || !nf) { setSave('error'); setSaveMsg(error?.message ?? 'Konnte nicht angelegt werden.'); return }
+    for (const sc of scenes) await supabase.from('form_scenes').insert(copyOfScene(sc, (nf as SessionForm).id))
+    router.push(`/sessions/${sessionId}/forms/${(nf as SessionForm).id}`)
+  }
+
   const handleSignOut = async () => { await supabase.auth.signOut(); router.push('/login') }
 
   const field: React.CSSProperties = { width: '100%', fontSize: 14, padding: '8px 12px', borderRadius: 8, border: '1px solid #E4E6EE', fontFamily: 'DM Sans, sans-serif', outline: 'none', background: mine ? '#fff' : '#f7f7f5', color: '#1c2333', boxSizing: 'border-box' }
@@ -232,6 +260,62 @@ export default function FormPage({ params }: { params: Promise<{ id: string; fid
               <div data-testid="form-save" style={{ fontSize: 12, minHeight: 16, color: save === 'error' ? '#991b1b' : MUTED }}>
                 {save === 'saving' && 'Speichert …'}{save === 'saved' && 'Gespeichert'}{save === 'error' && `Nicht gespeichert: ${saveMsg}`}
               </div>
+            </div>
+
+            {/* game model and library */}
+            <div data-testid="library-card" style={{ marginTop: 14, background: '#fff', border: '1px solid #E4E6EE', borderRadius: 12, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                <div style={label}>Spielmodell</div>
+                <span data-testid="library-status" style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 99, background: status === 'library' ? '#dcfce7' : status === 'proposed' ? '#fef3c7' : status === 'archived' ? '#e5e7eb' : '#eef0f5', color: status === 'library' ? '#166534' : status === 'proposed' ? '#92400e' : '#4A4F5C' }}>{STATUS_LABELS[status]}</span>
+              </div>
+              <ConceptPicker value={form.concepts ?? []} onChange={ids => patchForm({ concepts: ids })} readOnly={!mine} />
+              {owner && status === 'private' && form.library_note && (
+                <div data-testid="library-note" style={{ fontSize: 13, background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 10, padding: '8px 12px', color: '#78350f' }}><b>Rückmeldung zur Bibliothek:</b> {form.library_note}</div>
+              )}
+              {owner && status === 'private' && (() => {
+                const checks = completeness(form, scenes)
+                const gaps = missing(checks)
+                return (
+                  <div data-testid="propose-box" style={{ borderTop: '1px solid #eceef3', paddingTop: 10 }}>
+                    <div style={{ fontSize: 12, color: '#4A4F5C', marginBottom: 6 }}>Für die Bibliothek vorschlagen. Nur vollständige Formen kommen in die Prüfung:</div>
+                    <ul style={{ margin: '0 0 8px', padding: 0, listStyle: 'none', fontSize: 12 }}>
+                      {checks.map(c => <li key={c.key} data-testid={`check-${c.key}`} data-ok={c.ok} style={{ color: c.ok ? '#166534' : '#991b1b' }}>{c.ok ? '✓' : '○'} {c.label}</li>)}
+                    </ul>
+                    <button data-testid="propose" disabled={gaps.length > 0} onClick={() => setLibraryStatus('proposed')} style={btn(true, { opacity: gaps.length ? 0.45 : 1, cursor: gaps.length ? 'not-allowed' : 'pointer' })}>Zur Aufnahme vorschlagen</button>
+                    <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>Nach dem Einreichen ist die Form gesperrt, bis sie geprüft ist. Du kannst den Vorschlag zurückziehen.</div>
+                  </div>
+                )
+              })()}
+              {owner && status === 'proposed' && (
+                <div style={{ borderTop: '1px solid #eceef3', paddingTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 13, color: '#4A4F5C' }}>Wartet auf die Prüfung durch einen Admin. Die Form ist gesperrt.</span>
+                  <button data-testid="withdraw" onClick={() => setLibraryStatus('private')} style={btn()}>Vorschlag zurückziehen</button>
+                </div>
+              )}
+              {owner && status === 'library' && (
+                <div style={{ borderTop: '1px solid #eceef3', paddingTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 13, color: '#4A4F5C' }}>In der Bibliothek, fixiert. Änderungen machst du an einer neuen Version.</span>
+                  <button data-testid="new-version" onClick={newVersion} style={btn(true)}>Neue Version erstellen</button>
+                </div>
+              )}
+              {admin && status !== 'private' && (
+                <div data-testid="admin-review" style={{ borderTop: '1px solid #eceef3', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: NAVY }}>Admin</div>
+                  {status === 'proposed' && (
+                    <>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button data-testid="approve" onClick={() => setLibraryStatus('library', '')} style={btn(true)}>In die Bibliothek aufnehmen</button>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <input data-testid="return-note" style={{ ...field, flex: 1, minWidth: 200, background: '#fff' }} placeholder="Was fehlt oder soll geändert werden?" value={returnNote} onChange={e => setReturnNote(e.target.value)} />
+                        <button data-testid="return" disabled={!returnNote.trim()} onClick={() => setLibraryStatus('private', returnNote.trim())} style={btn(false, { opacity: returnNote.trim() ? 1 : 0.45 })}>Zurückgeben</button>
+                      </div>
+                    </>
+                  )}
+                  {status === 'library' && <div><button data-testid="archive" onClick={() => setLibraryStatus('archived')} style={btn(false, { color: '#991b1b', borderColor: '#fca5a5' })}>Archivieren</button></div>}
+                  {status === 'archived' && <div><button data-testid="restore" onClick={() => setLibraryStatus('library')} style={btn(true)}>Wieder aufnehmen</button></div>}
+                </div>
+              )}
             </div>
 
             {/* sketches */}
@@ -343,7 +427,7 @@ export default function FormPage({ params }: { params: Promise<{ id: string; fid
               )}
             </div>
 
-            {mine && (
+            {mine && status === 'private' && (
               <div style={{ marginTop: 18 }}>
                 {!confirmDelete ? (
                   <button onClick={() => setConfirmDelete(true)} style={{ fontSize: 12, color: '#991b1b', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'DM Sans, sans-serif' }}>Form löschen</button>
