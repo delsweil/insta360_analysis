@@ -133,6 +133,8 @@ interface Props {
   poleColor?: string
   /** No dot grid and a white page: for print. */
   plain?: boolean
+  /** Pixels per metre to size strokes and labels for. Used when drawing off screen (video export), where nothing can be measured. */
+  ppm?: number
   snap?: boolean
   selectedIds?: string[]
   onSelect?: (ids: string[]) => void
@@ -155,12 +157,13 @@ type Drag =
 const NONE: string[] = []
 
 export default function SceneCanvas(props: Props) {
-  const { scene, look = 'sketch', editable = false, tool = 'select', team = 'a', equip = 'cone', poleColor, plain = false, snap = false, selectedIds = NONE, onSelect, onCommit, onRequestText, className, style, testId } = props
+  const { scene, look = 'sketch', editable = false, tool = 'select', team = 'a', equip = 'cone', poleColor, plain = false, ppm: ppmFixed, snap = false, selectedIds = NONE, onSelect, onCommit, onRequestText, className, style, testId } = props
   const bg = scene.background
   const vb = viewBoxOf(bg)
   const u = symbolUnit(bg)
   const svgRef = useRef<SVGSVGElement>(null)
-  const [ppm, setPpm] = useState(10)
+  const [ppmMeasured, setPpm] = useState(10)
+  const ppm = ppmFixed ?? ppmMeasured
   const [draft, setDraft] = useState<SceneShape[] | null>(null)
   const [marquee, setMarquee] = useState<{ a: Pt; b: Pt } | null>(null)
   const dragRef = useRef<Drag | null>(null)

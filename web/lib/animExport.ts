@@ -12,6 +12,8 @@ export const FPS = { mp4: 30, gif: 15 }
 /** Longest side in pixels and video bitrate. MP4 is sharp enough for a big screen; GIF stays smaller so it can still be sent. */
 const LONGEST = { mp4: 1920, gif: 960 }
 const BITRATE = 10_000_000
+/** Strokes and labels are sized as on a picture this many pixels wide (what the player shows on a phone), then scaled up with the picture. */
+const REF_WIDTH = 520
 
 async function dataUrl(path: string): Promise<string> {
   const buf = new Uint8Array(await (await fetch(path)).arrayBuffer())
@@ -37,7 +39,7 @@ export function exportSize(steps: Step[], longest = 1280): { w: number; h: numbe
 }
 
 function svgOf(scene: Step['scene'], w: number, h: number, css: string): string {
-  let s = renderToStaticMarkup(createElement(SceneCanvas, { scene, plain: true, style: { width: w, height: h } }))
+  let s = renderToStaticMarkup(createElement(SceneCanvas, { scene, ppm: REF_WIDTH / viewBoxOf(scene.background).w, style: { width: w, height: h } }))
   s = s.replace(/var\(--font-hand\)/g, "'Caveat'").replace(/var\(--font-dm-sans\)/g, "'DM Sans'")
   s = s.replace('<svg ', `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" `)
   const i = s.indexOf('>')
