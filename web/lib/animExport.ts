@@ -8,7 +8,10 @@ import { frameAt, plan, type Step } from '@/lib/anim'
 import { viewBoxOf } from '@/lib/scene'
 
 export type ExportFormat = 'mp4' | 'gif'
-export const FPS = { mp4: 30, gif: 12 }
+export const FPS = { mp4: 30, gif: 15 }
+/** Longest side in pixels and video bitrate. MP4 is sharp enough for a big screen; GIF stays smaller so it can still be sent. */
+const LONGEST = { mp4: 1920, gif: 960 }
+const BITRATE = 10_000_000
 
 async function dataUrl(path: string): Promise<string> {
   const buf = new Uint8Array(await (await fetch(path)).arrayBuffer())
@@ -51,7 +54,7 @@ export function canExportMp4(): boolean {
 
 export async function exportAnimation(steps: Step[], format: ExportFormat, onProgress: (p: number) => void, signal?: { cancelled: boolean }): Promise<Blob> {
   const pl = plan(steps)
-  const { w, h } = exportSize(steps, format === 'gif' ? 720 : 1280)
+  const { w, h } = exportSize(steps, LONGEST[format])
   const fps = FPS[format]
   const frames = Math.max(1, Math.ceil(pl.total * fps) + 1)
   const css = await fontCss()
@@ -65,7 +68,7 @@ export async function exportAnimation(steps: Step[], format: ExportFormat, onPro
   if (format === 'mp4') {
     muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width: w, height: h }, fastStart: 'in-memory' })
     encoder = new VideoEncoder({ output: (c, m) => muxer!.addVideoChunk(c, m), error: e => { throw e } })
-    encoder.configure({ codec: 'avc1.640028', width: w, height: h, bitrate: 3_000_000, framerate: fps })
+    encoder.configure({ codec: 'avc1.640032', width: w, height: h, bitrate: BITRATE, framerate: fps })
   }
 
   for (let i = 0; i < frames; i++) {
@@ -75,6 +78,7 @@ export async function exportAnimation(steps: Step[], format: ExportFormat, onPro
     try {
       const im = await loadImage(url)
       ctx.fillStyle = '#fbfbf8'; ctx.fillRect(0, 0, w, h)
+      ctx.imageSmoothingQuality = 'high'
       ctx.drawImage(im, 0, 0, w, h)
     } finally { URL.revokeObjectURL(url) }
     if (encoder) {
@@ -84,7 +88,7 @@ export async function exportAnimation(steps: Step[], format: ExportFormat, onPro
       if (encoder.encodeQueueSize > 8) await new Promise(r => setTimeout(r, 0))
     } else if (gif) {
       const rgba = ctx.getImageData(0, 0, w, h).data
-      const palette = quantize(rgba, 128)
+      const palette = quantize(rgba, 256)
       gif.writeFrame(applyPalette(rgba, palette), w, h, { palette, delay: Math.round(1000 / fps), repeat: 0 })
     }
     onProgress((i + 1) / frames)
