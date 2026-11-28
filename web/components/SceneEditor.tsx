@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import SceneCanvas, { equipGlyph, INK, POLE_COLORS, type Look } from './SceneCanvas'
 import {
   TEAMS, TEAM_COLORS, TEAM_NAMES, EQUIP_KINDS, EQUIP_LABELS, LINE_LABELS, BG_LABELS, defaultBackground, clampFrameSize,
-  duplicateShapes, removeShapes, updateShape, colorShapes, ringShapes, allRinged, scaleShapes, equipSize, symbolUnit, newId, hist, hPush, hUndo, hRedo,
+  duplicateShapes, removeShapes, updateShape, moveShapes, settleBalls, nudgeStep, colorShapes, ringShapes, allRinged, scaleShapes, equipSize, symbolUnit, newId, hist, hPush, hUndo, hRedo,
   COLOR_CHOICES, fieldShape, canColor, canScale, scaleOf, rotateShapes, shapesInGrid, shapeBox, unionBox, gridSize, gridResized, gridSplits, addFieldCones, addConesForGrid, frameGrid, frameSplits, cloneShapes, MAX_SPLIT,
   type Scene, type SceneShape, type Tool, type Team, type EquipKind, type BackgroundType, type Pt, type Hist, type LineKind,
 } from '@/lib/scene'
@@ -15,8 +15,10 @@ import {
 const NAVY = '#0f2972'
 const MUTED = '#8A8F9E'
 
+const ARROWS: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }
+
 const TOOLS: { id: Tool; label: string; hint: string }[] = [
-  { id: 'select', label: 'Auswahl', hint: 'Figur antippen und ziehen. Auf leeren Platz tippen und einen Rahmen aufziehen wählt mehrere aus (Umschalt/Strg + Klick fügt hinzu). Runde Griffe ändern Länge, Bogen, Drehung und Größe. Löschen: Papierkorb oder Entf.' },
+  { id: 'select', label: 'Auswahl', hint: 'Figur antippen und ziehen. Pfeiltasten verschieben die Auswahl (mit Alt/Option feiner). Auf leeren Platz tippen und einen Rahmen aufziehen wählt mehrere aus (Umschalt/Strg + Klick fügt hinzu). Runde Griffe ändern Länge, Bogen, Drehung und Größe. Löschen: Papierkorb oder Entf.' },
   { id: 'player', label: 'Spieler', hint: 'Tippen setzt einen Spieler, gedrückt halten und ziehen positioniert ihn.' },
   { id: 'ball', label: 'Ball', hint: 'Tippen setzt den Ball.' },
   { id: 'equip', label: 'Material', hint: 'Material unten wählen, dann tippen.' },
@@ -194,11 +196,16 @@ export default function SceneEditor({ scene, onChange, readOnly = false, placeab
       else if (mod && e.key.toLowerCase() === 'v') { e.preventDefault(); paste() }
       else if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); setTool('select'); setSelectedIds(cur.shapes.map(s => s.id)) }
       else if ((e.key === 'Delete' || e.key === 'Backspace') && ids.length) { e.preventDefault(); deleteSel() }
+      else if (ARROWS[e.key] && ids.length && !mod) {
+        e.preventDefault()
+        const [ux, uy] = ARROWS[e.key], st = nudgeStep(cur.background, e.altKey)
+        setShapes(settleBalls(moveShapes(cur.shapes, ids, ux * st, uy * st), ids, cur.background), 'nudge')
+      }
       else if (e.key === 'Escape') { setSelectedIds([]); setPendingText(null); setTool('select'); setFull(false) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [readOnly, undo, redo, duplicateSel, deleteSel, copySel, paste, ids.length, cur.shapes])
+  }, [readOnly, undo, redo, duplicateSel, deleteSel, copySel, paste, ids, cur.shapes, cur.background, setShapes])
 
   function addText() {
     const t = textValue.trim()

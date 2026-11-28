@@ -93,6 +93,11 @@ export function clampPt(p: Pt, bg: SceneBackground): Pt {
 }
 
 export function snapStep(bg: SceneBackground): number { return Math.max(bg.width_m, bg.height_m) <= 60 ? 1 : 5 }
+/** How far an arrow key moves the selection, in metres: 1 m on a small field, 2 m on a big one; the option key makes it fine (0.2 m / 0.5 m). */
+export function nudgeStep(bg: SceneBackground, fine: boolean): number {
+  const small = Math.max(bg.width_m, bg.height_m) <= 60
+  return fine ? (small ? 0.2 : 0.5) : (small ? 1 : 2)
+}
 export function snapPt(p: Pt, step: number): Pt { return [Math.round(p[0] / step) * step, Math.round(p[1] / step) * step] }
 
 // ── Numbers as text ────────────────────────────────────────────

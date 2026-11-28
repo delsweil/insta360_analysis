@@ -413,3 +413,10 @@ test('ring: toggles on players only and reports the state', async () => {
   const dup = S.duplicateShapes(on, ['p1'], 1, 1)
   assert.equal((dup.shapes.find((s: any) => s.id === dup.newIds[0]) as any).ring, true)
 })
+
+test('nudgeStep: coarse and fine, small and big field', async () => {
+  const S = await import('./scene.ts')
+  const small: any = { type: 'free', width_m: 20, height_m: 30 }, big: any = { type: 'pitch', width_m: 105, height_m: 68 }
+  assert.equal(S.nudgeStep(small, false), 1); assert.equal(S.nudgeStep(small, true), 0.2)
+  assert.equal(S.nudgeStep(big, false), 2); assert.equal(S.nudgeStep(big, true), 0.5)
+})
