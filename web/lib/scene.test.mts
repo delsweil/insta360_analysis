@@ -401,3 +401,15 @@ test('ball carry: settle, follow, detach', async () => {
   const np = d.shapes.find((x: any) => d.newIds.includes(x.id) && x.type === 'player') as any
   assert.equal(nb.carriedBy, np.id)
 })
+
+test('ring: toggles on players only and reports the state', async () => {
+  const S = await import('./scene.ts')
+  const shapes: any[] = [{ id: 'p1', type: 'player', pos: [1, 1], team: 'a' }, { id: 'p2', type: 'player', pos: [2, 2], team: 'b' }, { id: 'b1', type: 'ball', pos: [3, 3] }]
+  assert.equal(S.allRinged(shapes, ['p1', 'p2']), false)
+  const on = S.ringShapes(shapes, ['p1', 'b1'], true)
+  assert.equal((on[0] as any).ring, true); assert.equal((on[1] as any).ring, undefined); assert.equal((on[2] as any).ring, undefined)
+  assert.equal(S.allRinged(on, ['p1']), true); assert.equal(S.allRinged(on, ['p1', 'p2']), false); assert.equal(S.allRinged(on, ['b1']), false)
+  assert.equal((S.ringShapes(on, ['p1'], false)[0] as any).ring, undefined)
+  const dup = S.duplicateShapes(on, ['p1'], 1, 1)
+  assert.equal((dup.shapes.find((s: any) => s.id === dup.newIds[0]) as any).ring, true)
+})

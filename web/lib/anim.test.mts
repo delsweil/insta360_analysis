@@ -93,3 +93,12 @@ test('flow: with no pause the movement does not slow down at the sketch change',
   const stopped = [mk(0, { hold_s: 1 }), mk(10, { move_s: 2, hold_s: 1 })]
   assert.ok((frameAt(stopped, 1.01).scene.shapes[0] as any).pos[0] < 0.01)       // with a pause it still starts slowly
 })
+
+test('printedScenes: animation-only sketches stay out, but never all of them', async () => {
+  const { printedScenes } = await import('./anim.ts')
+  const mk = (id: string, print?: boolean) => ({ id, timing: print === undefined ? null : { print } })
+  assert.deepEqual(printedScenes([mk('a'), mk('b', false), mk('c', false), mk('d')]).map(s => s.id), ['a', 'd'])
+  assert.deepEqual(printedScenes([mk('a', false), mk('b', false)]).map(s => s.id), ['a'])
+  assert.deepEqual(printedScenes([]), [])
+  assert.deepEqual(printedScenes([mk('a', true), mk('b')]).map(s => s.id), ['a', 'b'])
+})

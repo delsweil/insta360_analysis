@@ -345,7 +345,7 @@ export default function FormPage({ params }: { params: Promise<{ id: string; fid
                       {scenes.map((s, i) => (
                         <button key={s.id} data-testid="scene-thumb" onClick={() => { setActive(i); setConfirmScene(false) }} style={{ flex: '0 0 auto', width: 116, padding: 4, borderRadius: 10, cursor: 'pointer', border: `2px solid ${i === active ? NAVY : '#E4E6EE'}`, background: '#fff' }}>
                           <SceneCanvas scene={sceneOf(s)} look="clean" testId="thumb-svg" />
-                          <div style={{ fontSize: 11, fontWeight: 600, color: i === active ? NAVY : MUTED, marginTop: 2 }}>{i + 1}</div>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: i === active ? NAVY : MUTED, marginTop: 2 }}>{i + 1}{s.timing?.print === false && <span data-testid="no-print-mark" title="Nur in der Animation, nicht im PDF" style={{ marginLeft: 6, fontWeight: 500, color: MUTED }}>· ohne PDF</span>}</div>
                         </button>
                       ))}
                     </div>
@@ -372,7 +372,13 @@ export default function FormPage({ params }: { params: Promise<{ id: string; fid
                             <SizeInput testId="timing-hold" label="Pause in Sekunden" min={0} max={MAX_S} style={{ ...field, width: 64 }} value={holdOf(scene.timing)} onValue={v => patchScene(scene.id, { timing: { ...(scene.timing ?? {}), hold_s: v } })} />
                             s
                           </span>
-                          <button data-testid="timing-flow" type="button" onClick={() => scenes.forEach((r, i) => patchScene(r.id, { timing: { move_s: 1.2, hold_s: i === scenes.length - 1 ? 1.5 : 0 } }))} style={{ fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 8, border: '1.5px solid #E4E6EE', background: '#fff', color: '#0f2972', cursor: 'pointer' }} title="Alle Skizzen ohne Pausen ineinander übergehen lassen">Alles fließend</button>
+                          <button data-testid="timing-flow" type="button" onClick={() => scenes.forEach((r, i) => patchScene(r.id, { timing: { ...(r.timing ?? {}), move_s: 1.2, hold_s: i === scenes.length - 1 ? 1.5 : 0 } }))} style={{ fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 8, border: '1.5px solid #E4E6EE', background: '#fff', color: '#0f2972', cursor: 'pointer' }} title="Alle Skizzen ohne Pausen ineinander übergehen lassen">Alles fließend</button>
+                          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }} title="Ist das Häkchen aus, erscheint diese Skizze nur in der Animation und nicht im PDF.">
+                            <input data-testid="print-scene" type="checkbox" checked={scene.timing?.print !== false} onChange={e => patchScene(scene.id, { timing: { ...(scene.timing ?? {}), print: e.target.checked ? undefined : false } })} />
+                            Im PDF
+                          </label>
+                          <button data-testid="print-ends" type="button" onClick={() => scenes.forEach((r, i) => patchScene(r.id, { timing: { ...(r.timing ?? {}), print: i === 0 || i === scenes.length - 1 ? undefined : false } }))} style={{ fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 8, border: '1.5px solid #E4E6EE', background: '#fff', color: '#0f2972', cursor: 'pointer' }} title="Im PDF nur die erste und die letzte Skizze zeigen. Die Animation bleibt vollständig.">PDF: nur Anfang und Ende</button>
+                          <button data-testid="print-all" type="button" onClick={() => scenes.forEach(r => patchScene(r.id, { timing: { ...(r.timing ?? {}), print: undefined } }))} style={{ fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 8, border: '1.5px solid #E4E6EE', background: '#fff', color: '#4A4F5C', cursor: 'pointer' }}>PDF: alle</button>
                           <span style={{ color: MUTED }}>Standard: {String(DEFAULT_MOVE_S).replace('.', ',')} s Bewegung, {String(DEFAULT_HOLD_S).replace('.', ',')} s Pause</span>
                         </div>
                       )}

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import SceneCanvas, { equipGlyph, INK, POLE_COLORS, type Look } from './SceneCanvas'
 import {
   TEAMS, TEAM_COLORS, TEAM_NAMES, EQUIP_KINDS, EQUIP_LABELS, LINE_LABELS, BG_LABELS, defaultBackground, clampFrameSize,
-  duplicateShapes, removeShapes, updateShape, colorShapes, scaleShapes, equipSize, symbolUnit, newId, hist, hPush, hUndo, hRedo,
+  duplicateShapes, removeShapes, updateShape, colorShapes, ringShapes, allRinged, scaleShapes, equipSize, symbolUnit, newId, hist, hPush, hUndo, hRedo,
   COLOR_CHOICES, fieldShape, canColor, canScale, scaleOf, rotateShapes, shapesInGrid, shapeBox, unionBox, gridSize, gridResized, gridSplits, addFieldCones, addConesForGrid, frameGrid, frameSplits, cloneShapes, MAX_SPLIT,
   type Scene, type SceneShape, type Tool, type Team, type EquipKind, type BackgroundType, type Pt, type Hist, type LineKind,
 } from '@/lib/scene'
@@ -173,6 +173,9 @@ export default function SceneEditor({ scene, onChange, readOnly = false, placeab
     if (box) setShapes(rotateShapes(cur.shapes, ids, deg, [(box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2]))
   }
   const recolor = (color: string | undefined) => setShapes(colorShapes(cur.shapes, ids, color))
+  const ringed = allRinged(cur.shapes, ids)
+  const hasPlayer = cur.shapes.some(s => s.type === 'player' && ids.includes(s.id))
+  const toggleRing = () => setShapes(ringShapes(cur.shapes, ids, !ringed))
   const resize = (f: number) => setShapes(scaleShapes(cur.shapes, ids, f))
   const colorTargets = picked.filter(canColor)
   const scaleTargets = picked.filter(canScale)
@@ -444,6 +447,9 @@ export default function SceneEditor({ scene, onChange, readOnly = false, placeab
               ))}
               <button data-testid="color-reset" onClick={() => recolor(undefined)} style={btn(false, { minHeight: 30, padding: '3px 8px', fontSize: 11 })} title="Standardfarbe">Standard</button>
             </span>
+          )}
+          {hasPlayer && (
+            <button data-testid="ring" onClick={toggleRing} style={btn(ringed)} title="Zeichnet einen Ring um den Spieler, damit man ihn gleich findet. Der Ring läuft in der Animation mit.">◎ Hervorheben</button>
           )}
           {scaleTargets.length > 0 && selected?.type !== 'text' && (
             <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>

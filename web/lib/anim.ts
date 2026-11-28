@@ -6,7 +6,14 @@
 import { curvePoints, dist, type Pt } from './sketch.ts'
 import { symbolUnit, type Scene, type SceneShape } from './scene.ts'
 
-export interface Timing { move_s?: number; hold_s?: number }
+/** `print: false` keeps a sketch for the animation only: the PDF leaves it out. */
+export interface Timing { move_s?: number; hold_s?: number; print?: boolean }
+
+/** The sketches a PDF shows: all except those marked animation-only, but never none. */
+export function printedScenes<T extends { timing?: Timing | null }>(list: T[]): T[] {
+  const kept = list.filter(s => s.timing?.print !== false)
+  return kept.length ? kept : list.slice(0, 1)
+}
 export const DEFAULT_MOVE_S = 1.6
 export const DEFAULT_HOLD_S = 1.2
 export const MIN_S = 0.2

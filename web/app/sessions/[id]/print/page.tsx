@@ -9,6 +9,7 @@ import React, { Suspense, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase, getCurrentUserRole, isCoachOrAdmin } from '@/lib/supabase'
 import SceneCanvas from '@/components/SceneCanvas'
+import { printedScenes } from '@/lib/anim'
 import { FORM_KIND_LABELS, sceneOf, totalMinutes, type FormSceneRow, type SessionForm, type TrainingSession } from '@/lib/sessions'
 
 const NAVY = '#0f2972'
@@ -22,7 +23,9 @@ function dateDe(d: string | null): string {
   return Number.isNaN(t.getTime()) ? d : t.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
 }
 
-function FormBlock({ f, scenes, index, total, sessionTitle }: { f: SessionForm; scenes: FormSceneRow[]; index?: number; total?: number; sessionTitle?: string }) {
+function FormBlock({ f, scenes: allScenes, index, total, sessionTitle }: { f: SessionForm; scenes: FormSceneRow[]; index?: number; total?: number; sessionTitle?: string }) {
+  // sketches kept only for the animation stay out of the PDF
+  const scenes = printedScenes(allScenes)
   const meta = [f.duration_min ? `${f.duration_min} Min.` : '', f.players?.trim()].filter(Boolean).join('  ·  ')
   const sections = (f.sections ?? []).filter(s => s.title.trim() || s.text.trim())
   const single = scenes.length === 1

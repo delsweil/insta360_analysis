@@ -34,7 +34,7 @@ export type Animated = { t0?: number; t1?: number; kf?: { t: number; v: unknown 
 
 /** `alpha` is only set while an animation fades a shape in or out; it is never saved. */
 export type SceneShape = { id: string; alpha?: number } & Animated & (
-  | { type: 'player'; pos: Pt; team: Team; num?: string; color?: string; scale?: number }
+  | { type: 'player'; pos: Pt; team: Team; num?: string; color?: string; scale?: number; /** A ring around the player to point him out. */ ring?: boolean }
   | { type: 'ball'; pos: Pt; scale?: number; /** The player who has the ball at his feet: it travels with him. */ carriedBy?: string }
   | { type: 'equip'; kind: EquipKind; pos: Pt; angle: number; color?: string; num?: string; scale?: number }
   | { type: 'line'; kind: LineKind; from: Pt; to: Pt; bend: number; fromId?: string; toId?: string; color?: string }
@@ -362,6 +362,19 @@ export function colorShapes(shapes: SceneShape[], ids: string[], color: string |
     if (s.type === 'pen') return withPatch(s, { color: color ?? '#1b2a6b' } as Partial<SceneShape>)
     return withPatch(s, { color } as Partial<SceneShape>)
   })
+}
+
+/** Put a ring around the players among `ids` (or take it away). Other shapes are left alone. */
+export function ringShapes(shapes: SceneShape[], ids: string[], on: boolean): SceneShape[] {
+  const set = new Set(ids)
+  return shapes.map(s => (s.type === 'player' && set.has(s.id) ? withPatch(s, { ring: on ? true : undefined } as Partial<SceneShape>) : s))
+}
+
+/** Are all players among `ids` ringed? (false when there are none) */
+export function allRinged(shapes: SceneShape[], ids: string[]): boolean {
+  const set = new Set(ids)
+  const ps = shapes.filter(s => s.type === 'player' && set.has(s.id))
+  return ps.length > 0 && ps.every(s => s.type === 'player' && !!s.ring)
 }
 
 /** Make symbols (and text) bigger or smaller by a factor. Lines, distances and fields are resized by their end handles instead. */

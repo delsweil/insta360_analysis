@@ -373,7 +373,8 @@ export default function SceneCanvas(props: Props) {
         const r = playerRadius(u, s.scale)
         const fillC = s.color ?? TEAM_COLORS[s.team]
         return (
-          <g key={s.id} data-shape-id={s.id} data-type="player">
+          <g key={s.id} data-shape-id={s.id} data-type="player" data-ring={s.ring ? 'true' : undefined}>
+            {s.ring && <circle cx={s.pos[0]} cy={s.pos[1]} r={r * 1.7} fill="#f5a30026" stroke="#e8780a" strokeWidth={sw * 1.4} />}
             <path d={blobPath(s.pos, r, seed, 0)} fill={fillC} stroke={INK} strokeWidth={sw} strokeLinejoin="round" />
             {s.num ? <text x={s.pos[0]} y={s.pos[1]} textAnchor="middle" dominantBaseline="central" fontSize={r * 1.15} fontWeight={700} fill={isLight(fillC) ? INK : '#fff'} style={{ fontFamily: font }}>{s.num}</text> : null}
           </g>
